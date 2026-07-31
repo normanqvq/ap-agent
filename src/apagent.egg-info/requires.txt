@@ -1,0 +1,14 @@
+pydantic>=2
+anthropic
+scipy
+pulp
+pdfplumber
+reportlab
+fastapi
+uvicorn
+sqlalchemy
+
+[dev]
+pytest
+ruff
+pre-commit

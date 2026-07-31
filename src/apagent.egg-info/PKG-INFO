@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: apagent
+Version: 0.1.0
+Summary: AP Agent project
+Requires-Python: >=3.12
+Requires-Dist: pydantic>=2
+Requires-Dist: anthropic
+Requires-Dist: scipy
+Requires-Dist: pulp
+Requires-Dist: pdfplumber
+Requires-Dist: reportlab
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: sqlalchemy
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: pre-commit; extra == "dev"

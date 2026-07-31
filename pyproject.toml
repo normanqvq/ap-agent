@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apagent"
+version = "0.1.0"
+description = "AP Agent project"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2",
+    "anthropic",
+    "scipy",
+    "pulp",
+    "pdfplumber",
+    "reportlab",
+    "fastapi",
+    "uvicorn",
+    "sqlalchemy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "pre-commit",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
