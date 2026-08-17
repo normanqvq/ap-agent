@@ -111,19 +111,24 @@ def run_agent(
             decision = _parse_final_answer(final_text, invoice_id, tool_calls_history, round_num)
             return decision
 
-        # Model wants to call tools
-        # Build the assistant message with tool calls (needed for next round)
-        assistant_message = {"role": "assistant", "content": response.get("text") or ""}
-
-        # Anthropic and OpenAI both support tool_calls in messages, but the format
-        # differs slightly. For simplicity, we store tool call info in our internal
-        # format and let the client handle provider-specific serialization if needed.
-        # In practice, we don't need to send tool_calls back to the model in the
-        # assistant message for our use case. We just send the results as user messages.
-        messages.append(assistant_message)
+        # Model wants to call tools.
+        # We append the assistant turn and the results in the client's internal
+        # format (see llm/client.py module docstring). The client converts to
+        # each provider's real tool protocol (tool_use/tool_result blocks for
+        # Anthropic, role="tool" messages for OpenAI-compatible APIs).
+        # Earlier we flattened results into plain user text. That ran, but the
+        # model lost the structured link between a call and its result, which
+        # hurts multi-tool rounds and is off-spec for every provider.
+        messages.append(
+            {
+                "role": "assistant",
+                "content": response.get("text"),
+                "tool_calls": response["tool_calls"],
+            }
+        )
 
         # Execute each tool call and record the results
-        tool_results_parts = []
+        tool_results = []
         for tc in response["tool_calls"]:
             result_str = registry.execute(tc["name"], tc["args"])
 
@@ -137,23 +142,15 @@ def run_agent(
                 )
             )
 
-            tool_results_parts.append(
-                f"Tool: {tc['name']}\nArguments: {json.dumps(tc['args'])}\nResult: {result_str}"
-            )
+            tool_results.append({"id": tc["id"], "name": tc["name"], "result": result_str})
 
-        # Send tool results back as a user message
-        tool_results_message = {
-            "role": "user",
-            "content": "\n\n".join(tool_results_parts),
-        }
-        messages.append(tool_results_message)
+        messages.append({"role": "tool_results", "results": tool_results})
 
     # If we get here, we hit max_rounds without a final answer
     # Force-return ESCALATE so we don't hang forever
     tool_names = [tc.tool_name for tc in tool_calls_history]
     reasoning = (
-        f"Agent did not reach a decision after {max_rounds} rounds. "
-        f"Tool call history: {tool_names}"
+        f"Agent did not reach a decision after {max_rounds} rounds. Tool call history: {tool_names}"
     )
     return AgentDecision(
         invoice_id=invoice_id,

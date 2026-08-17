@@ -83,7 +83,7 @@ def test_agent_calls_tool_then_answers(monkeypatch):
         else:
             # Second call: agent returns a final answer
             answer = (
-                '{"action": "APPROVE", "confidence": 0.9, ' '"reasoning": "Tool result looks good"}'
+                '{"action": "APPROVE", "confidence": 0.9, "reasoning": "Tool result looks good"}'
             )
             return {
                 "text": answer,

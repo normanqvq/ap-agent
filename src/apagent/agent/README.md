@@ -30,23 +30,25 @@ from apagent.agent.registry import ToolRegistry, Tool
 # Create registry and register tools
 registry = ToolRegistry()
 
+
 def lookup_po_handler(args: dict) -> str:
     po_id = args["po_id"]
     # ... database lookup
     return f"PO {po_id}: vendor ABC, total $1000"
 
-registry.register(Tool(
-    name="lookup_po",
-    description="Look up a purchase order by ID",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "po_id": {"type": "string", "description": "The PO number"}
+
+registry.register(
+    Tool(
+        name="lookup_po",
+        description="Look up a purchase order by ID",
+        input_schema={
+            "type": "object",
+            "properties": {"po_id": {"type": "string", "description": "The PO number"}},
+            "required": ["po_id"],
         },
-        "required": ["po_id"]
-    },
-    handler=lookup_po_handler,
-))
+        handler=lookup_po_handler,
+    )
+)
 
 # Run the agent
 decision = run_agent(
@@ -64,15 +66,21 @@ print(f"Tool calls: {len(decision.tool_calls)}")
 
 ## Environment Variables
 
-### Required (pick one provider)
-- `ANTHROPIC_API_KEY` - for Anthropic provider
-- `OPENAI_API_KEY` - for OpenAI-compatible providers
+### Provider selection
+- `LLM_PROVIDER` - one of `anthropic` (default), `deepseek`, `groq`, `openai`,
+  `bedrock` (placeholder until hackathon AWS credits arrive)
+
+### API keys (each provider reads its own; several can coexist in .env)
+- `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY`
 
 ### Optional
-- `LLM_PROVIDER` - "anthropic" (default) or "openai"
-- `LLM_BASE_URL` - for OpenAI-compatible APIs (DeepSeek, etc)
-- `LLM_MODEL` - model name (defaults: claude-sonnet-4 or gpt-4)
-- `ANTHROPIC_MODEL` - override Anthropic model specifically
+- `ANTHROPIC_MODEL` / `DEEPSEEK_MODEL` / `GROQ_MODEL` / `LLM_MODEL` - per-provider
+  model overrides (sensible defaults if unset)
+- `ANTHROPIC_BASE_URL` - e.g. DeepSeek's Anthropic-compatible endpoint
+- `LLM_BASE_URL` - override for `openai` provider only; deepseek/groq presets
+  set their own base URLs
+
+See `.env.example` at the repo root for the full annotated list.
 
 ## Design Decisions
 

@@ -34,6 +34,9 @@ Agentic AP invoice matching and payment scheduling.
   not slowness.
 
 ## Provider notes
+- `LLM_PROVIDER` is one of: `anthropic`, `deepseek`, `groq`, `openai`,
+  `bedrock` (placeholder until credits arrive). Each provider reads its own
+  key env var (`DEEPSEEK_API_KEY`, `GROQ_API_KEY`, ...) — see `.env.example`.
 - The Anthropic code path also serves DeepSeek via
   `https://api.deepseek.com/anthropic`. Only `ANTHROPIC_BASE_URL` and
   `ANTHROPIC_MODEL` change. Verified working, including tool calling.
