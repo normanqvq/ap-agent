@@ -1,0 +1,128 @@
+[
+  {
+    "invoice_id": "INV-V001-3001",
+    "po_id": "PO-2026-1001",
+    "grn_id": "GRN-2001",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V002-3002",
+    "po_id": "PO-2026-1002",
+    "grn_id": "GRN-2002",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V003-3003",
+    "po_id": "PO-2026-1003",
+    "grn_id": "GRN-2003",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V004-3004",
+    "po_id": "PO-2026-1004",
+    "grn_id": "GRN-2004",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V005-3005",
+    "po_id": "PO-2026-1005",
+    "grn_id": "GRN-2005",
+    "defect": "price_variance",
+    "notes": "Line 1 unit price is 8% above PO PO-2026-1005 (beyond the 2% tolerance). Expect HOLD or ESCALATE."
+  },
+  {
+    "invoice_id": "INV-V006-3006",
+    "po_id": "PO-2026-1006",
+    "grn_id": "GRN-2006",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V001-3007",
+    "po_id": "PO-2026-1007",
+    "grn_id": "GRN-2007",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V002-3008",
+    "po_id": "PO-2026-1008",
+    "grn_id": "GRN-2008",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V003-3009",
+    "po_id": "PO-2026-1009",
+    "grn_id": "GRN-2009",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V004-3010",
+    "po_id": "PO-2026-1010",
+    "grn_id": "GRN-2010",
+    "defect": "missing_po_ref",
+    "notes": "Invoice does not reference any PO (belongs to PO-2026-1010). Match must fall back to vendor + amount search."
+  },
+  {
+    "invoice_id": "INV-V005-3011",
+    "po_id": "PO-2026-1011",
+    "grn_id": "GRN-2011",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V006-3012",
+    "po_id": "PO-2026-1012",
+    "grn_id": "GRN-2012",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V001-3013",
+    "po_id": "PO-2026-1013",
+    "grn_id": "GRN-2013",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V002-3014",
+    "po_id": "PO-2026-1014",
+    "grn_id": "GRN-2014",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V003-3015",
+    "po_id": "PO-2026-1015",
+    "grn_id": "GRN-2015",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V004-3016",
+    "po_id": "PO-2026-1016",
+    "grn_id": "GRN-2016",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V005-3017",
+    "po_id": "PO-2026-1017",
+    "grn_id": "GRN-2017",
+    "defect": "clean",
+    "notes": "Invoice agrees with PO and GRN."
+  },
+  {
+    "invoice_id": "INV-V003-3901",
+    "po_id": "PO-2026-1003",
+    "grn_id": "GRN-2003",
+    "defect": "duplicate",
+    "notes": "Exact duplicate of INV-V003-3003 with a new invoice number, dated 6 days later. Expect ESCALATE (or HOLD), never APPROVE."
+  }
+]

@@ -1,0 +1,707 @@
+[
+  {
+    "doc_id": "PO-2026-1001",
+    "doc_type": "PO",
+    "vendor_id": "V001",
+    "vendor_name": "Tan Hardware Supplies Pte Ltd",
+    "issue_date": "2026-07-26",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "SKU-WASH-8",
+        "description": "8mm flat washer",
+        "qty": 100,
+        "uom": "PCS",
+        "unit_price_cents": 4,
+        "line_total_cents": 400
+      },
+      {
+        "line_no": 2,
+        "sku": "SKU-BOLT-M8",
+        "description": "M8 hex bolt, zinc plated",
+        "qty": 5,
+        "uom": "PCS",
+        "unit_price_cents": 12,
+        "line_total_cents": 60
+      },
+      {
+        "line_no": 3,
+        "sku": "SKU-ANGLE-40",
+        "description": "40mm steel angle bracket",
+        "qty": 100,
+        "uom": "PCS",
+        "unit_price_cents": 85,
+        "line_total_cents": 8500
+      },
+      {
+        "line_no": 4,
+        "sku": "SKU-NUT-M8",
+        "description": "M8 hex nut, zinc plated",
+        "qty": 100,
+        "uom": "PCS",
+        "unit_price_cents": 8,
+        "line_total_cents": 800
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1002",
+    "doc_type": "PO",
+    "vendor_id": "V002",
+    "vendor_name": "Mei Ling Office Solutions",
+    "issue_date": "2026-07-23",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "A4-80G",
+        "description": "A4 copy paper 80gsm, ream",
+        "qty": 10,
+        "uom": "REAM",
+        "unit_price_cents": 550,
+        "line_total_cents": 5500
+      },
+      {
+        "line_no": 2,
+        "sku": "FILE-A4-PP",
+        "description": "A4 PP ring file 25mm",
+        "qty": 10,
+        "uom": "PCS",
+        "unit_price_cents": 210,
+        "line_total_cents": 2100
+      },
+      {
+        "line_no": 3,
+        "sku": "PEN-G2-BLK",
+        "description": "Gel pen 0.5mm black, box of 12",
+        "qty": 50,
+        "uom": "BOX",
+        "unit_price_cents": 960,
+        "line_total_cents": 48000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1003",
+    "doc_type": "PO",
+    "vendor_id": "V003",
+    "vendor_name": "Golden Wok Food Trading",
+    "issue_date": "2026-07-25",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "NOODLE-EGG",
+        "description": "Dried egg noodle 400g",
+        "qty": 24,
+        "uom": "PKT",
+        "unit_price_cents": 240,
+        "line_total_cents": 5760
+      },
+      {
+        "line_no": 2,
+        "sku": "RICE-JAS-5",
+        "description": "Jasmine rice 5kg bag",
+        "qty": 50,
+        "uom": "BAG",
+        "unit_price_cents": 1150,
+        "line_total_cents": 57500
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1004",
+    "doc_type": "PO",
+    "vendor_id": "V004",
+    "vendor_name": "Sinar Jaya Packaging Sdn Bhd",
+    "issue_date": "2026-07-14",
+    "ref_doc_id": null,
+    "currency": "MYR",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "WRAP-STR",
+        "description": "Stretch film roll 500mm",
+        "qty": 10,
+        "uom": "ROLL",
+        "unit_price_cents": 1450,
+        "line_total_cents": 14500
+      },
+      {
+        "line_no": 2,
+        "sku": "CTN-L-10",
+        "description": "Carton box large, bundle of 10",
+        "qty": 20,
+        "uom": "BDL",
+        "unit_price_cents": 3200,
+        "line_total_cents": 64000
+      },
+      {
+        "line_no": 3,
+        "sku": "TAPE-48MM",
+        "description": "OPP tape 48mm x 90m",
+        "qty": 5,
+        "uom": "ROLL",
+        "unit_price_cents": 320,
+        "line_total_cents": 1600
+      },
+      {
+        "line_no": 4,
+        "sku": "CTN-S-10",
+        "description": "Carton box small, bundle of 10",
+        "qty": 5,
+        "uom": "BDL",
+        "unit_price_cents": 1800,
+        "line_total_cents": 9000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1005",
+    "doc_type": "PO",
+    "vendor_id": "V005",
+    "vendor_name": "Pacific Circuit Components Inc",
+    "issue_date": "2026-07-18",
+    "ref_doc_id": null,
+    "currency": "USD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "PCC-ESP32",
+        "description": "ESP32 dev board",
+        "qty": 50,
+        "uom": "PCS",
+        "unit_price_cents": 850,
+        "line_total_cents": 42500
+      },
+      {
+        "line_no": 2,
+        "sku": "PCC-R10K",
+        "description": "Resistor 10k ohm 1/4W, strip of 100",
+        "qty": 5,
+        "uom": "STRIP",
+        "unit_price_cents": 180,
+        "line_total_cents": 900
+      },
+      {
+        "line_no": 3,
+        "sku": "PCC-C100N",
+        "description": "Ceramic capacitor 100nF, strip of 100",
+        "qty": 24,
+        "uom": "STRIP",
+        "unit_price_cents": 260,
+        "line_total_cents": 6240
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1006",
+    "doc_type": "PO",
+    "vendor_id": "V006",
+    "vendor_name": "CleanPro Facilities Services",
+    "issue_date": "2026-07-08",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "CP-MOP-IND",
+        "description": "Industrial mop head",
+        "qty": 5,
+        "uom": "PCS",
+        "unit_price_cents": 780,
+        "line_total_cents": 3900
+      },
+      {
+        "line_no": 2,
+        "sku": "CP-GLOVE-L",
+        "description": "Nitrile gloves size L, box of 100",
+        "qty": 100,
+        "uom": "BOX",
+        "unit_price_cents": 890,
+        "line_total_cents": 89000
+      },
+      {
+        "line_no": 3,
+        "sku": "CP-DET-5L",
+        "description": "Floor detergent 5L",
+        "qty": 10,
+        "uom": "BTL",
+        "unit_price_cents": 1650,
+        "line_total_cents": 16500
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1007",
+    "doc_type": "PO",
+    "vendor_id": "V001",
+    "vendor_name": "Tan Hardware Supplies Pte Ltd",
+    "issue_date": "2026-07-15",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "SKU-ANGLE-40",
+        "description": "40mm steel angle bracket",
+        "qty": 24,
+        "uom": "PCS",
+        "unit_price_cents": 85,
+        "line_total_cents": 2040
+      },
+      {
+        "line_no": 2,
+        "sku": "SKU-NUT-M8",
+        "description": "M8 hex nut, zinc plated",
+        "qty": 100,
+        "uom": "PCS",
+        "unit_price_cents": 8,
+        "line_total_cents": 800
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1008",
+    "doc_type": "PO",
+    "vendor_id": "V002",
+    "vendor_name": "Mei Ling Office Solutions",
+    "issue_date": "2026-07-17",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "TONER-05A",
+        "description": "Toner cartridge 05A compatible",
+        "qty": 100,
+        "uom": "PCS",
+        "unit_price_cents": 4200,
+        "line_total_cents": 420000
+      },
+      {
+        "line_no": 2,
+        "sku": "PEN-G2-BLK",
+        "description": "Gel pen 0.5mm black, box of 12",
+        "qty": 100,
+        "uom": "BOX",
+        "unit_price_cents": 960,
+        "line_total_cents": 96000
+      },
+      {
+        "line_no": 3,
+        "sku": "FILE-A4-PP",
+        "description": "A4 PP ring file 25mm",
+        "qty": 100,
+        "uom": "PCS",
+        "unit_price_cents": 210,
+        "line_total_cents": 21000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1009",
+    "doc_type": "PO",
+    "vendor_id": "V003",
+    "vendor_name": "Golden Wok Food Trading",
+    "issue_date": "2026-07-08",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "OIL-VEG-2L",
+        "description": "Vegetable oil 2L bottle",
+        "qty": 20,
+        "uom": "BTL",
+        "unit_price_cents": 680,
+        "line_total_cents": 13600
+      },
+      {
+        "line_no": 2,
+        "sku": "RICE-JAS-5",
+        "description": "Jasmine rice 5kg bag",
+        "qty": 100,
+        "uom": "BAG",
+        "unit_price_cents": 1150,
+        "line_total_cents": 115000
+      },
+      {
+        "line_no": 3,
+        "sku": "NOODLE-EGG",
+        "description": "Dried egg noodle 400g",
+        "qty": 100,
+        "uom": "PKT",
+        "unit_price_cents": 240,
+        "line_total_cents": 24000
+      },
+      {
+        "line_no": 4,
+        "sku": "SAUCE-OYS",
+        "description": "Oyster sauce 770g",
+        "qty": 50,
+        "uom": "BTL",
+        "unit_price_cents": 520,
+        "line_total_cents": 26000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1010",
+    "doc_type": "PO",
+    "vendor_id": "V004",
+    "vendor_name": "Sinar Jaya Packaging Sdn Bhd",
+    "issue_date": "2026-07-13",
+    "ref_doc_id": null,
+    "currency": "MYR",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "CTN-S-10",
+        "description": "Carton box small, bundle of 10",
+        "qty": 24,
+        "uom": "BDL",
+        "unit_price_cents": 1800,
+        "line_total_cents": 43200
+      },
+      {
+        "line_no": 2,
+        "sku": "CTN-L-10",
+        "description": "Carton box large, bundle of 10",
+        "qty": 20,
+        "uom": "BDL",
+        "unit_price_cents": 3200,
+        "line_total_cents": 64000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1011",
+    "doc_type": "PO",
+    "vendor_id": "V005",
+    "vendor_name": "Pacific Circuit Components Inc",
+    "issue_date": "2026-07-08",
+    "ref_doc_id": null,
+    "currency": "USD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "PCC-ESP32",
+        "description": "ESP32 dev board",
+        "qty": 100,
+        "uom": "PCS",
+        "unit_price_cents": 850,
+        "line_total_cents": 85000
+      },
+      {
+        "line_no": 2,
+        "sku": "PCC-R10K",
+        "description": "Resistor 10k ohm 1/4W, strip of 100",
+        "qty": 24,
+        "uom": "STRIP",
+        "unit_price_cents": 180,
+        "line_total_cents": 4320
+      },
+      {
+        "line_no": 3,
+        "sku": "PCC-C100N",
+        "description": "Ceramic capacitor 100nF, strip of 100",
+        "qty": 10,
+        "uom": "STRIP",
+        "unit_price_cents": 260,
+        "line_total_cents": 2600
+      },
+      {
+        "line_no": 4,
+        "sku": "PCC-USB-C",
+        "description": "USB-C connector SMD",
+        "qty": 20,
+        "uom": "PCS",
+        "unit_price_cents": 45,
+        "line_total_cents": 900
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1012",
+    "doc_type": "PO",
+    "vendor_id": "V006",
+    "vendor_name": "CleanPro Facilities Services",
+    "issue_date": "2026-07-10",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "CP-GLOVE-L",
+        "description": "Nitrile gloves size L, box of 100",
+        "qty": 20,
+        "uom": "BOX",
+        "unit_price_cents": 890,
+        "line_total_cents": 17800
+      },
+      {
+        "line_no": 2,
+        "sku": "CP-BAG-120",
+        "description": "Trash bag 120L, roll of 20",
+        "qty": 10,
+        "uom": "ROLL",
+        "unit_price_cents": 460,
+        "line_total_cents": 4600
+      },
+      {
+        "line_no": 3,
+        "sku": "CP-MOP-IND",
+        "description": "Industrial mop head",
+        "qty": 10,
+        "uom": "PCS",
+        "unit_price_cents": 780,
+        "line_total_cents": 7800
+      },
+      {
+        "line_no": 4,
+        "sku": "CP-DET-5L",
+        "description": "Floor detergent 5L",
+        "qty": 50,
+        "uom": "BTL",
+        "unit_price_cents": 1650,
+        "line_total_cents": 82500
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1013",
+    "doc_type": "PO",
+    "vendor_id": "V001",
+    "vendor_name": "Tan Hardware Supplies Pte Ltd",
+    "issue_date": "2026-07-21",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "SKU-NUT-M8",
+        "description": "M8 hex nut, zinc plated",
+        "qty": 10,
+        "uom": "PCS",
+        "unit_price_cents": 8,
+        "line_total_cents": 80
+      },
+      {
+        "line_no": 2,
+        "sku": "SKU-WASH-8",
+        "description": "8mm flat washer",
+        "qty": 100,
+        "uom": "PCS",
+        "unit_price_cents": 4,
+        "line_total_cents": 400
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1014",
+    "doc_type": "PO",
+    "vendor_id": "V002",
+    "vendor_name": "Mei Ling Office Solutions",
+    "issue_date": "2026-07-19",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "FILE-A4-PP",
+        "description": "A4 PP ring file 25mm",
+        "qty": 50,
+        "uom": "PCS",
+        "unit_price_cents": 210,
+        "line_total_cents": 10500
+      },
+      {
+        "line_no": 2,
+        "sku": "PEN-G2-BLK",
+        "description": "Gel pen 0.5mm black, box of 12",
+        "qty": 5,
+        "uom": "BOX",
+        "unit_price_cents": 960,
+        "line_total_cents": 4800
+      },
+      {
+        "line_no": 3,
+        "sku": "TONER-05A",
+        "description": "Toner cartridge 05A compatible",
+        "qty": 100,
+        "uom": "PCS",
+        "unit_price_cents": 4200,
+        "line_total_cents": 420000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1015",
+    "doc_type": "PO",
+    "vendor_id": "V003",
+    "vendor_name": "Golden Wok Food Trading",
+    "issue_date": "2026-07-09",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "SAUCE-OYS",
+        "description": "Oyster sauce 770g",
+        "qty": 10,
+        "uom": "BTL",
+        "unit_price_cents": 520,
+        "line_total_cents": 5200
+      },
+      {
+        "line_no": 2,
+        "sku": "OIL-VEG-2L",
+        "description": "Vegetable oil 2L bottle",
+        "qty": 24,
+        "uom": "BTL",
+        "unit_price_cents": 680,
+        "line_total_cents": 16320
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1016",
+    "doc_type": "PO",
+    "vendor_id": "V004",
+    "vendor_name": "Sinar Jaya Packaging Sdn Bhd",
+    "issue_date": "2026-07-06",
+    "ref_doc_id": null,
+    "currency": "MYR",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "CTN-S-10",
+        "description": "Carton box small, bundle of 10",
+        "qty": 20,
+        "uom": "BDL",
+        "unit_price_cents": 1800,
+        "line_total_cents": 36000
+      },
+      {
+        "line_no": 2,
+        "sku": "TAPE-48MM",
+        "description": "OPP tape 48mm x 90m",
+        "qty": 100,
+        "uom": "ROLL",
+        "unit_price_cents": 320,
+        "line_total_cents": 32000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1017",
+    "doc_type": "PO",
+    "vendor_id": "V005",
+    "vendor_name": "Pacific Circuit Components Inc",
+    "issue_date": "2026-07-22",
+    "ref_doc_id": null,
+    "currency": "USD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "PCC-C100N",
+        "description": "Ceramic capacitor 100nF, strip of 100",
+        "qty": 50,
+        "uom": "STRIP",
+        "unit_price_cents": 260,
+        "line_total_cents": 13000
+      },
+      {
+        "line_no": 2,
+        "sku": "PCC-ESP32",
+        "description": "ESP32 dev board",
+        "qty": 20,
+        "uom": "PCS",
+        "unit_price_cents": 850,
+        "line_total_cents": 17000
+      },
+      {
+        "line_no": 3,
+        "sku": "PCC-R10K",
+        "description": "Resistor 10k ohm 1/4W, strip of 100",
+        "qty": 24,
+        "uom": "STRIP",
+        "unit_price_cents": 180,
+        "line_total_cents": 4320
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  }
+]
