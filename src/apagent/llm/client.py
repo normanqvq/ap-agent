@@ -305,14 +305,33 @@ def _call_openai_compat(
 def _call_bedrock(messages: list[dict], tools: list[dict], system: str) -> dict:
     """AWS Bedrock. Not implemented yet — placeholder until credits arrive.
 
-    The hackathon runs on AWS Bedrock AgentCore and credits are released after
-    the training sessions. We keep the branch here so LLM_PROVIDER=bedrock is
+    The hackathon runs on AWS Bedrock and credits are released after the
+    training sessions. We keep the branch here so LLM_PROVIDER=bedrock is
     already a valid value and the switch later is an implementation, not an
-    interface change. Likely shape: boto3 bedrock-runtime Converse API, which
-    has its own tool-calling format (toolUse/toolResult content blocks).
+    interface change.
+
+    Implementation shape when we get there: use the anthropic SDK's Bedrock
+    client, NOT boto3. AnthropicBedrockMantle exposes the same
+    messages.create surface as the first-party client, so _call_anthropic
+    below is reusable almost verbatim -- only the client construction and the
+    model id change:
+
+        from anthropic import AnthropicBedrockMantle          # pip install "anthropic[aws]"
+        client = AnthropicBedrockMantle(aws_region=os.getenv("AWS_REGION"))
+        # model ids carry a provider prefix on Bedrock: "anthropic.claude-..."
+
+    Credentials come from the standard AWS chain (env vars, shared profile,
+    instance role) -- no api_key argument. Going through boto3's Converse API
+    instead would mean hand-writing a third tool-calling format
+    (toolUse/toolResult blocks) for no gain.
+
+    Caveat to check before relying on it: Bedrock does not serve every
+    first-party feature. Prompt caching and tool use are supported; the
+    server-side web search / code execution tools and the Files and Batches
+    endpoints are not.
     """
     raise NotImplementedError(
-        "Bedrock provider is a placeholder. Implement with boto3 bedrock-runtime "
-        "(Converse API) once hackathon AWS credits are available. "
+        "Bedrock provider is a placeholder. Implement with AnthropicBedrockMantle "
+        "(pip install 'anthropic[aws]') once hackathon AWS credits are available. "
         "Until then set LLM_PROVIDER to one of: anthropic, deepseek, groq, openai."
     )

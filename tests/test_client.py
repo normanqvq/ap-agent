@@ -56,7 +56,7 @@ def test_bedrock_is_explicit_placeholder():
     in a quick manual test, then explode in the demo. NotImplementedError with
     instructions is the honest failure mode.
     """
-    with pytest.raises(NotImplementedError, match="bedrock-runtime"):
+    with pytest.raises(NotImplementedError, match="AnthropicBedrockMantle"):
         call_model(messages=[], tools=[], system="s", provider="bedrock")
 
 
