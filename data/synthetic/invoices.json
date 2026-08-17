@@ -736,5 +736,47 @@
     "due_date": "2026-08-31",
     "tax_cents": 5693,
     "total_cents": 68953
+  },
+  {
+    "doc_id": "INV-V005-3018",
+    "doc_type": "INVOICE",
+    "vendor_id": "V005",
+    "vendor_name": "Pacific Circuit Components Inc.",
+    "issue_date": "2026-07-12",
+    "ref_doc_id": "PO-2026-1018",
+    "currency": "USD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "PCC-ESP32",
+        "description": "ESP32 dev board",
+        "qty": 10,
+        "uom": "PCS",
+        "unit_price_cents": 884,
+        "line_total_cents": 8840
+      },
+      {
+        "line_no": 2,
+        "sku": "PCC-R10K",
+        "description": "Resistor 10k ohm 1/4W, strip of 100",
+        "qty": 50,
+        "uom": "STRIP",
+        "unit_price_cents": 180,
+        "line_total_cents": 9000
+      },
+      {
+        "line_no": 3,
+        "sku": "PCC-USB-C",
+        "description": "USB-C connector SMD",
+        "qty": 5,
+        "uom": "PCS",
+        "unit_price_cents": 45,
+        "line_total_cents": 225
+      }
+    ],
+    "payment_terms": "NET 30",
+    "due_date": "2026-08-11",
+    "tax_cents": 0,
+    "total_cents": 18065
   }
 ]

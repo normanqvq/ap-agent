@@ -141,6 +141,117 @@ VENDORS = [
 ]
 
 
+# Vendor agreement terms. These are the ground truth behind the contract PDFs
+# and the reason the retrieval tool exists: two vendors negotiated a price
+# tolerance wider than the 2% default in ToleranceConfig, so an agent that only
+# knows the default will HOLD invoices the contract says to pay.
+# tolerance None = the contract is silent and the default applies.
+CONTRACT_TERMS = {
+    "V001": {"price_tolerance_pct": None, "payment_days": 30, "qty_note": "exact"},
+    "V002": {"price_tolerance_pct": None, "payment_days": 30, "qty_note": "exact"},
+    "V003": {"price_tolerance_pct": None, "payment_days": 14, "qty_note": "exact"},
+    "V004": {"price_tolerance_pct": 3.0, "payment_days": 45, "qty_note": "exact"},
+    "V005": {"price_tolerance_pct": 5.0, "payment_days": 30, "qty_note": "exact"},
+    "V006": {"price_tolerance_pct": None, "payment_days": 30, "qty_note": "exact"},
+}
+
+
+def contract_sections(vendor: dict, terms: dict) -> list[tuple[str, str]]:
+    """The text of one vendor agreement, as (heading, body) pairs.
+
+    Written as several distinct sections on purpose: the retriever chunks by
+    section, and a one-paragraph contract would make every search trivially
+    return the whole document. The pricing clause is the one that matters;
+    the rest is realistic filler the retriever must learn to skip past.
+    """
+    name = vendor["printed_name"]
+    if terms["price_tolerance_pct"] is not None:
+        pct = terms["price_tolerance_pct"]
+        pricing = (
+            f"Unit prices are as stated in each purchase order. The parties agree "
+            f"that invoiced unit prices may vary by up to {pct:.0f} percent "
+            f"({pct:.0f}%) above the purchase order price to reflect raw material "
+            f"cost movements. Invoices within this variance are payable in full "
+            f"and shall not be treated as discrepant. Variances above "
+            f"{pct:.0f}% require the Buyer's written approval before payment."
+        )
+    else:
+        pricing = (
+            "Unit prices are as stated in each purchase order and are fixed for "
+            "the term of this agreement. Any variance between invoiced prices "
+            "and purchase order prices is handled under the Buyer's standard "
+            "accounts payable policy."
+        )
+    return [
+        (
+            "1. Parties and Term",
+            f"This supply agreement is made between the Buyer and {name} "
+            f"(the Supplier). It runs for twelve months from the effective date "
+            f"and renews automatically unless either party gives sixty days "
+            f"written notice.",
+        ),
+        ("2. Pricing and Price Variance", pricing),
+        (
+            "3. Delivery and Quantities",
+            "Delivered quantities must match the purchase order exactly. Partial "
+            "deliveries are accepted only when agreed in writing before "
+            "dispatch, and the invoice must then bill only the quantity "
+            "actually received.",
+        ),
+        (
+            "4. Invoicing and Payment",
+            f"Invoices must quote the purchase order number. Payment terms are "
+            f"net {terms['payment_days']} days from the invoice date. Late "
+            f"payment interest accrues at 1% per month on overdue amounts.",
+        ),
+        (
+            "5. Disputes",
+            "Billing disputes must be raised within thirty days of the invoice "
+            "date. The undisputed portion of an invoice remains payable on the "
+            "original schedule while a dispute is open.",
+        ),
+    ]
+
+
+def render_contract_pdf(vendor: dict, terms: dict, path: Path) -> None:
+    """One vendor agreement as a simple typed-contract PDF."""
+    c = Canvas(str(path), pagesize=A4)
+    _w, h = A4
+    x = 25 * mm
+    # ~90 chars at Helvetica 9pt stays inside the printable width with margin
+    wrap_at = 90
+
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(x, h - 30 * mm, "SUPPLY AGREEMENT")
+    c.setFont("Helvetica", 10)
+    c.drawString(x, h - 37 * mm, f"Supplier: {vendor['printed_name']}   ({vendor['vendor_id']})")
+    y = h - 48 * mm
+
+    for heading, body in contract_sections(vendor, terms):
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x, y, heading)
+        y -= 14
+        c.setFont("Helvetica", 9)
+        # Plain greedy word wrap. reportlab has Paragraph/Platypus for this,
+        # but the canvas keeps the whole file on one drawing model.
+        line = ""
+        for word in body.split():
+            if len(line) + len(word) + 1 > wrap_at:
+                c.drawString(x, y, line)
+                y -= 12
+                line = word
+            else:
+                line = f"{line} {word}".strip()
+        if line:
+            c.drawString(x, y, line)
+            y -= 12
+        y -= 8
+
+    c.setFont("Helvetica", 7)
+    c.drawString(x, 15 * mm, "This is a synthetic document generated for hackathon testing.")
+    c.save()
+
+
 def fmt_date(iso: str, style: str) -> str:
     """Format an ISO date the way this vendor prints dates on paper.
 
@@ -326,6 +437,80 @@ def build_documents() -> tuple[list[Document], list[Document], list[Document], l
         }
     )
 
+    # The contract-payoff case: a V005 invoice with a 4% price bump. Above the
+    # 2% default tolerance, so rules alone say HOLD — but V005's agreement
+    # allows 5%, so an agent that reads the contract should APPROVE. This one
+    # invoice is what the retrieval tool exists to get right.
+    # Built outside the loop (like the duplicate) so the RNG draws for the
+    # first 17 trios stay identical and their output does not churn.
+    vendor = VENDORS[4]  # V005 Pacific Circuit — the vendor with the 5% clause
+    po_id, grn_id, inv_id = "PO-2026-1018", "GRN-2018", "INV-V005-3018"
+    po_date = (base + timedelta(days=RNG.randint(0, 20))).isoformat()
+    grn_date = (date.fromisoformat(po_date) + timedelta(days=RNG.randint(3, 10))).isoformat()
+    inv_date = (date.fromisoformat(grn_date) + timedelta(days=RNG.randint(0, 4))).isoformat()
+    due_date = (date.fromisoformat(inv_date) + timedelta(days=30)).isoformat()
+
+    po_lines = make_lines(vendor, 3)
+    pos.append(
+        Document(
+            doc_id=po_id,
+            doc_type=DocType.PO,
+            vendor_id=vendor["vendor_id"],
+            vendor_name=vendor["name"],
+            issue_date=po_date,
+            ref_doc_id=None,
+            currency=vendor["currency"],
+            lines=po_lines,
+        )
+    )
+    grns.append(
+        Document(
+            doc_id=grn_id,
+            doc_type=DocType.GRN,
+            vendor_id=vendor["vendor_id"],
+            vendor_name=vendor["name"],
+            issue_date=grn_date,
+            ref_doc_id=po_id,
+            currency=vendor["currency"],
+            lines=copy_lines(po_lines),
+        )
+    )
+    inv_lines = copy_lines(po_lines)
+    line = inv_lines[0]
+    line.unit_price_cents = round(line.unit_price_cents * 1.04)
+    line.line_total_cents = line.qty * line.unit_price_cents
+    tax, total = invoice_totals(inv_lines, vendor["currency"])
+    invoices.append(
+        Document(
+            doc_id=inv_id,
+            doc_type=DocType.INVOICE,
+            vendor_id=vendor["vendor_id"],
+            vendor_name=vendor["printed_name"],
+            issue_date=inv_date,
+            ref_doc_id=po_id,
+            currency=vendor["currency"],
+            lines=inv_lines,
+            payment_terms="NET 30",
+            due_date=due_date,
+            tax_cents=tax,
+            total_cents=total,
+        )
+    )
+    manifest.append(
+        {
+            "invoice_id": inv_id,
+            "po_id": po_id,
+            "grn_id": grn_id,
+            "defect": "price_variance_within_contract",
+            "notes": (
+                "Line 1 unit price is 4% above PO — beyond the 2% default "
+                "tolerance but within the 5% negotiated in V005's supply "
+                "agreement. Expect HOLD from rules alone, APPROVE once the "
+                "agent consults the contract."
+            ),
+        }
+    )
+
     return pos, grns, invoices, manifest
 
 
@@ -471,8 +656,33 @@ def main() -> None:
 
     (OUT_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
+    # Vendor agreements: one PDF per vendor plus a ground-truth file. The
+    # ground truth lives in its own contracts.json rather than inside
+    # manifest.json so the invoice manifest keeps its existing shape (a plain
+    # list) that eval code may already iterate over.
+    contracts_dir = OUT_DIR / "contracts"
+    contracts_dir.mkdir(parents=True, exist_ok=True)
+    contracts_truth = []
+    for vendor in VENDORS:
+        vid = vendor["vendor_id"]
+        terms = CONTRACT_TERMS[vid]
+        pdf_name = f"{vid}_supply_agreement.pdf"
+        render_contract_pdf(vendor, terms, contracts_dir / pdf_name)
+        contracts_truth.append(
+            {
+                "vendor_id": vid,
+                "file": f"contracts/{pdf_name}",
+                "price_tolerance_pct": terms["price_tolerance_pct"],
+                "payment_days": terms["payment_days"],
+            }
+        )
+    (OUT_DIR / "contracts.json").write_text(json.dumps(contracts_truth, indent=2) + "\n")
+
     defects = [m for m in manifest if m["defect"] != "clean"]
-    print(f"Wrote {len(pos)} POs, {len(grns)} GRNs, {len(invoices)} invoices -> {OUT_DIR}")
+    print(
+        f"Wrote {len(pos)} POs, {len(grns)} GRNs, {len(invoices)} invoices, "
+        f"{len(contracts_truth)} contracts -> {OUT_DIR}"
+    )
     print(f"Planted defects ({len(defects)}):")
     for m in defects:
         print(f"  {m['invoice_id']}: {m['defect']}")

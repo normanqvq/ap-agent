@@ -124,5 +124,12 @@
     "grn_id": "GRN-2003",
     "defect": "duplicate",
     "notes": "Exact duplicate of INV-V003-3003 with a new invoice number, dated 6 days later. Expect ESCALATE (or HOLD), never APPROVE."
+  },
+  {
+    "invoice_id": "INV-V005-3018",
+    "po_id": "PO-2026-1018",
+    "grn_id": "GRN-2018",
+    "defect": "price_variance_within_contract",
+    "notes": "Line 1 unit price is 4% above PO \u2014 beyond the 2% default tolerance but within the 5% negotiated in V005's supply agreement. Expect HOLD from rules alone, APPROVE once the agent consults the contract."
   }
 ]

@@ -1,0 +1,38 @@
+[
+  {
+    "vendor_id": "V001",
+    "file": "contracts/V001_supply_agreement.pdf",
+    "price_tolerance_pct": null,
+    "payment_days": 30
+  },
+  {
+    "vendor_id": "V002",
+    "file": "contracts/V002_supply_agreement.pdf",
+    "price_tolerance_pct": null,
+    "payment_days": 30
+  },
+  {
+    "vendor_id": "V003",
+    "file": "contracts/V003_supply_agreement.pdf",
+    "price_tolerance_pct": null,
+    "payment_days": 14
+  },
+  {
+    "vendor_id": "V004",
+    "file": "contracts/V004_supply_agreement.pdf",
+    "price_tolerance_pct": 3.0,
+    "payment_days": 45
+  },
+  {
+    "vendor_id": "V005",
+    "file": "contracts/V005_supply_agreement.pdf",
+    "price_tolerance_pct": 5.0,
+    "payment_days": 30
+  },
+  {
+    "vendor_id": "V006",
+    "file": "contracts/V006_supply_agreement.pdf",
+    "price_tolerance_pct": null,
+    "payment_days": 30
+  }
+]

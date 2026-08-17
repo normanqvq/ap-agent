@@ -703,5 +703,47 @@
     "due_date": null,
     "tax_cents": null,
     "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1018",
+    "doc_type": "PO",
+    "vendor_id": "V005",
+    "vendor_name": "Pacific Circuit Components Inc",
+    "issue_date": "2026-07-06",
+    "ref_doc_id": null,
+    "currency": "USD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "PCC-ESP32",
+        "description": "ESP32 dev board",
+        "qty": 10,
+        "uom": "PCS",
+        "unit_price_cents": 850,
+        "line_total_cents": 8500
+      },
+      {
+        "line_no": 2,
+        "sku": "PCC-R10K",
+        "description": "Resistor 10k ohm 1/4W, strip of 100",
+        "qty": 50,
+        "uom": "STRIP",
+        "unit_price_cents": 180,
+        "line_total_cents": 9000
+      },
+      {
+        "line_no": 3,
+        "sku": "PCC-USB-C",
+        "description": "USB-C connector SMD",
+        "qty": 5,
+        "uom": "PCS",
+        "unit_price_cents": 45,
+        "line_total_cents": 225
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
   }
 ]
