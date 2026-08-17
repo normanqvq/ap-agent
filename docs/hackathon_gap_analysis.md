@@ -98,6 +98,22 @@ Demo 主线：**上传发票 → agent 识别匹配 → 排付款计划 → 输�
 | 11 | **Bedrock AgentCore / MCP 对接** | 等 credits 和培训（8/25 前后）。provider 层占位已在任务 2 里做 |
 | 12 | **EMAIL 动作落地** | 现在 Action 里有 EMAIL 但没有执行器。demo 可以只生成邮件草稿展示，不真发 |
 
+### 已定的两个技术决策（2026-08-17，Norman 拍板）
+
+**做 RAG（合同检索）—— 已实现。** 每个供应商一份合同 PDF（`data/synthetic/contracts/`），
+其中 V004（3%）和 V005（5%）谈了比默认 2% 更宽的价差容忍条款。
+`src/apagent/retrieval/` 里是 BM25 检索器 + `search_vendor_contract` 工具
+（刻意不用向量库——30 个 chunk 用不上，理由写在模块 docstring 里）。
+Demo 主打案例：发票 `INV-V005-3018` 价差 4%，只看默认规则会 HOLD，
+agent 查了合同发现 5% 以内可付，改判 APPROVE 并引用条款出处。
+**接入点**：`rules/` 实现时要把检索结果落到 `ToleranceConfig.per_vendor_overrides`；
+system prompt 要写"判断差异前先查合同"。
+
+**不做 CoT prompting。** 理由与模型无关：我们的算术在 Python（rules/）里，
+模型只做"这个差异意味着什么"的判断，不做心算。CoT 解决的是让模型心算不出错的
+问题，我们没有这个问题；且 CoT 的散文推理会让 `_parse_final_answer` 更难解析。
+多轮 tool_calls 轨迹 + `AgentDecision.reasoning` 已经是更可审计的"思维链"。
+
 ### 时间线建议
 
 - **第 1 周（8/17–8/24）**：P0 全部。周末应该能端到端跑通命令行版 demo
