@@ -45,9 +45,18 @@ def find_po(invoice: Document, pos: list[Document]) -> tuple[Document | None, st
     if invoice.ref_doc_id:
         for po in pos:
             if po.doc_id == invoice.ref_doc_id:
-                return po, "ref"
-        # A named PO that does not exist is itself suspicious; fall through
-        # to the search so the agent still gets a candidate to compare.
+                # A ref is only trusted when the PO belongs to the same
+                # vendor. PO ids are one shared sequence across vendors, so
+                # a one-digit extraction slip (or a hostile ref) lands on
+                # ANOTHER vendor's order — full "ref" confidence on that
+                # match would be confidently wrong. Fall through to the
+                # vendor-scoped search instead.
+                if po.vendor_id == invoice.vendor_id:
+                    return po, "ref"
+                break
+        # A named PO that does not exist (or belongs to another vendor) is
+        # itself suspicious; fall through to the search so the agent still
+        # gets a candidate to compare.
 
     candidates = [po for po in pos if po.vendor_id == invoice.vendor_id]
     inv_subtotal = _subtotal(invoice)
@@ -124,10 +133,12 @@ def pair_lines(
 
 def _pct(delta: int, base: int) -> float | None:
     """Delta as percentage points of base. None when base is zero —
-    a made-up percentage against zero would poison tolerance checks."""
+    a made-up percentage against zero would poison tolerance checks.
+    abs(base) because a negative base (credit-note line) would make the
+    percentage negative and sail under every `<= limit` check."""
     if base == 0:
         return None
-    return abs(delta) / base * 100
+    return abs(delta) / abs(base) * 100
 
 
 def build_discrepancies(
@@ -143,13 +154,33 @@ def build_discrepancies(
     po_by_no = {line.line_no: line for line in po.lines}
     inv_by_no = {line.line_no: line for line in invoice.lines}
     grn_by_sku = {}
+    grn_qty_by_sku: dict[str, int] = {}
     if grn is not None:
-        grn_by_sku = {line.sku: line for line in grn.lines if line.sku}
+        for line in grn.lines:
+            if not line.sku:
+                continue
+            grn_by_sku[line.sku] = line
+            # SUM per SKU, don't last-wins: a split delivery recorded as two
+            # GRN lines (50 + 50) is 100 received, and overwriting would
+            # report a phantom 50-unit shortfall on a fully-delivered order.
+            grn_qty_by_sku[line.sku] = grn_qty_by_sku.get(line.sku, 0) + line.qty
 
     out: list[Discrepancy] = []
     for po_no, inv_no in pairs:
         po_line, inv_line = po_by_no[po_no], inv_by_no[inv_no]
         grn_line = grn_by_sku.get(po_line.sku)
+
+        # Received quantity for this line. Three cases:
+        # - GRN has the SKU: the summed received qty.
+        # - GRN exists, line has a SKU, but the GRN lacks it: received ZERO.
+        #   Without this, "billed in full, received nothing" reads clean —
+        #   the limit case of the partial-delivery miss.
+        # - No GRN, or the line has no SKU (nothing to key the GRN lookup
+        #   on): unknown, no invoice-vs-GRN comparison possible.
+        if grn is not None and po_line.sku:
+            grn_qty = grn_qty_by_sku.get(po_line.sku, 0)
+        else:
+            grn_qty = None
 
         # A qty row fires on EITHER comparison: invoice vs PO, or invoice vs
         # GRN. The second one is easy to forget and is the worst miss in the
@@ -157,13 +188,12 @@ def build_discrepancies(
         # arrived, yet PO == invoice, so a two-way check stays silent. That
         # is the very case the schemas.Discrepancy docstring promises to
         # surface (and the AWAITING_DELIVERY hold exists for).
-        grn_gap = grn_line is not None and grn_line.qty != inv_line.qty
         if po_line.qty != inv_line.qty:
             delta = abs(inv_line.qty - po_line.qty)
             base = po_line.qty
-        elif grn_gap:
-            delta = abs(inv_line.qty - grn_line.qty)
-            base = grn_line.qty
+        elif grn_qty is not None and grn_qty != inv_line.qty:
+            delta = abs(inv_line.qty - grn_qty)
+            base = grn_qty
         else:
             delta = None
         if delta is not None:
@@ -172,10 +202,39 @@ def build_discrepancies(
                     line_pair=(po_no, inv_no),
                     field=DiscrepancyField.QTY,
                     po_value=str(po_line.qty),
-                    grn_value=str(grn_line.qty) if grn_line else None,
+                    grn_value=str(grn_qty) if grn_qty is not None else None,
                     invoice_value=str(inv_line.qty),
                     delta_abs=delta,
                     delta_pct=_pct(delta, base),
+                    within_tolerance=False,
+                )
+            )
+
+        # The line's own arithmetic: printed line total vs qty x unit price.
+        # line_total_cents is stored, not computed, precisely so this gap is
+        # evidence (see schemas.LineItem) — but stored-not-computed only
+        # helps if something actually computes the gap. Without this row, an
+        # invoice with honest qty and unit price but a padded line total
+        # (and a grand total summed from the padded lines) read perfectly
+        # clean end to end.
+        if (
+            inv_line.line_total_cents is not None
+            and inv_line.unit_price_cents is not None
+            and inv_line.line_total_cents != inv_line.qty * inv_line.unit_price_cents
+        ):
+            expected_line = inv_line.qty * inv_line.unit_price_cents
+            delta = abs(inv_line.line_total_cents - expected_line)
+            out.append(
+                Discrepancy(
+                    line_pair=(po_no, inv_no),
+                    field=DiscrepancyField.LINE_TOTAL,
+                    po_value=str(po_line.line_total_cents)
+                    if po_line.line_total_cents is not None
+                    else None,
+                    grn_value=None,
+                    invoice_value=str(inv_line.line_total_cents),
+                    delta_abs=delta,
+                    delta_pct=_pct(delta, expected_line),
                     within_tolerance=False,
                 )
             )

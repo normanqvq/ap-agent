@@ -135,6 +135,68 @@ def test_find_po_falls_back_to_vendor_and_amount():
     assert how == "search"
 
 
+def test_ref_to_another_vendors_po_is_not_trusted():
+    """PO ids are one shared sequence across vendors, so a slipped digit
+    (or a hostile ref) lands on someone else's order. That must not come
+    back as a fully-trusted 'ref' match."""
+    other_vendor_po = doc("PO-777", DocType.PO, [line(1, "A-1", "widget")], vendor="V002")
+    inv = doc("INV-9", DocType.INVOICE, [line(1, "A-1", "widget")], ref="PO-777", vendor="V001")
+    found, how = find_po(inv, [other_vendor_po])
+    assert how != "ref"
+    assert found is None  # no same-vendor candidate exists either
+
+
+def test_line_total_padding_surfaces():
+    """Honest qty, honest unit price, padded line total (and a grand total
+    summed from the padded lines): the classic invisible inflation. The
+    line's own arithmetic must become a LINE_TOTAL discrepancy."""
+    po = doc("PO-1", DocType.PO, [line(1, "A-1", "widget", qty=10, price=100)])
+    padded = LineItem(
+        line_no=1,
+        sku="A-1",
+        description="widget",
+        qty=10,
+        uom="PCS",
+        unit_price_cents=100,
+        line_total_cents=1500,  # should be 1000
+    )
+    inv = doc("INV-1", DocType.INVOICE, [padded], ref="PO-1", total=1500)
+    result = match_invoice(inv, [po], [])
+    rows = [d for d in result.discrepancies if d.field == DiscrepancyField.LINE_TOTAL]
+    assert len(rows) == 1
+    assert rows[0].delta_abs == 500
+    assert rows[0].within_tolerance is False
+
+
+def test_grn_present_but_missing_the_line_means_received_zero():
+    """Billed in full while the GRN has NO line for the item = received
+    nothing. The limit case of partial delivery must not read clean."""
+    po = doc("PO-2", DocType.PO, [line(1, "A-1", "widget", qty=100)])
+    grn = doc("GRN-2", DocType.GRN, [line(1, "B-9", "other thing", qty=5)], ref="PO-2")
+    inv = doc("INV-2", DocType.INVOICE, [line(1, "A-1", "widget", qty=100)], ref="PO-2")
+    result = match_invoice(inv, [po], [grn])
+    qty_rows = [d for d in result.discrepancies if d.field == DiscrepancyField.QTY]
+    assert len(qty_rows) == 1
+    assert qty_rows[0].grn_value == "0"
+    assert qty_rows[0].delta_abs == 100
+
+
+def test_split_delivery_grn_lines_are_summed():
+    """Two GRN lines of 50 for the same SKU are 100 received — overwriting
+    instead of summing would report a phantom 50-unit shortfall."""
+    po = doc("PO-3", DocType.PO, [line(1, "A-1", "widget", qty=100)])
+    grn = doc(
+        "GRN-3",
+        DocType.GRN,
+        [line(1, "A-1", "widget", qty=50), line(2, "A-1", "widget", qty=50)],
+        ref="PO-3",
+    )
+    inv = doc("INV-3", DocType.INVOICE, [line(1, "A-1", "widget", qty=100)], ref="PO-3")
+    result = match_invoice(inv, [po], [grn])
+    qty_rows = [d for d in result.discrepancies if d.field == DiscrepancyField.QTY]
+    assert qty_rows == []
+
+
 # --- dataset level: every planted defect must surface -----------------------
 
 

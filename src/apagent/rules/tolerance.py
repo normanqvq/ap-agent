@@ -48,9 +48,15 @@ def _check(d: Discrepancy, config: ToleranceConfig) -> bool:
         pct_ok = d.delta_pct is not None and d.delta_pct <= config.total_pct
         return abs_ok and pct_ok
 
-    # UOM mismatch is structural (pieces vs boxes) — no tolerance makes it
-    # okay; the extraction layer should have converted units, so reaching
-    # here means something upstream needs a human.
+    # No tolerance for the rest, deliberately:
+    # - UOM mismatch is structural (pieces vs boxes); extraction should have
+    #   converted units, so reaching here means something upstream needs a
+    #   human.
+    # - LINE_TOTAL means the line's own arithmetic doesn't add up (printed
+    #   total != qty x unit price) — that is either padding or a broken
+    #   document, and neither is a rounding matter. If real-world invoices
+    #   turn out to carry legitimate 1-cent print rounding, add a small
+    #   absolute allowance HERE, in one place.
     return False
 
 
