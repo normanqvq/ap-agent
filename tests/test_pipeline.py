@@ -88,3 +88,30 @@ def test_stub_decision_round_trips(monkeypatch, store, registry):
     captured = run_capturing_task(monkeypatch, store, registry, "INV-V001-3001")
     assert captured["decision"].action == Action.ESCALATE
     assert captured["decision"].invoice_id == "INV-V001-3001"
+
+
+def test_code_guardrail_overrides_approve_above_the_gate(monkeypatch, store, registry):
+    """The architecture claim, as a test: a model that answers APPROVE on an
+    invoice above the manual-review threshold gets overridden IN CODE. The
+    prompt asks for compliance; this is what happens when it doesn't get it."""
+
+    def defiant_model(messages, tools, system, provider=None):
+        return {
+            "text": json.dumps(
+                {
+                    "action": "APPROVE",
+                    "hold_reason": None,
+                    "confidence": 0.99,
+                    "reasoning": "looks fine to me",
+                }
+            ),
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr("apagent.agent.loop.call_model", defiant_model)
+    invoice = store.get_invoice("INV-V002-3008")  # SGD 5,853.30, above the gate
+    decision = decide_invoice(invoice, store, registry)
+
+    assert decision.action == Action.ESCALATE
+    assert "[code guardrail]" in decision.reasoning
+    assert "looks fine to me" in decision.reasoning  # model reasoning preserved for audit

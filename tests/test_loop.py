@@ -307,6 +307,33 @@ def test_agent_strips_markdown_code_fences(monkeypatch):
     assert decision.confidence == 0.7
 
 
+def test_hold_reason_dropped_when_action_is_not_hold(monkeypatch):
+    """A hold_reason on an APPROVE is a model slip; code must drop it so
+    downstream reports never count phantom holds."""
+    registry = ToolRegistry()
+
+    def fake_call_model(messages, tools, system, provider=None):
+        return {
+            "text": '{"action": "APPROVE", "hold_reason": "AWAITING_GRN", '
+            '"confidence": 0.9, "reasoning": "clean match"}',
+            "tool_calls": [],
+            "stop_reason": "end_turn",
+        }
+
+    monkeypatch.setattr("apagent.agent.loop.call_model", fake_call_model)
+
+    decision = run_agent(
+        system_prompt="You are an AP agent",
+        user_message="Decide on this invoice",
+        registry=registry,
+        invoice_id="INV-009",
+        max_rounds=3,
+    )
+
+    assert decision.action == Action.APPROVE
+    assert decision.hold_reason is None
+
+
 def test_agent_handles_empty_response(monkeypatch):
     """Test that an empty response (no text, no tool calls) returns ESCALATE.
 

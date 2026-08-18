@@ -276,9 +276,11 @@ def _parse_final_answer(
         action = Action.ESCALATE
         reasoning = f"Unknown action '{action_str}'. Original reasoning: {reasoning}"
 
-    # hold_reason is optional, only set when action is HOLD
+    # hold_reason only means something on a HOLD. Models occasionally attach
+    # one to an APPROVE or ESCALATE; keeping it would make downstream
+    # reports count phantom holds, so code drops it.
     hold_reason = None
-    if hold_reason_str:
+    if hold_reason_str and action == Action.HOLD:
         from apagent.schemas import HoldReason
 
         try:
