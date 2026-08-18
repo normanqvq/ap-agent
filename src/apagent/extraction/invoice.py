@@ -182,6 +182,12 @@ def extract_invoice(
             )
             for i, ln in enumerate(data.get("lines", []))
         ]
+        # Matching keys its dicts by line_no, so duplicates (a model slip,
+        # e.g. every line numbered 1) would silently swallow lines — the
+        # worst failure mode in a reconciliation system. Renumber in order
+        # of appearance; positions are what the model was told line_no means.
+        if len({line.line_no for line in lines}) != len(lines):
+            lines = [line.model_copy(update={"line_no": i + 1}) for i, line in enumerate(lines)]
         printed_name = data.get("vendor_name") or ""
         return Document(
             doc_id=data.get("invoice_number") or pdf_path.stem,

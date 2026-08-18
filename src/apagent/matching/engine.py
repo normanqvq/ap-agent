@@ -151,8 +151,22 @@ def build_discrepancies(
         po_line, inv_line = po_by_no[po_no], inv_by_no[inv_no]
         grn_line = grn_by_sku.get(po_line.sku)
 
+        # A qty row fires on EITHER comparison: invoice vs PO, or invoice vs
+        # GRN. The second one is easy to forget and is the worst miss in the
+        # domain: PO 100 / GRN 80 / invoice 100 bills for goods that never
+        # arrived, yet PO == invoice, so a two-way check stays silent. That
+        # is the very case the schemas.Discrepancy docstring promises to
+        # surface (and the AWAITING_DELIVERY hold exists for).
+        grn_gap = grn_line is not None and grn_line.qty != inv_line.qty
         if po_line.qty != inv_line.qty:
             delta = abs(inv_line.qty - po_line.qty)
+            base = po_line.qty
+        elif grn_gap:
+            delta = abs(inv_line.qty - grn_line.qty)
+            base = grn_line.qty
+        else:
+            delta = None
+        if delta is not None:
             out.append(
                 Discrepancy(
                     line_pair=(po_no, inv_no),
@@ -161,7 +175,7 @@ def build_discrepancies(
                     grn_value=str(grn_line.qty) if grn_line else None,
                     invoice_value=str(inv_line.qty),
                     delta_abs=delta,
-                    delta_pct=_pct(delta, po_line.qty),
+                    delta_pct=_pct(delta, base),
                     within_tolerance=False,
                 )
             )

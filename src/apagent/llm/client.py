@@ -240,6 +240,20 @@ def _call_anthropic(messages: list[dict], tools: list[dict], system: str) -> dic
     }
 
 
+def _parse_tool_args(raw: str) -> dict:
+    """OpenAI-compatible APIs send tool arguments as a JSON string; models
+    occasionally emit broken JSON there. Raising here would crash the whole
+    agent loop over one bad call, so we degrade: hand the tool a dict that
+    says what happened. The tool then complains about its missing required
+    args, the message flows back to the model, and the model retries — the
+    same recovery path as any other tool error."""
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {"_malformed_args": raw}
+    except json.JSONDecodeError:
+        return {"_malformed_args": raw}
+
+
 def _call_openai_compat(
     messages: list[dict], tools: list[dict], system: str, provider: str
 ) -> dict:
@@ -290,8 +304,7 @@ def _call_openai_compat(
                 {
                     "id": tc.id,
                     "name": tc.function.name,
-                    # OpenAI gives arguments as a JSON string. Parse it.
-                    "args": json.loads(tc.function.arguments),
+                    "args": _parse_tool_args(tc.function.arguments),
                 }
             )
 

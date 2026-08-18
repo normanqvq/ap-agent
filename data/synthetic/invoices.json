@@ -853,5 +853,38 @@
     "due_date": "2026-08-29",
     "tax_cents": 5990,
     "total_cents": 72540
+  },
+  {
+    "doc_id": "INV-V001-3021",
+    "doc_type": "INVOICE",
+    "vendor_id": "V001",
+    "vendor_name": "Tan Hardware Supplies Pte. Ltd.",
+    "issue_date": "2026-07-22",
+    "ref_doc_id": "PO-2026-1021",
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "SKU-WASH-8",
+        "description": "8mm flat washer",
+        "qty": 50,
+        "uom": "PCS",
+        "unit_price_cents": 4,
+        "line_total_cents": 200
+      },
+      {
+        "line_no": 2,
+        "sku": "SKU-NUT-M8",
+        "description": "M8 hex nut, zinc plated",
+        "qty": 24,
+        "uom": "PCS",
+        "unit_price_cents": 8,
+        "line_total_cents": 192
+      }
+    ],
+    "payment_terms": "NET 30",
+    "due_date": "2026-08-21",
+    "tax_cents": 35,
+    "total_cents": 427
   }
 ]

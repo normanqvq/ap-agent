@@ -307,6 +307,37 @@ def test_agent_strips_markdown_code_fences(monkeypatch):
     assert decision.confidence == 0.7
 
 
+def test_last_decision_object_wins_over_earlier_drafts(monkeypatch):
+    """A model that writes a draft decision and then corrects itself means
+    the LAST one — taking the first would resurrect the draft."""
+    registry = ToolRegistry()
+
+    def fake_call_model(messages, tools, system, provider=None):
+        return {
+            "text": (
+                'My first instinct was {"action": "APPROVE", "confidence": 0.6, '
+                '"reasoning": "draft"} but the missing GRN changes it:\n'
+                '{"action": "HOLD", "hold_reason": "AWAITING_GRN", '
+                '"confidence": 0.9, "reasoning": "no receipt"}'
+            ),
+            "tool_calls": [],
+            "stop_reason": "end_turn",
+        }
+
+    monkeypatch.setattr("apagent.agent.loop.call_model", fake_call_model)
+
+    decision = run_agent(
+        system_prompt="You are an AP agent",
+        user_message="Decide on this invoice",
+        registry=registry,
+        invoice_id="INV-010",
+        max_rounds=3,
+    )
+
+    assert decision.action == Action.HOLD
+    assert decision.reasoning == "no receipt"
+
+
 def test_hold_reason_dropped_when_action_is_not_hold(monkeypatch):
     """A hold_reason on an APPROVE is a model slip; code must drop it so
     downstream reports never count phantom holds."""

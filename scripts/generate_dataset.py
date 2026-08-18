@@ -650,6 +650,83 @@ def build_documents() -> tuple[list[Document], list[Document], list[Document], l
         }
     )
 
+    # Partial delivery, billed in full: PO and invoice agree on quantity, so
+    # a two-way check stays silent — only comparing the invoice against the
+    # GRN catches it. This is the classic three-way case (and the reason
+    # AWAITING_DELIVERY exists), so the dataset must plant it. Appended
+    # after all earlier cases so their RNG draws — and therefore all
+    # previously committed output — stay byte-identical.
+    vendor = VENDORS[0]  # V001 Tan Hardware — SGD, SKUs on every line
+    po_id, grn_id, inv_id = "PO-2026-1021", "GRN-2021", "INV-V001-3021"
+    po_date = (base + timedelta(days=RNG.randint(0, 20))).isoformat()
+    grn_date = (date.fromisoformat(po_date) + timedelta(days=RNG.randint(3, 10))).isoformat()
+    inv_date = (date.fromisoformat(grn_date) + timedelta(days=RNG.randint(0, 4))).isoformat()
+    due_date = (date.fromisoformat(inv_date) + timedelta(days=30)).isoformat()
+
+    po_lines = make_lines(vendor, 2)
+    pos.append(
+        Document(
+            doc_id=po_id,
+            doc_type=DocType.PO,
+            vendor_id=vendor["vendor_id"],
+            vendor_name=vendor["name"],
+            issue_date=po_date,
+            ref_doc_id=None,
+            currency=vendor["currency"],
+            lines=po_lines,
+        )
+    )
+    grn_lines = copy_lines(po_lines)
+    # Line 1 arrives roughly half short; the warehouse records what actually
+    # landed on the dock, which is the whole point of a GRN.
+    short = grn_lines[0]
+    short.qty = max(1, short.qty // 2)
+    short.line_total_cents = short.qty * short.unit_price_cents
+    grns.append(
+        Document(
+            doc_id=grn_id,
+            doc_type=DocType.GRN,
+            vendor_id=vendor["vendor_id"],
+            vendor_name=vendor["name"],
+            issue_date=grn_date,
+            ref_doc_id=po_id,
+            currency=vendor["currency"],
+            lines=grn_lines,
+        )
+    )
+    inv_lines = copy_lines(po_lines)  # bills the FULL ordered quantity
+    tax, total = invoice_totals(inv_lines, vendor["currency"])
+    invoices.append(
+        Document(
+            doc_id=inv_id,
+            doc_type=DocType.INVOICE,
+            vendor_id=vendor["vendor_id"],
+            vendor_name=vendor["printed_name"],
+            issue_date=inv_date,
+            ref_doc_id=po_id,
+            currency=vendor["currency"],
+            lines=inv_lines,
+            payment_terms="NET 30",
+            due_date=due_date,
+            tax_cents=tax,
+            total_cents=total,
+        )
+    )
+    manifest.append(
+        {
+            "invoice_id": inv_id,
+            "po_id": po_id,
+            "grn_id": grn_id,
+            "defect": "partial_delivery",
+            "notes": (
+                "PO and invoice agree on quantities, but the GRN records only "
+                "about half of line 1 as received — billed in full for a "
+                "partial delivery. Invisible to a two-way check by "
+                "construction. Expect HOLD with AWAITING_DELIVERY."
+            ),
+        }
+    )
+
     return pos, grns, invoices, manifest
 
 

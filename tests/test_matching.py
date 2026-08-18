@@ -111,6 +111,22 @@ def test_invoice_total_check_flags_bad_arithmetic():
     assert totals[0].delta_abs == 500
 
 
+def test_qty_gap_vs_grn_surfaces_even_when_po_and_invoice_agree():
+    """PO 100 / GRN 80 / invoice 100: billed in full for a partial delivery.
+    PO == invoice, so only the invoice-vs-GRN comparison can catch it — the
+    exact blind spot a 'three-way' match exists to not have."""
+    po = doc("PO-1", DocType.PO, [line(1, "A-1", "widget", qty=100)])
+    grn = doc("GRN-1", DocType.GRN, [line(1, "A-1", "widget", qty=80)], ref="PO-1")
+    inv = doc("INV-1", DocType.INVOICE, [line(1, "A-1", "widget", qty=100)], ref="PO-1")
+    result = match_invoice(inv, [po], [grn])
+    qty_rows = [d for d in result.discrepancies if d.field == DiscrepancyField.QTY]
+    assert len(qty_rows) == 1
+    assert qty_rows[0].po_value == "100"
+    assert qty_rows[0].grn_value == "80"
+    assert qty_rows[0].invoice_value == "100"
+    assert qty_rows[0].delta_abs == 20
+
+
 def test_find_po_falls_back_to_vendor_and_amount():
     po = doc("PO-9", DocType.PO, [line(1, "A-1", "widget")])
     inv = doc("INV-9", DocType.INVOICE, [line(1, "A-1", "widget")], ref=None)
@@ -177,6 +193,16 @@ def test_dataset_duplicate_matches_same_po_as_original(dataset):
     original = _match(dataset, "INV-V003-3003")
     duplicate = _match(dataset, "INV-V003-3901")
     assert duplicate.po_id == original.po_id
+
+
+def test_dataset_partial_delivery_surfaces_via_grn(dataset):
+    """INV-V001-3021: PO 50 / GRN 25 / invoice 50 on line 1."""
+    result = _match(dataset, "INV-V001-3021")
+    qty_rows = [d for d in result.discrepancies if d.field == DiscrepancyField.QTY]
+    assert len(qty_rows) == 1
+    assert qty_rows[0].grn_value == "25"
+    assert qty_rows[0].invoice_value == "50"
+    assert qty_rows[0].delta_abs == 25
 
 
 def test_dataset_injection_case_price_delta_unaffected_by_text(dataset):

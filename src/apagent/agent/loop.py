@@ -206,9 +206,12 @@ def _extract_decision_json(text: str) -> dict | None:
     escalations in one demo run.
 
     So instead of parsing the whole text, we scan it: try raw_decode at
-    every '{' and accept the first object that carries an "action" key.
+    every '{' and keep the LAST object that carries an "action" key.
     That "action" check matters — the prose may contain other brace pairs,
-    and an arbitrary JSON fragment is not a decision.
+    and an arbitrary JSON fragment is not a decision. Last, not first,
+    because a model that writes a draft and then corrects itself puts the
+    answer it means at the end — same convention as the final JSON after a
+    prose analysis.
 
     Returns None when no such object exists (caller decides what that means).
     """
@@ -224,6 +227,7 @@ def _extract_decision_json(text: str) -> dict | None:
     text = text.strip()
 
     decoder = json.JSONDecoder()
+    found = None
     for idx, char in enumerate(text):
         if char != "{":
             continue
@@ -232,8 +236,8 @@ def _extract_decision_json(text: str) -> dict | None:
         except json.JSONDecodeError:
             continue
         if isinstance(obj, dict) and "action" in obj:
-            return obj
-    return None
+            found = obj
+    return found
 
 
 def _parse_final_answer(

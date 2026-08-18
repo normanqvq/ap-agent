@@ -143,3 +143,15 @@ def test_openai_message_conversion():
     # Each result becomes its own role="tool" message referencing tool_call_id
     assert wire[3] == {"role": "tool", "tool_call_id": "call_1", "content": "PO-9: 100 units"}
     assert wire[4] == {"role": "tool", "tool_call_id": "call_2", "content": "GRN not found"}
+
+
+def test_parse_tool_args_survives_broken_json():
+    """Models occasionally emit broken JSON as tool arguments. Raising there
+    would kill the whole agent loop over one bad call; degrading to a
+    marker dict routes it through the normal tool-error recovery path."""
+    from apagent.llm.client import _parse_tool_args
+
+    assert _parse_tool_args('{"po_id": "PO-9"}') == {"po_id": "PO-9"}
+    assert _parse_tool_args('{"po_id": ') == {"_malformed_args": '{"po_id": '}
+    # Valid JSON that is not an object is just as unusable as broken JSON
+    assert _parse_tool_args('["PO-9"]') == {"_malformed_args": '["PO-9"]'}

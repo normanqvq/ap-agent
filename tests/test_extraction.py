@@ -118,6 +118,19 @@ def test_extract_invoice_strips_markdown_fences(monkeypatch):
     assert doc.doc_id == "INV-V001-3001"
 
 
+def test_extract_invoice_renumbers_duplicate_line_nos(monkeypatch):
+    """A model that numbers every line 1 must not make lines vanish —
+    matching keys its dicts by line_no, so duplicates would silently
+    swallow lines downstream."""
+    slipped = json.loads(json.dumps(GOOD_JSON))
+    for ln in slipped["lines"]:
+        ln["line_no"] = 1
+    monkeypatch.setattr("apagent.extraction.invoice.call_model", fake_model(json.dumps(slipped)))
+    doc = extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS)
+    assert [line.line_no for line in doc.lines] == [1, 2]
+    assert len(doc.lines) == 2
+
+
 def test_extract_invoice_raises_on_non_json(monkeypatch):
     monkeypatch.setattr(
         "apagent.extraction.invoice.call_model",
