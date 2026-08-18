@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 from apagent.agent.registry import Tool, ToolRegistry
-from apagent.matching.engine import match_invoice
+from apagent.matching.engine import find_po, match_invoice
 from apagent.retrieval.search import (
     ContractIndex,
     price_variance_allowance,
@@ -26,19 +26,57 @@ from apagent.schemas import DiscrepancyField, Document, ToleranceConfig
 from apagent.store import DocumentStore
 
 
-def hard_duplicates(invoice: Document, store: DocumentStore) -> list[Document]:
-    """Invoices in the ledger that hard-duplicate this one: same vendor,
-    same PO reference, same total. Module-level (not buried in a tool
-    handler) because the pipeline's code guardrail needs the same verdict —
-    duplicate detection is a deterministic fact, and facts must not depend
-    on whether the model remembered to call a tool."""
+def _totals_duplicate(a: int | None, b: int | None, config: ToleranceConfig) -> bool:
+    """Two invoice totals close enough to be the same bill. A tolerance, not
+    exact equality, because a resubmission nudged by a cent is still a
+    resubmission — and a nudge small enough to sit here is also small enough
+    to slip the INVOICE_TOTAL check, so the two gates together leave no gap.
+    Missing totals never match: a None total already forces manual review."""
+    if a is None or b is None:
+        return False
+    return abs(a - b) <= config.total_abs_cents
+
+
+def hard_duplicates(
+    invoice: Document, store: DocumentStore, config: ToleranceConfig | None = None
+) -> list[Document]:
+    """Ledger invoices that hard-duplicate this one.
+
+    Keyed on the RESOLVED purchase order (find_po) plus a near-equal total —
+    NOT on the printed ref_doc_id and exact total, which are both supplier
+    text. A security review verified the old key was defeated four ways:
+    drop the ref, alter it, resubmit a natively ref-less invoice, or nudge
+    the total by a cent — each evaded detection while the engine re-attached
+    the very same PO, so the resubmission read clean and was paid again.
+    Resolving the PO ourselves closes all four: strip or forge the ref and
+    the vendor+amount search lands on the same order anyway.
+
+    Module-level (not buried in a tool handler) because the pipeline's code
+    guardrail needs the same verdict — duplicate detection is a
+    deterministic fact, and facts must not depend on whether the model
+    remembered to call a tool.
+
+    Residual (documented, not closed here): a resubmission that changes the
+    amount via a WITHIN-tolerance price bump, kept internally consistent, is
+    indistinguishable from a genuine slightly-different invoice without a
+    record of which invoices were already PAID. That payment-status ledger
+    is the real fix; until it exists this catches the cheap evasions, and
+    the money/facts gates catch the rest.
+    """
+    base = config or ToleranceConfig()
+    inv_po, _ = find_po(invoice, store.all_pos())
+    if inv_po is None:
+        # No resolvable PO. The no-PO guardrail already escalates these, and
+        # with nothing to key on we cannot claim a duplicate.
+        return []
     out = []
     for other in store.invoices_for_vendor(invoice.vendor_id):
         if other.doc_id == invoice.doc_id:
             continue
-        same_total = other.total_cents is not None and other.total_cents == invoice.total_cents
-        same_ref = other.ref_doc_id is not None and other.ref_doc_id == invoice.ref_doc_id
-        if same_total and same_ref:
+        other_po, _ = find_po(other, store.all_pos())
+        if other_po is None or other_po.doc_id != inv_po.doc_id:
+            continue
+        if _totals_duplicate(invoice.total_cents, other.total_cents, base):
             out.append(other)
     return out
 
