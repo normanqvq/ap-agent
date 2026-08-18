@@ -5,6 +5,8 @@ Summary: AP Agent project
 Requires-Python: >=3.12
 Requires-Dist: pydantic>=2
 Requires-Dist: anthropic
+Requires-Dist: openai
+Requires-Dist: python-dotenv
 Requires-Dist: scipy
 Requires-Dist: pulp
 Requires-Dist: pdfplumber

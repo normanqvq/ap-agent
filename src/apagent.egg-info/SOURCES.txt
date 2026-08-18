@@ -8,9 +8,16 @@ src/apagent.egg-info/dependency_links.txt
 src/apagent.egg-info/requires.txt
 src/apagent.egg-info/top_level.txt
 src/apagent/agent/__init__.py
+src/apagent/agent/loop.py
+src/apagent/agent/registry.py
+src/apagent/agent/test_tools.py
 src/apagent/api/__init__.py
 src/apagent/extraction/__init__.py
 src/apagent/llm/__init__.py
+src/apagent/llm/client.py
 src/apagent/matching/__init__.py
 src/apagent/rules/__init__.py
 src/apagent/scheduling/__init__.py
+tests/test_client.py
+tests/test_loop.py
+tests/test_registry.py
