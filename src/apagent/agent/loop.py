@@ -66,6 +66,7 @@ def run_agent(
     messages = [{"role": "user", "content": user_message}]
     tool_calls_history: list[ToolCall] = []
     round_num = 0
+    corrected = False  # whether we already spent the one JSON-format retry
 
     tools = registry.get_definitions()
 
@@ -109,7 +110,39 @@ def run_agent(
 
             # Parse the final answer into an AgentDecision
             decision = _parse_final_answer(final_text, invoice_id, tool_calls_history, round_num)
-            return decision
+            if decision is not None:
+                return decision
+
+            # No JSON found in the answer. Live DeepSeek runs showed the model
+            # sometimes writes a prose analysis and puts broken JSON (or none)
+            # after it, even though the decision itself is right. One corrective
+            # nudge fixes that at the cost of one round; only when the nudge
+            # also fails do we escalate with the raw text for a human.
+            # We don't nudge on the last round — no rounds left to answer in.
+            if not corrected and round_num < max_rounds:
+                corrected = True
+                messages.append({"role": "assistant", "content": final_text, "tool_calls": []})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your reply was not a parseable JSON object. Reply again "
+                            "with ONLY the JSON decision object — no prose before or "
+                            "after it. Put all analysis inside the reasoning field."
+                        ),
+                    }
+                )
+                continue
+
+            return AgentDecision(
+                invoice_id=invoice_id,
+                action=Action.ESCALATE,
+                hold_reason=None,
+                confidence=0.0,
+                reasoning=f"Failed to parse agent response as JSON. Raw text: {final_text}",
+                tool_calls=tool_calls_history,
+                rounds_used=round_num,
+            )
 
         # Model wants to call tools.
         # We append the assistant turn and the results in the client's internal
@@ -163,31 +196,24 @@ def run_agent(
     )
 
 
-def _parse_final_answer(
-    text: str,
-    invoice_id: str,
-    tool_calls_history: list[ToolCall],
-    rounds_used: int,
-) -> AgentDecision:
-    """Parse the model's final answer into an AgentDecision.
+def _extract_decision_json(text: str) -> dict | None:
+    """Find the decision JSON object inside the model's final text.
 
-    Why we ask for JSON:
-    The agent needs to return structured data (action, hold_reason, confidence,
-    reasoning). Free-form text is hard to parse reliably. JSON is easier.
+    The prompt says "reply with ONLY a JSON object", but live runs showed
+    models (DeepSeek especially) often write a prose analysis first and put
+    the JSON at the end, or wrap it in ```json fences. Requiring the whole
+    text to be JSON turned three correct decisions into parse-failure
+    escalations in one demo run.
 
-    We tell the model in the system prompt to return a JSON object. It often wraps
-    it in markdown code fences (```json ... ```), so we strip those before parsing.
+    So instead of parsing the whole text, we scan it: try raw_decode at
+    every '{' and accept the first object that carries an "action" key.
+    That "action" check matters — the prose may contain other brace pairs,
+    and an arbitrary JSON fragment is not a decision.
 
-    Why we have a fallback:
-    LLMs sometimes ignore instructions and return free text anyway. Or they return
-    almost-JSON with a typo. If parsing fails, we don't crash. We return ESCALATE
-    with the raw text as reasoning. A human can read it and figure out what the
-    agent meant.
-
-    Other option: retry the LLM call with "please return valid JSON". Costs more,
-    takes longer, and might still fail. Simpler to just escalate.
+    Returns None when no such object exists (caller decides what that means).
     """
-    # Strip markdown code fences if present
+    # Strip markdown code fences if present — cheap, and keeps the common
+    # fenced case from depending on the scan below.
     text = text.strip()
     if text.startswith("```json"):
         text = text[len("```json") :]
@@ -197,51 +223,81 @@ def _parse_final_answer(
         text = text[: -len("```")]
     text = text.strip()
 
-    try:
-        data = json.loads(text)
-
-        # Extract fields with defaults
-        action_str = data.get("action", "ESCALATE")
-        hold_reason_str = data.get("hold_reason")
-        confidence = data.get("confidence", 0.5)
-        reasoning = data.get("reasoning", "")
-
-        # Convert strings to enums
+    decoder = json.JSONDecoder()
+    for idx, char in enumerate(text):
+        if char != "{":
+            continue
         try:
-            action = Action(action_str)
+            obj, _ = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "action" in obj:
+            return obj
+    return None
+
+
+def _parse_final_answer(
+    text: str,
+    invoice_id: str,
+    tool_calls_history: list[ToolCall],
+    rounds_used: int,
+) -> AgentDecision | None:
+    """Parse the model's final answer into an AgentDecision.
+
+    Why we ask for JSON:
+    The agent needs to return structured data (action, hold_reason, confidence,
+    reasoning). Free-form text is hard to parse reliably. JSON is easier.
+
+    Returns None when no decision JSON can be found in the text. The loop
+    then spends one corrective round asking for JSON-only output, and only
+    escalates if that also fails — see run_agent. (We used to escalate
+    immediately; live runs showed that threw away correct decisions over a
+    formatting slip.)
+
+    Bad VALUES inside a found object (unknown action, junk hold_reason) do
+    not return None: they fall back to safe defaults, because a malformed
+    enum is the model's decision problem, not a formatting problem — asking
+    again would just get the same wrong value more tidily formatted.
+    """
+    data = _extract_decision_json(text)
+    if data is None:
+        return None
+
+    # Extract fields with defaults
+    action_str = data.get("action", "ESCALATE")
+    hold_reason_str = data.get("hold_reason")
+    confidence = data.get("confidence", 0.5)
+    reasoning = data.get("reasoning", "")
+
+    # Convert strings to enums
+    try:
+        action = Action(action_str)
+    except ValueError:
+        action = Action.ESCALATE
+        reasoning = f"Unknown action '{action_str}'. Original reasoning: {reasoning}"
+
+    # hold_reason is optional, only set when action is HOLD
+    hold_reason = None
+    if hold_reason_str:
+        from apagent.schemas import HoldReason
+
+        try:
+            hold_reason = HoldReason(hold_reason_str)
         except ValueError:
-            action = Action.ESCALATE
-            reasoning = f"Unknown action '{action_str}'. Original reasoning: {reasoning}"
+            # Invalid hold_reason, ignore it
+            pass
 
-        # hold_reason is optional, only set when action is HOLD
-        hold_reason = None
-        if hold_reason_str:
-            from apagent.schemas import HoldReason
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        confidence = 0.5
 
-            try:
-                hold_reason = HoldReason(hold_reason_str)
-            except ValueError:
-                # Invalid hold_reason, ignore it
-                pass
-
-        return AgentDecision(
-            invoice_id=invoice_id,
-            action=action,
-            hold_reason=hold_reason,
-            confidence=float(confidence),
-            reasoning=reasoning,
-            tool_calls=tool_calls_history,
-            rounds_used=rounds_used,
-        )
-
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
-        # Parsing failed. Return ESCALATE with the raw text.
-        return AgentDecision(
-            invoice_id=invoice_id,
-            action=Action.ESCALATE,
-            hold_reason=None,
-            confidence=0.0,
-            reasoning=f"Failed to parse agent response. Error: {e}. Raw text: {text}",
-            tool_calls=tool_calls_history,
-            rounds_used=rounds_used,
-        )
+    return AgentDecision(
+        invoice_id=invoice_id,
+        action=action,
+        hold_reason=hold_reason,
+        confidence=confidence,
+        reasoning=reasoning,
+        tool_calls=tool_calls_history,
+        rounds_used=rounds_used,
+    )

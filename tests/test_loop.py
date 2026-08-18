@@ -156,17 +156,20 @@ def test_agent_hits_max_rounds(monkeypatch):
 
 
 def test_agent_returns_unparseable_output(monkeypatch):
-    """Test that unparseable output falls back to ESCALATE.
+    """Test that persistently unparseable output falls back to ESCALATE.
 
     Why this matters:
     LLMs sometimes ignore instructions and return free text instead of JSON.
-    Or they return almost-JSON with a typo. If we crash on parse errors, the
-    whole loop fails. Better to return ESCALATE with the raw text as reasoning,
-    so a human can read it and figure out what the agent meant.
+    The loop spends ONE corrective round asking for JSON-only output; if the
+    model still returns prose, we return ESCALATE with the raw text as
+    reasoning, so a human can read it and figure out what the agent meant.
     """
     registry = ToolRegistry()
+    call_count = 0
 
     def fake_call_model(messages, tools, system, provider=None):
+        nonlocal call_count
+        call_count += 1
         return {
             "text": "I think this invoice is fine, you should approve it.",
             "tool_calls": [],
@@ -183,10 +186,89 @@ def test_agent_returns_unparseable_output(monkeypatch):
         max_rounds=3,
     )
 
-    # Should fall back to ESCALATE
+    # One nudge, then fall back to ESCALATE — never silently APPROVE
+    assert call_count == 2
     assert decision.action == Action.ESCALATE
     assert decision.confidence == 0.0
     assert "Failed to parse" in decision.reasoning
+    assert "you should approve it" in decision.reasoning  # raw text kept for the human
+
+
+def test_agent_parses_json_buried_in_prose(monkeypatch):
+    """The DeepSeek failure shape from the live demo: a prose analysis first,
+    then the decision JSON. The parser must dig the JSON out instead of
+    escalating a correct decision over formatting."""
+    registry = ToolRegistry()
+
+    def fake_call_model(messages, tools, system, provider=None):
+        return {
+            "text": (
+                "Based on my evidence gathering:\n"
+                "- The GRN exists {so delivery is proven}\n"
+                "- Price variance is within the contract\n\n"
+                '{"action": "HOLD", "hold_reason": "PRICE_VARIANCE", '
+                '"confidence": 0.9, "reasoning": "8% variance exceeds the 5% allowance"}'
+            ),
+            "tool_calls": [],
+            "stop_reason": "end_turn",
+        }
+
+    monkeypatch.setattr("apagent.agent.loop.call_model", fake_call_model)
+
+    decision = run_agent(
+        system_prompt="You are an AP agent",
+        user_message="Decide on this invoice",
+        registry=registry,
+        invoice_id="INV-007",
+        max_rounds=3,
+    )
+
+    assert decision.action == Action.HOLD
+    assert decision.hold_reason is not None
+    assert decision.confidence == 0.9
+    assert decision.rounds_used == 1  # no retry needed
+
+
+def test_agent_corrective_retry_recovers_broken_json(monkeypatch):
+    """First answer has JSON so broken it cannot be extracted; the loop asks
+    once for JSON-only and the model complies. The decision survives."""
+    registry = ToolRegistry()
+    call_count = 0
+    second_call_messages = None
+
+    def fake_call_model(messages, tools, system, provider=None):
+        nonlocal call_count, second_call_messages
+        call_count += 1
+        if call_count == 1:
+            # Trailing doubled quote — the exact typo from the live demo run
+            return {
+                "text": 'Analysis first.\n{"action": "HOLD", "reasoning": "broken""}',
+                "tool_calls": [],
+                "stop_reason": "end_turn",
+            }
+        second_call_messages = messages
+        return {
+            "text": '{"action": "HOLD", "hold_reason": "PRICE_VARIANCE", '
+            '"confidence": 0.9, "reasoning": "clean this time"}',
+            "tool_calls": [],
+            "stop_reason": "end_turn",
+        }
+
+    monkeypatch.setattr("apagent.agent.loop.call_model", fake_call_model)
+
+    decision = run_agent(
+        system_prompt="You are an AP agent",
+        user_message="Decide on this invoice",
+        registry=registry,
+        invoice_id="INV-008",
+        max_rounds=3,
+    )
+
+    assert call_count == 2
+    assert decision.action == Action.HOLD
+    assert decision.reasoning == "clean this time"
+    # The nudge must be in the conversation the second call saw
+    assert "ONLY the JSON decision object" in second_call_messages[-1]["content"]
 
 
 def test_agent_strips_markdown_code_fences(monkeypatch):
