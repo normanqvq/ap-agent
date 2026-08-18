@@ -745,5 +745,80 @@
     "due_date": null,
     "tax_cents": null,
     "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1019",
+    "doc_type": "PO",
+    "vendor_id": "V006",
+    "vendor_name": "CleanPro Facilities Services",
+    "issue_date": "2026-07-08",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "CP-DET-5L",
+        "description": "Floor detergent 5L",
+        "qty": 10,
+        "uom": "BTL",
+        "unit_price_cents": 1650,
+        "line_total_cents": 16500
+      },
+      {
+        "line_no": 2,
+        "sku": "CP-GLOVE-L",
+        "description": "Nitrile gloves size L, box of 100",
+        "qty": 100,
+        "uom": "BOX",
+        "unit_price_cents": 890,
+        "line_total_cents": 89000
+      },
+      {
+        "line_no": 3,
+        "sku": "CP-BAG-120",
+        "description": "Trash bag 120L, roll of 20",
+        "qty": 24,
+        "uom": "ROLL",
+        "unit_price_cents": 460,
+        "line_total_cents": 11040
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1020",
+    "doc_type": "PO",
+    "vendor_id": "V002",
+    "vendor_name": "Mei Ling Office Solutions",
+    "issue_date": "2026-07-23",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "FILE-A4-PP",
+        "description": "A4 PP ring file 25mm",
+        "qty": 50,
+        "uom": "PCS",
+        "unit_price_cents": 210,
+        "line_total_cents": 10500
+      },
+      {
+        "line_no": 2,
+        "sku": "A4-80G",
+        "description": "A4 copy paper 80gsm, ream",
+        "qty": 100,
+        "uom": "REAM",
+        "unit_price_cents": 550,
+        "line_total_cents": 55000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
   }
 ]

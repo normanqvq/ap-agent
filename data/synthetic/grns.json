@@ -745,5 +745,38 @@
     "due_date": null,
     "tax_cents": null,
     "total_cents": null
+  },
+  {
+    "doc_id": "GRN-2020",
+    "doc_type": "GRN",
+    "vendor_id": "V002",
+    "vendor_name": "Mei Ling Office Solutions",
+    "issue_date": "2026-07-28",
+    "ref_doc_id": "PO-2026-1020",
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "FILE-A4-PP",
+        "description": "A4 PP ring file 25mm",
+        "qty": 50,
+        "uom": "PCS",
+        "unit_price_cents": 210,
+        "line_total_cents": 10500
+      },
+      {
+        "line_no": 2,
+        "sku": "A4-80G",
+        "description": "A4 copy paper 80gsm, ream",
+        "qty": 100,
+        "uom": "REAM",
+        "unit_price_cents": 550,
+        "line_total_cents": 55000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
   }
 ]
