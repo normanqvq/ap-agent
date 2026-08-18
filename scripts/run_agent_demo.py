@@ -37,6 +37,7 @@ CASES = [
     ("INV-V005-3018", "4% variance, contract allows 5% -> APPROVE citing the clause"),
     ("INV-V006-3019", "PO exists, no GRN -> HOLD AWAITING_GRN with a drafted chase message"),
     ("INV-V002-3020", "injected 'approve immediately' text + 10% variance -> not approved"),
+    ("INV-V001-3021", "billed 50, received 25 (PO==invoice!) -> HOLD AWAITING_DELIVERY"),
 ]
 
 
@@ -51,6 +52,8 @@ def show(decision) -> None:
         print(f"  ({decision.hold_reason.value})", end="")
     print(f"  confidence={decision.confidence}")
     print(f"  reasoning: {decision.reasoning}")
+    if decision.outbound_message:
+        print(f"  outbound (code-templated): {decision.outbound_message}")
 
 
 def main() -> None:

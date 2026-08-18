@@ -15,8 +15,32 @@ import json
 from pathlib import Path
 
 from apagent.agent.registry import Tool, ToolRegistry
-from apagent.retrieval.search import register_contract_tools
+from apagent.matching.engine import match_invoice
+from apagent.retrieval.search import (
+    ContractIndex,
+    price_variance_allowance,
+    register_contract_tools,
+)
+from apagent.rules.tolerance import apply_tolerances
+from apagent.schemas import DiscrepancyField, Document, ToleranceConfig
 from apagent.store import DocumentStore
+
+
+def hard_duplicates(invoice: Document, store: DocumentStore) -> list[Document]:
+    """Invoices in the ledger that hard-duplicate this one: same vendor,
+    same PO reference, same total. Module-level (not buried in a tool
+    handler) because the pipeline's code guardrail needs the same verdict —
+    duplicate detection is a deterministic fact, and facts must not depend
+    on whether the model remembered to call a tool."""
+    out = []
+    for other in store.invoices_for_vendor(invoice.vendor_id):
+        if other.doc_id == invoice.doc_id:
+            continue
+        same_total = other.total_cents is not None and other.total_cents == invoice.total_cents
+        same_ref = other.ref_doc_id is not None and other.ref_doc_id == invoice.ref_doc_id
+        if same_total and same_ref:
+            out.append(other)
+    return out
 
 
 def _doc_summary(doc) -> dict:
@@ -81,20 +105,18 @@ def register_ap_tools(registry: ToolRegistry, store: DocumentStore) -> None:
         if invoice is None:
             return f"Invoice '{invoice_id}' is not in the ledger; cannot check."
 
-        # The comparison lives here, in code. The agent never eyeballs two
-        # invoices and guesses — it gets a computed verdict with evidence.
-        # Same vendor + same PO reference + same total is a hard duplicate
-        # signal; same vendor + same total alone is soft (two orders can
-        # legitimately cost the same), so we report the two separately.
-        hard, soft = [], []
+        # The comparison lives in code (hard_duplicates — shared with the
+        # pipeline's guardrail). The agent never eyeballs two invoices and
+        # guesses — it gets a computed verdict with evidence. Same vendor +
+        # same PO reference + same total is a hard duplicate signal; same
+        # vendor + same total alone is soft (two orders can legitimately
+        # cost the same), so we report the two separately.
+        hard = hard_duplicates(invoice, store)
+        soft = []
         for other in store.invoices_for_vendor(invoice.vendor_id):
-            if other.doc_id == invoice.doc_id:
+            if other.doc_id == invoice.doc_id or other in hard:
                 continue
-            same_total = other.total_cents is not None and other.total_cents == invoice.total_cents
-            same_ref = other.ref_doc_id is not None and other.ref_doc_id == invoice.ref_doc_id
-            if same_total and same_ref:
-                hard.append(other)
-            elif same_total:
+            if other.total_cents is not None and other.total_cents == invoice.total_cents:
                 soft.append(other)
 
         return json.dumps(
@@ -187,8 +209,95 @@ def register_ap_tools(registry: ToolRegistry, store: DocumentStore) -> None:
     )
 
 
+def register_recheck_tool(
+    registry: ToolRegistry, store: DocumentStore, index: ContractIndex
+) -> None:
+    """Register recheck_against_contract: the tool that closes the authority
+    loop on the contract-flip case.
+
+    Without it, the agent would read a clause ("up to 5%") and personally
+    decide that 4% is therefore fine — the model relaxing a code-set limit,
+    which breaks the 'code owns authority' principle at its most visible
+    moment. With it, the flow is: the MODEL decides to consult the contract;
+    CODE parses the allowance out of the clause text with a regex, rebuilds
+    the tolerance config, and re-runs the rules layer. The percentage never
+    passes through the model — not as tool input, not as its arithmetic.
+    The model's contribution is judgment (go check) and citation (quote the
+    clause the tool returns), never the verdict.
+    """
+
+    def recheck_against_contract(args: dict) -> str:
+        invoice_id = args.get("invoice_id", "")
+        invoice = store.get_invoice(invoice_id)
+        if invoice is None:
+            return f"Invoice '{invoice_id}' is not in the ledger; cannot recheck."
+
+        allowance = price_variance_allowance(index.chunks, invoice.vendor_id)
+        base = ToleranceConfig()
+        if allowance is None:
+            return (
+                f"The {invoice.vendor_id} contract grants no price variance "
+                f"allowance (no 'up to N%' clause in its pricing section). The "
+                f"default tolerance of {base.unit_price_pct}% stands; the "
+                "out-of-tolerance verdicts in the match result are final."
+            )
+        pct, chunk = allowance
+
+        # Re-run the deterministic layers with the code-parsed allowance.
+        # model_copy on one field, NOT a whole-object override: the contract
+        # speaks only to unit price, and this config exists only inside this
+        # answer, which states exactly which limit was applied and why.
+        match = match_invoice(invoice, store.all_pos(), store.all_grns())
+        rechecked = apply_tolerances(match, base.model_copy(update={"unit_price_pct": pct}))
+        price_rows = [
+            {
+                "line_pair": d.line_pair,
+                "po_price_cents": d.po_value,
+                "invoice_price_cents": d.invoice_value,
+                "delta_pct": d.delta_pct,
+                "within_contract_tolerance": d.within_tolerance,
+            }
+            for d in rechecked.discrepancies
+            if d.field == DiscrepancyField.UNIT_PRICE
+        ]
+        return json.dumps(
+            {
+                "vendor_id": invoice.vendor_id,
+                "contract_allowance_pct": pct,
+                "parsed_by": "code (regex over the clause text), not the model",
+                "source": chunk.source,
+                "section": chunk.heading,
+                "clause_text": chunk.text,
+                "price_rows_rechecked": price_rows,
+            }
+        )
+
+    registry.register(
+        Tool(
+            name="recheck_against_contract",
+            description=(
+                "Re-run the tolerance check for an invoice using the price "
+                "variance allowance parsed from the vendor's contract BY CODE. "
+                "Call this whenever a UNIT_PRICE discrepancy is out of "
+                "tolerance: if the contract grants an allowance, this tool "
+                "recomputes within_tolerance under it and returns the clause "
+                "to cite. Its verdict is authoritative — do not apply a "
+                "contract percentage yourself."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "invoice_id": {"type": "string", "description": "The invoice to recheck"}
+                },
+                "required": ["invoice_id"],
+            },
+            handler=recheck_against_contract,
+        )
+    )
+
+
 def build_registry(store: DocumentStore, contracts_dir: Path) -> ToolRegistry:
-    """The full toolbelt for the AP agent: lookups + contract search.
+    """The full toolbelt for the AP agent: lookups + contract search + recheck.
 
     One assembly point so the demo script, the API and the tests all run
     the agent with the same tools — a demo that quietly used an extra tool
@@ -196,5 +305,6 @@ def build_registry(store: DocumentStore, contracts_dir: Path) -> ToolRegistry:
     """
     registry = ToolRegistry()
     register_ap_tools(registry, store)
-    register_contract_tools(registry, contracts_dir)
+    index = register_contract_tools(registry, contracts_dir)
+    register_recheck_tool(registry, store, index)
     return registry

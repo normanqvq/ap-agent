@@ -146,12 +146,41 @@ class ContractIndex:
         return results[:top_k]
 
 
-def register_contract_tools(registry, contracts_dir: Path) -> None:
+# Matches "up to 5 percent (5%)" / "up to 3%" inside a pricing clause. The
+# allowance number is parsed FROM THE CONTRACT TEXT by this regex — never
+# taken from the model. That is the point: the model may decide to consult
+# the contract, but the tolerance that ends up applied is code-read.
+_ALLOWANCE_RE = re.compile(r"up to\s+(\d+(?:\.\d+)?)\s*(?:percent|%)", re.IGNORECASE)
+
+
+def price_variance_allowance(chunks: list[Chunk], vendor_id: str) -> tuple[float, Chunk] | None:
+    """The contractual unit-price variance allowance for a vendor, if any.
+
+    Scoped to sections whose heading mentions pricing — the payment section
+    also contains a percentage (late-payment interest) and must not be
+    mistaken for a price tolerance. Returns (percentage points, source chunk)
+    or None when the contract is silent, in which case the default tolerance
+    stands. A None here is trustworthy for the same reason MIN_SCORE exists:
+    we would rather say "no allowance" than guess one.
+    """
+    for chunk in chunks:
+        if chunk.vendor_id != vendor_id:
+            continue
+        if not re.search(r"\bpric", chunk.heading, re.IGNORECASE):
+            continue
+        match = _ALLOWANCE_RE.search(chunk.text)
+        if match:
+            return float(match.group(1)), chunk
+    return None
+
+
+def register_contract_tools(registry, contracts_dir: Path) -> ContractIndex:
     """Register the search_vendor_contract tool into an agent tool registry.
 
     The index is built here, once, at registration — six small PDFs parse in
     well under a second, and rebuilding per call would re-read the files on
-    every agent round.
+    every agent round. Returned so callers can register further tools over
+    the same chunks (the contract recheck tool) without re-parsing.
     """
     from apagent.agent.registry import Tool
 
@@ -213,3 +242,4 @@ def register_contract_tools(registry, contracts_dir: Path) -> None:
             handler=search_handler,
         )
     )
+    return index

@@ -94,4 +94,37 @@ def test_duplicate_check_clean_invoice_reports_none(registry):
 def test_contract_search_is_registered_in_the_full_toolbelt(registry):
     names = [t["name"] for t in registry.get_definitions()]
     assert "search_vendor_contract" in names
-    assert len(names) == 5
+    assert "recheck_against_contract" in names
+    assert len(names) == 6
+
+
+# --- the contract recheck tool: code parses, code re-verdicts ------------
+
+
+def test_recheck_flips_the_headline_case_in_code(registry):
+    """INV-V005-3018 (4%): out of tolerance by default, WITHIN the contract's
+    5% — and the flip is computed by code from the parsed clause, not by the
+    model reading a percentage."""
+    result = json.loads(
+        registry.execute("recheck_against_contract", {"invoice_id": "INV-V005-3018"})
+    )
+    assert result["contract_allowance_pct"] == 5.0
+    assert result["source"] == "V005_supply_agreement.pdf"
+    assert result["price_rows_rechecked"][0]["within_contract_tolerance"] is True
+
+
+def test_recheck_does_not_turn_the_contract_into_a_blank_cheque(registry):
+    """INV-V005-3005 (8%): stays out of tolerance even under the 5% clause."""
+    result = json.loads(
+        registry.execute("recheck_against_contract", {"invoice_id": "INV-V005-3005"})
+    )
+    assert result["contract_allowance_pct"] == 5.0
+    assert result["price_rows_rechecked"][0]["within_contract_tolerance"] is False
+
+
+def test_recheck_reports_silent_contract_as_final(registry):
+    """INV-V002-3020 (10%, injected text): V002's contract grants no
+    allowance, so the default verdict stands — stated in plain words."""
+    result = registry.execute("recheck_against_contract", {"invoice_id": "INV-V002-3020"})
+    assert "no price variance allowance" in result
+    assert "default tolerance" in result

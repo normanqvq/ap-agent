@@ -18,7 +18,12 @@ from pathlib import Path
 import pytest
 
 from apagent.agent.registry import ToolRegistry
-from apagent.retrieval.search import ContractIndex, load_contracts, register_contract_tools
+from apagent.retrieval.search import (
+    ContractIndex,
+    load_contracts,
+    price_variance_allowance,
+    register_contract_tools,
+)
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / "data" / "synthetic" / "contracts"
 
@@ -107,3 +112,22 @@ def test_registered_tool_requires_query():
 
     result = registry.execute("search_vendor_contract", {})
     assert "Error" in result
+
+
+def test_price_variance_allowance_parsed_by_code(index):
+    """The contractual allowance is read out of the clause TEXT by regex —
+    the number the rules layer later applies never touches the model."""
+    v5 = price_variance_allowance(index.chunks, "V005")
+    assert v5 is not None
+    pct, chunk = v5
+    assert pct == 5.0
+    assert chunk.heading.startswith("2. Pricing")
+
+    v4 = price_variance_allowance(index.chunks, "V004")
+    assert v4 is not None and v4[0] == 3.0
+
+
+def test_price_variance_allowance_none_when_contract_silent(index):
+    """V001's pricing clause grants no allowance, and the payment section's
+    late-payment interest percentage must NOT be mistaken for one."""
+    assert price_variance_allowance(index.chunks, "V001") is None

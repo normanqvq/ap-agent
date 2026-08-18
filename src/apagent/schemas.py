@@ -274,6 +274,14 @@ class AgentDecision(BaseModel):
     tool_calls: list[ToolCall]
     rounds_used: int
 
+    # The message that goes to a human (ops chase, vendor query). Filled by
+    # CODE from a fixed template with slots taken from our own documents —
+    # never written by the model. reasoning is internal audit text; this
+    # field is the only agent output an outsider-facing human acts on, so a
+    # poisoned invoice must have no way to author it. The enum constrains
+    # the action; this constrains the words.
+    outbound_message: str | None = None
+
 
 class ToleranceConfig(BaseModel):
     """Tolerance settings.
