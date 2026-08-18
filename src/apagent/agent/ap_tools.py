@@ -43,6 +43,27 @@ def hard_duplicates(invoice: Document, store: DocumentStore) -> list[Document]:
     return out
 
 
+def recheck_with_contract(
+    match, vendor_id: str, chunks, base_config: ToleranceConfig | None = None
+):
+    """Re-run the tolerance check under the vendor's contractual price
+    allowance. Returns (allowance, rechecked_match); allowance is
+    (pct, source_chunk) or None when the contract is silent.
+
+    This is THE one computation for "does the contract cover this price?" —
+    the agent-facing tool and the pipeline's code guardrail both call it, so
+    the verdict the model is shown and the verdict code enforces can never
+    disagree. The percentage is parsed from the clause text by code
+    (price_variance_allowance); it never passes through the model.
+    """
+    base = base_config or ToleranceConfig()
+    allowance = price_variance_allowance(list(chunks), vendor_id) if chunks else None
+    if allowance is None:
+        return None, apply_tolerances(match, base)
+    pct, _chunk = allowance
+    return allowance, apply_tolerances(match, base.model_copy(update={"unit_price_pct": pct}))
+
+
 def _doc_summary(doc) -> dict:
     """A document as the agent should see it: full lines, cents as cents.
 
@@ -232,9 +253,10 @@ def register_recheck_tool(
         if invoice is None:
             return f"Invoice '{invoice_id}' is not in the ledger; cannot recheck."
 
-        allowance = price_variance_allowance(index.chunks, invoice.vendor_id)
-        base = ToleranceConfig()
+        match = match_invoice(invoice, store.all_pos(), store.all_grns())
+        allowance, rechecked = recheck_with_contract(match, invoice.vendor_id, index.chunks)
         if allowance is None:
+            base = ToleranceConfig()
             return (
                 f"The {invoice.vendor_id} contract grants no price variance "
                 f"allowance (no 'up to N%' clause in its pricing section). The "
@@ -242,13 +264,6 @@ def register_recheck_tool(
                 "out-of-tolerance verdicts in the match result are final."
             )
         pct, chunk = allowance
-
-        # Re-run the deterministic layers with the code-parsed allowance.
-        # model_copy on one field, NOT a whole-object override: the contract
-        # speaks only to unit price, and this config exists only inside this
-        # answer, which states exactly which limit was applied and why.
-        match = match_invoice(invoice, store.all_pos(), store.all_grns())
-        rechecked = apply_tolerances(match, base.model_copy(update={"unit_price_pct": pct}))
         price_rows = [
             {
                 "line_pair": d.line_pair,

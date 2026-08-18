@@ -76,7 +76,7 @@ def main() -> None:
         if invoice is None:
             print("  not in the ledger, skipping")
             continue
-        decision = decide_invoice(invoice, store, registry)
+        decision = decide_invoice(invoice, store, registry, contracts_dir=DATA / "contracts")
         show(decision)
 
 
