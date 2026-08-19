@@ -49,15 +49,58 @@ def test_unknown_provider_raises():
         call_model(messages=[], tools=[], system="s", provider="nope")
 
 
-def test_bedrock_is_explicit_placeholder():
-    """Bedrock must fail loudly with a pointer, not pretend to work.
-
-    Why: a silent stub returning fake text would look like a working provider
-    in a quick manual test, then explode in the demo. NotImplementedError with
-    instructions is the honest failure mode.
-    """
-    with pytest.raises(NotImplementedError, match="AnthropicBedrockMantle"):
+def test_bedrock_needs_a_region(monkeypatch):
+    """Bedrock is a real provider now; with no region configured it must fail
+    loudly with a clear pointer, not with an opaque SDK/credential error."""
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    with pytest.raises(ValueError, match="region"):
         call_model(messages=[], tools=[], system="s", provider="bedrock")
+
+
+def test_bedrock_builds_the_client_and_reuses_the_anthropic_surface(monkeypatch):
+    """Route bedrock -> AnthropicBedrock(aws_region=...) -> the shared
+    messages.create path, all without a network call. Pins the model id, the
+    region wiring, and that the normalized response carries usage."""
+    monkeypatch.setenv("AWS_REGION", "ap-southeast-1")
+    monkeypatch.delenv("BEDROCK_MODEL", raising=False)
+
+    captured = {}
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+
+            class _Usage:
+                input_tokens, output_tokens = 412, 87
+
+            class _Text:
+                type, text = "text", "ok"
+
+            class _Resp:
+                content = [_Text()]
+                stop_reason = "end_turn"
+                usage = _Usage()
+
+            return _Resp()
+
+    class FakeBedrock:
+        def __init__(self, **kwargs):
+            captured["ctor"] = kwargs
+            self.messages = FakeMessages()
+
+    import anthropic
+
+    monkeypatch.setattr(anthropic, "AnthropicBedrock", FakeBedrock, raising=False)
+
+    out = call_model(
+        messages=[{"role": "user", "content": "hi"}], tools=[], system="s", provider="bedrock"
+    )
+
+    assert captured["ctor"] == {"aws_region": "ap-southeast-1"}  # region only; creds via AWS chain
+    assert captured["model"] == "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert out["text"] == "ok"
+    assert out["usage"] == {"input_tokens": 412, "output_tokens": 87}
 
 
 def test_missing_key_names_the_right_env_var(monkeypatch):

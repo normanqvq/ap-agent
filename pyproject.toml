@@ -9,7 +9,8 @@ description = "AP Agent project"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",
-    "anthropic",
+    "anthropic[aws]",
+    "boto3",  # AnthropicBedrock signs requests via botocore; anthropic[aws] does not pull it
     "openai",
     "python-dotenv",
     "scipy",

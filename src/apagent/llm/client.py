@@ -8,7 +8,7 @@ Providers (set LLM_PROVIDER):
     deepseek  - DeepSeek's native OpenAI-compatible endpoint
     groq      - Groq's OpenAI-compatible endpoint
     openai    - OpenAI itself, or any other OpenAI-compatible endpoint
-    bedrock   - AWS Bedrock. Placeholder until hackathon credits arrive.
+    bedrock   - Claude on AWS Bedrock via the anthropic SDK (AnthropicBedrock)
 
 deepseek and groq are presets over the same OpenAI-compatible code path: they
 differ only in which env var holds the key, the base URL, and the default model.
@@ -183,6 +183,60 @@ def _to_openai_messages(messages: list[dict], system: str) -> list[dict]:
     return out
 
 
+def _anthropic_style_request(client, model: str, messages, tools, system) -> dict:
+    """The shared messages.create call for every Anthropic-surface client.
+
+    The first-party Anthropic client and the Bedrock client (AnthropicBedrock)
+    expose the identical messages.create API, so the tool prep, prompt-cache
+    markers, request, and response parsing live here once. Only the client
+    construction and the model id differ between providers.
+    """
+    import anthropic
+
+    # Mark only the LAST tool as a cache breakpoint. A breakpoint caches
+    # everything before it in the request, so one marker at the end covers the
+    # whole tool list. One marker per tool would hit Anthropic's limit of 4
+    # breakpoints as soon as the registry holds more than 3 tools. Bedrock
+    # honors cache_control for Claude models too, so this carries over.
+    anthropic_tools = [
+        {"name": t["name"], "description": t["description"], "input_schema": t["input_schema"]}
+        for t in tools
+    ]
+    if anthropic_tools:
+        anthropic_tools[-1]["cache_control"] = {"type": "ephemeral"}
+
+    system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+
+    response = client.messages.create(
+        model=model,
+        max_tokens=4096,
+        system=system_blocks,
+        messages=_to_anthropic_messages(messages),
+        tools=anthropic_tools if anthropic_tools else anthropic.NOT_GIVEN,
+    )
+
+    text_parts = []
+    tool_calls = []
+    for block in response.content:
+        if block.type == "text":
+            text_parts.append(block.text)
+        elif block.type == "tool_use":
+            tool_calls.append({"id": block.id, "name": block.name, "args": block.input})
+
+    usage = getattr(response, "usage", None)
+    return {
+        "text": "\n".join(text_parts) if text_parts else None,
+        "tool_calls": tool_calls,
+        "stop_reason": response.stop_reason,
+        # Token usage per call — the one cost figure available without leaving
+        # the process (see slides: log it to measure cost per invoice instead
+        # of discovering it at month end). Callers may ignore it.
+        "usage": {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+        if usage
+        else None,
+    }
+
+
 def _call_anthropic(messages: list[dict], tools: list[dict], system: str) -> dict:
     """Call Anthropic API with prompt caching enabled.
 
@@ -204,40 +258,8 @@ def _call_anthropic(messages: list[dict], tools: list[dict], system: str) -> dic
     else:
         client = anthropic.Anthropic(api_key=api_key)
 
-    # Mark only the LAST tool as a cache breakpoint. A breakpoint caches
-    # everything before it in the request, so one marker at the end covers the
-    # whole tool list. One marker per tool would hit Anthropic's limit of 4
-    # breakpoints as soon as the registry holds more than 3 tools.
-    anthropic_tools = [
-        {"name": t["name"], "description": t["description"], "input_schema": t["input_schema"]}
-        for t in tools
-    ]
-    if anthropic_tools:
-        anthropic_tools[-1]["cache_control"] = {"type": "ephemeral"}
-
-    system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-
-    response = client.messages.create(
-        model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
-        max_tokens=4096,
-        system=system_blocks,
-        messages=_to_anthropic_messages(messages),
-        tools=anthropic_tools if anthropic_tools else anthropic.NOT_GIVEN,
-    )
-
-    text_parts = []
-    tool_calls = []
-    for block in response.content:
-        if block.type == "text":
-            text_parts.append(block.text)
-        elif block.type == "tool_use":
-            tool_calls.append({"id": block.id, "name": block.name, "args": block.input})
-
-    return {
-        "text": "\n".join(text_parts) if text_parts else None,
-        "tool_calls": tool_calls,
-        "stop_reason": response.stop_reason,
-    }
+    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    return _anthropic_style_request(client, model, messages, tools, system)
 
 
 def _parse_tool_args(raw: str) -> dict:
@@ -316,35 +338,44 @@ def _call_openai_compat(
 
 
 def _call_bedrock(messages: list[dict], tools: list[dict], system: str) -> dict:
-    """AWS Bedrock. Not implemented yet — placeholder until credits arrive.
+    """Call Claude on AWS Bedrock via the anthropic SDK's Bedrock client.
 
-    The hackathon runs on AWS Bedrock and credits are released after the
-    training sessions. We keep the branch here so LLM_PROVIDER=bedrock is
-    already a valid value and the switch later is an implementation, not an
-    interface change.
+    We use AnthropicBedrock, NOT boto3. It exposes the identical
+    messages.create surface as the first-party client, so the whole message
+    conversion and tool protocol (_anthropic_style_request) is reused
+    verbatim — only the client construction and the model id change. Going
+    through boto3's Converse API instead would mean hand-writing a third
+    tool-calling format (toolUse/toolResult blocks) for no gain.
 
-    Implementation shape when we get there: use the anthropic SDK's Bedrock
-    client, NOT boto3. AnthropicBedrockMantle exposes the same
-    messages.create surface as the first-party client, so _call_anthropic
-    below is reusable almost verbatim -- only the client construction and the
-    model id change:
+    NOT AnthropicBedrockMantle: that variant carries skip_auth and targets an
+    internal gateway, not real AWS Bedrock. AnthropicBedrock signs requests
+    with AWS SigV4 from the standard credential chain (env vars
+    AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, a shared profile, or an
+    instance role) — so no key is ever passed as an argument or read by this
+    code. Requires: pip install "anthropic[aws]".
 
-        from anthropic import AnthropicBedrockMantle          # pip install "anthropic[aws]"
-        client = AnthropicBedrockMantle(aws_region=os.getenv("AWS_REGION"))
-        # model ids carry a provider prefix on Bedrock: "anthropic.claude-..."
+    Model id: Bedrock ids differ from first-party ones and carry a routing
+    prefix, e.g. global.anthropic.claude-haiku-4-5-20251001-v1:0 (the
+    workshop default in ap-southeast-1). Override with BEDROCK_MODEL.
 
-    Credentials come from the standard AWS chain (env vars, shared profile,
-    instance role) -- no api_key argument. Going through boto3's Converse API
-    instead would mean hand-writing a third tool-calling format
-    (toolUse/toolResult blocks) for no gain.
-
-    Caveat to check before relying on it: Bedrock does not serve every
-    first-party feature. Prompt caching and tool use are supported; the
-    server-side web search / code execution tools and the Files and Batches
-    endpoints are not.
+    Caveat: Bedrock does not serve every first-party feature. Prompt caching
+    and tool use are supported (kept on); the server-side web-search / code-
+    execution tools and the Files/Batches endpoints are not.
     """
-    raise NotImplementedError(
-        "Bedrock provider is a placeholder. Implement with AnthropicBedrockMantle "
-        "(pip install 'anthropic[aws]') once hackathon AWS credits are available. "
-        "Until then set LLM_PROVIDER to one of: anthropic, deepseek, groq, openai."
-    )
+    try:
+        from anthropic import AnthropicBedrock
+    except ImportError as exc:
+        raise ValueError(
+            "Bedrock support needs the AWS extra: pip install 'anthropic[aws]'."
+        ) from exc
+
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    if not region:
+        raise ValueError(
+            "Bedrock needs a region. Set AWS_REGION (or AWS_DEFAULT_REGION), e.g. ap-southeast-1."
+        )
+
+    # Credentials come from the standard AWS chain; we pass only the region.
+    client = AnthropicBedrock(aws_region=region)
+    model = os.getenv("BEDROCK_MODEL", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
+    return _anthropic_style_request(client, model, messages, tools, system)
