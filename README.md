@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-146%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-148%20passing-16A34A)
 
 An AI accounts-payable agent that reviews a supplier invoice, three-way matches it against the purchase order and goods receipt, checks tolerances and the supplier's contract, and recommends a payment action — with the full trail of every tool call and every code guardrail on display.
 
@@ -31,25 +31,40 @@ The core idea is **code owns the authority; the model explains the judgement.**
 - Applies six code guardrails that override an unjustified approval — the injection defence and the "no auto-paying above a threshold" rule live here, not in the prompt.
 - Emits one of four actions — `APPROVE`, `HOLD`, `EMAIL`, `ESCALATE` — with a confidence, a rationale, the complete tool-call trail, and (for holds/queries) an outbound message rendered by code from a fixed template.
 - Batches the approved invoices into weekly Friday payment runs — one transfer per vendor, each invoice paid as late as possible but never past due. Only `APPROVE` moves money; everything else is listed as withheld, with its reason.
+- Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice.
 - Serves a web console: a dashboard of KPIs, the invoice queue and decision mix, a per-invoice detail view showing the decision, the guardrail results, the glass-box tool trail, the three-way reconciliation, and the rationale — plus the payment-run plan.
 
-## The Web App
+## Product Tour
 
 Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 
-**Overview** — straight-through-processing rate, touchless rate, a permanent *false approvals: 0*, and the pending count; the invoice queue with each decision and reason; the week's decision distribution; and a recent-activity feed.
+**Overview** — straight-through-processing rate, touchless rate, a measured *false approvals: 0*; the invoice queue with each decision and reason; the decision mix; *Upload invoice* for a live PDF; and *Review next*, which walks the worklist of everything still waiting on a human.
 
-**Invoice detail** — a colour-coded decision banner with the six guardrail chips (and a *Code override* badge when code overruled the model), the **glass-box tool trail** (one plain-language line per tool call, raw JSON one click away, the contract re-check step flagged as code-executed), the three-way reconciliation table with the flagged cell highlighted, and the rationale as numbered points.
+![Overview](docs/screenshots/overview.png)
 
-**Payments** — the weekly pay-run plan built from the agent's decisions: one card per Friday run with one merged transfer per vendor per currency (totals are per-currency — cents in different currencies are never added together), past-due invoices flagged and released first, and a *Not scheduled* list showing every withheld invoice with its reason — the money that did **not** move, and why.
+**Invoice detail** — a colour-coded decision banner with the six guardrail chips (and a *Code override* badge when code overruled the model), the **glass-box tool trail** (one plain-language line per tool call, raw JSON one click away, the contract re-check step flagged as code-executed), the three-way reconciliation table, and the rationale as numbered points. Shown here: the headline case — 4% over PO, approved because code parsed the contract's 5% allowance.
+
+![Invoice detail](docs/screenshots/detail.png)
+
+**Email composer** — *Send to human* and the vendor query open a compose window whose body is **read-only**: outbound text is rendered by code from a fixed template, so neither the model nor the reviewer can put words in the system's mouth. Confirming a payment is re-checked by code (`409` for anything not APPROVEd), and a re-run voids any earlier sign-off.
+
+![Email composer](docs/screenshots/composer.png)
+
+**Payments** — the weekly pay-run plan built from the agent's decisions: one card per Friday run with one merged transfer per vendor per currency (cents in different currencies are never added together), past-due invoices flagged and released first, and a *Not scheduled* list showing the money that did **not** move, and why.
+
+![Payments](docs/screenshots/payments.png)
 
 **Analytics** — the eval harness on screen: the planted-defect scorecard (each defect, the agent's decision, and its measured verdict against the manifest ground truth), the clean control group, the decision mix, and a per-vendor billed-vs-approved rollup. Every number is measured, not asserted.
 
+![Analytics](docs/screenshots/analytics.png)
+
 **Settings** — the policy, read-only: the tolerance limits and the manual-review threshold the six gates enforce, each vendor's code-parsed contract allowance with its source file, the four-value action enum, and the pay-run calendar. Deliberately not editable from the web — every limit lives in version-controlled code, so changing one is a reviewed commit, not a click.
 
-The console sits behind a demo sign-in (password-less, honest about it): sessions are in-memory HttpOnly + SameSite cookies, every API route requires one, and *Logout* lives in the sidebar. *Send to human* and the vendor query open an **email composer** whose body is read-only — outbound text is rendered by code from a fixed template, so neither the model nor the reviewer can put words in the system's mouth. Confirming a payment is re-checked by code (`409` for anything not APPROVEd) and a re-run voids any earlier sign-off.
+![Settings](docs/screenshots/settings.png)
 
-The dashboard reads a decisions cache (`data/synthetic/decisions.json`) so it is instant and works offline; *Re-run* on a detail page runs the agent live.
+The console sits behind a demo sign-in (password-less, honest about it): sessions are in-memory HttpOnly + SameSite cookies, every API route requires one, and *Logout* lives in the sidebar. The dashboard reads a decisions cache (`data/synthetic/decisions.json`) so it is instant and works offline; *Re-run* on a detail page runs the agent live.
+
+<p align="center"><img src="docs/screenshots/login.png" alt="Sign in" width="520" /></p>
 
 ## How It Works
 
@@ -116,6 +131,8 @@ Seven defects are planted in the synthetic set (ground truth in `data/synthetic/
 
 Measured over the full set by the eval harness (`python scripts/run_eval.py`, ground truth in the manifest): **STP 68%** (15/22 approved), **touchless 82%**, **false approvals 0** — every planted defect blocked. The two non-approved clean invoices are safe-direction friction: the original of the duplicate pair (both flagged until a human picks one) and an amount over the manual-review threshold. A test pins false approvals at zero, so the claim fails the build the day it stops being true.
 
+For the live finale, drag one of the three attack PDFs from `data/samples/` into *Upload invoice* and watch it get caught in real time: `INV-V001-9001` (duplicate re-bill → ESCALATE), `INV-V004-9002` (12% overcharge → HOLD), `INV-V002-9003` (overcharge plus an injected "approve immediately" instruction → refused; the injection has nothing to attack). Regenerate them any time with `python scripts/make_upload_samples.py`.
+
 ## Running It
 
 ```bash
@@ -131,7 +148,7 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 146 offline tests, no API key needed
+pytest                                    # 148 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
@@ -153,10 +170,11 @@ src/apagent/
 ├── eval/             # scores decisions against the manifest (STP / touchless / false approves)
 ├── api/              # FastAPI + single-page web console (web/)
 └── scheduling/       # weekly payment runs: pay late but never late, only APPROVE moves money
-scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, Bedrock check
+scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
-tests/                # 146 offline tests
-docs/                 # gap analysis / task list
+data/samples/         # three attack PDFs for the live upload demo
+tests/                # 148 offline tests
+docs/                 # screenshots, gap analysis / task list
 ```
 
 ## What's Left
