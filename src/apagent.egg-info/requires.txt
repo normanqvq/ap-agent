@@ -1,5 +1,6 @@
 pydantic>=2
-anthropic
+anthropic[aws]
+boto3
 openai
 python-dotenv
 scipy
@@ -7,6 +8,7 @@ pulp
 pdfplumber
 reportlab
 fastapi
+python-multipart
 uvicorn
 sqlalchemy
 

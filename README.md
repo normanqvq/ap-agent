@@ -11,7 +11,11 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
+![RAG](https://img.shields.io/badge/RAG-BM25-6366F1)
+![Matching](https://img.shields.io/badge/matching-Hungarian-0EA5E9)
 ![Tests](https://img.shields.io/badge/tests-148%20passing-16A34A)
+![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-84CC16)
 
 </div>
 
