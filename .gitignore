@@ -5,3 +5,4 @@ __pycache__/
 .claude/
 data/*.db
 data/generated/
+.DS_Store
