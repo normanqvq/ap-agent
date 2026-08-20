@@ -185,10 +185,15 @@ async function dashboard() {
   const bar = (label, n, color) =>
     `<div class="bar"><span class="bl">${label}</span><span class="bk" style="width:${Math.max(8, n / maxN * 190)}px;background:${color}"></span><span class="bc num">${n}</span></div>`;
   const decided = list.filter((x) => x.action);
+  // The reviewer's worklist: undecided invoices first, then decided ones
+  // that still wait on a human (HOLD / ESCALATE / EMAIL, not yet routed).
+  const needsHuman = list.filter(
+    (x) => !x.action || (x.action !== "APPROVE" && !x.human_review)
+  );
   view.innerHTML = `
     <div class="head">
-      <div><h1>Overview</h1><div class="sub">${m.total} invoices this week · ${m.pending} awaiting confirmation</div></div>
-      <button class="btn primary" id="run"><span class="play"></span>Run review (${m.pending || m.total})</button>
+      <div><h1>Overview</h1><div class="sub">${m.total} invoices this week · ${needsHuman.length} awaiting a human</div></div>
+      <button class="btn primary" id="run"><span class="play"></span>Review next (${needsHuman.length})</button>
     </div>
     <div class="kpis">
       <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.total} invoices</div></div>
@@ -231,7 +236,10 @@ async function dashboard() {
     </div>`;
   }).join("");
   q.querySelectorAll(".row").forEach((r) => r.addEventListener("click", () => detail(r.dataset.id)));
-  document.getElementById("run").addEventListener("click", () => detail((list.find((x) => !x.action) || list[0]).invoice_id));
+  document.getElementById("run").addEventListener("click", () => {
+    if (!needsHuman.length) { toast("Queue clear — nothing awaiting review"); return; }
+    detail(needsHuman[0].invoice_id);
+  });
 }
 
 // --- payments --------------------------------------------------------------
