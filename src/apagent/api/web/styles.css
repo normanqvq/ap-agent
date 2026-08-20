@@ -270,3 +270,5 @@ body {
   background: var(--sidebar); color: #fff; padding: 11px 20px; border-radius: 10px;
   font-size: 13px; font-weight: 500; animation: toast-in .18s ease-out; }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+.login-err { color: var(--red); font-size: 12px; min-height: 15px; }
+.login-layer[hidden] { display: none; }

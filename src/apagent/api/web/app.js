@@ -81,21 +81,34 @@ function showLogin() {
       <p>Sign in to the review console</p>
       <input id="login-name" placeholder="Your name" maxlength="40" autocomplete="name" />
       <button class="btn primary" id="login-btn">Sign in</button>
+      <div class="login-err" id="login-err"></div>
       <small>Demo sign-in — no password. Sessions are in-memory and cleared on restart.</small>
     </div>`;
-  loginLayer.hidden = false;
   const input = loginLayer.querySelector("#login-name");
+  const err = loginLayer.querySelector("#login-err");
   const go = async () => {
     const name = input.value.trim();
     if (!name) { input.focus(); return; }
-    const r = await fetch("/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (!r.ok) return;
+    let r;
+    try {
+      r = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+    } catch {
+      err.textContent = "Server unreachable — is uvicorn running?";
+      return;
+    }
+    if (!r.ok) {
+      err.textContent = `Sign-in failed (${r.status})`;
+      return;
+    }
     const me = await r.json();
-    loginLayer.hidden = true;
+    // remove(), not hidden: the layer's own display rule would override
+    // the hidden attribute and leave it covering the app.
+    loginLayer.remove();
+    loginLayer = null;
     renderUser(me.name);
     setActiveNav();
     dashboard();
