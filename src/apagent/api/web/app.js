@@ -168,12 +168,55 @@ function composer({ to, subject, body, sendLabel, onSend }) {
 }
 
 // --- navigation ------------------------------------------------------------
-const VIEWS = { dashboard, payments, analytics, settings };
+const VIEWS = { dashboard, invoices, payments, analytics, settings };
 document.querySelectorAll(".nav a[data-view]").forEach((a) =>
   a.addEventListener("click", () => { setActiveNav(a); (VIEWS[a.dataset.view] || dashboard)(); }));
 function setActiveNav(el) {
   document.querySelectorAll(".nav a").forEach((a) => a.classList.remove("active"));
   (el || document.querySelector(".nav a")).classList.add("active");
+}
+
+// --- invoice rows (shared by Overview queue and the Invoices page) ----------
+const invoiceRow = (x) => {
+  const a = ACT[x.action] || ACT.null;
+  return `<div class="row" data-id="${esc(x.invoice_id)}">
+    <div class="rl"><b>${esc(x.invoice_id)}</b><small>${esc(x.vendor_name)}</small></div>
+    <div class="rr"><span class="amt num">${money(x.total_cents, x.currency)}</span>
+      ${x.human_review === "confirmed" ? `<span class="badge-human ok">Paid ✓</span>` : ""}
+      ${x.human_review === "sent_to_human" ? `<span class="badge-human mid">With reviewer</span>` : ""}
+      <span class="pill ${a.cls}">${x.action || "PENDING"}</span>
+      <span class="reason t-${a.cls}">${esc(x.reason || "")}</span></div>
+  </div>`;
+};
+const needsHumanFn = (x) => !x.action || (x.action !== "APPROVE" && !x.human_review);
+
+// --- invoices (full list with filters) --------------------------------------
+async function invoices() {
+  view.innerHTML = `<div class="placeholder">Loading…</div>`;
+  const list = await api("/api/invoices");
+  const FILTERS = [
+    ["all", "All", () => true],
+    ["needs", "Needs human", needsHumanFn],
+    ["approved", "Approved", (x) => x.action === "APPROVE"],
+    ["paid", "Paid", (x) => x.human_review === "confirmed"],
+  ];
+  let active = "all";
+  const render = () => {
+    const filter = FILTERS.find(([k]) => k === active)[2];
+    const rows = list.filter(filter);
+    view.innerHTML = `
+      <div class="head">
+        <div><h1>Invoices</h1><div class="sub">${list.length} invoices · click a row for the full case</div></div>
+      </div>
+      <div class="chips">${FILTERS.map(([k, label, fn]) =>
+        `<button class="chip ${k === active ? "on" : ""}" data-f="${k}">${label} (${list.filter(fn).length})</button>`).join("")}</div>
+      <div class="card">${rows.map(invoiceRow).join("") || `<div class="placeholder">Nothing matches this filter.</div>`}</div>`;
+    view.querySelectorAll(".chip").forEach((b) =>
+      b.addEventListener("click", () => { active = b.dataset.f; render(); }));
+    view.querySelectorAll(".row").forEach((r) =>
+      r.addEventListener("click", () => detail(r.dataset.id)));
+  };
+  render();
 }
 
 // --- dashboard -------------------------------------------------------------
@@ -207,7 +250,7 @@ async function dashboard() {
     </div>
     <div class="grid">
       <div class="card">
-        <div class="card-h"><h3>Invoice queue</h3><a>View all →</a></div>
+        <div class="card-h"><h3>Invoice queue</h3><a id="viewall">View all →</a></div>
         <div id="queue"></div>
       </div>
       <div class="card dist">
@@ -228,18 +271,12 @@ async function dashboard() {
       }).join("")}
     </div>`;
   const q = document.getElementById("queue");
-  q.innerHTML = list.map((x) => {
-    const a = ACT[x.action] || ACT.null;
-    return `<div class="row" data-id="${esc(x.invoice_id)}">
-      <div class="rl"><b>${esc(x.invoice_id)}</b><small>${esc(x.vendor_name)}</small></div>
-      <div class="rr"><span class="amt num">${money(x.total_cents, x.currency)}</span>
-        ${x.human_review === "confirmed" ? `<span class="badge-human ok">Paid ✓</span>` : ""}
-        ${x.human_review === "sent_to_human" ? `<span class="badge-human mid">With reviewer</span>` : ""}
-        <span class="pill ${a.cls}">${x.action || "PENDING"}</span>
-        <span class="reason t-${a.cls}">${esc(x.reason || "")}</span></div>
-    </div>`;
-  }).join("");
+  q.innerHTML = list.slice(0, 8).map(invoiceRow).join("");
   q.querySelectorAll(".row").forEach((r) => r.addEventListener("click", () => detail(r.dataset.id)));
+  document.getElementById("viewall").addEventListener("click", () => {
+    setActiveNav(document.querySelector('.nav a[data-view="invoices"]'));
+    invoices();
+  });
   document.getElementById("run").addEventListener("click", () => {
     if (!needsHuman.length) { toast("Queue clear — nothing awaiting review"); return; }
     detail(needsHuman[0].invoice_id);
@@ -388,7 +425,7 @@ async function analytics() {
         ${bar("HOLD", d.HOLD, "var(--amber)")}
         ${bar("ESCALATE", d.ESCALATE, "var(--red)")}
         ${bar("EMAIL", d.EMAIL, "var(--accent)")}
-        <div class="cap num">${m.decided} / ${m.total} decided</div>
+        <div class="cap num">${m.decided} / ${m.total} ground-truth invoices decided${a.unexpected.length ? ` · +${a.unexpected.length} uploaded this session (no ground truth, unscored)` : ""}</div>
       </div>
     </div>
     <div class="card">

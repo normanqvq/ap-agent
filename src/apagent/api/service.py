@@ -312,6 +312,7 @@ class Service:
         return {
             "metrics": report["metrics"],
             "distribution": distribution,
+            "unexpected": report["unexpected"],
             "defects": defects,
             "clean_total": len(clean),
             "clean_approved": sum(1 for c in clean if c["action"] == "APPROVE"),
