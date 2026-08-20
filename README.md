@@ -1,11 +1,19 @@
-# AP Agent — Invoice Reconciliation
+<div align="center">
+
+<img src="src/apagent/api/web/logo.svg" width="92" alt="AP Agent logo" />
+
+# AP Agent
+
+An AI accounts-payable agent that three-way matches a supplier invoice against the purchase order and goods receipt, checks tolerances and the supplier's contract, and recommends a payment action — with every tool call and every code guardrail on display.
+
+[Product Tour](#product-tour) · [How It Works](#how-it-works) · [The Demo Storyline](#the-demo-storyline)
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-148%20passing-16A34A)
 
-An AI accounts-payable agent that reviews a supplier invoice, three-way matches it against the purchase order and goods receipt, checks tolerances and the supplier's contract, and recommends a payment action — with the full trail of every tool call and every code guardrail on display.
+</div>
 
 > **Important:** This project is a hackathon demonstration for the SimplifyNext Agentic AI Hackathon 2026 (Digital track). It does not move real money, replace an ERP, or make a final payment decision. The model recommends; deterministic code enforces the limits; a human confirms.
 
