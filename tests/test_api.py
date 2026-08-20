@@ -161,6 +161,67 @@ def test_login_logout_cycle():
     assert client.get("/api/invoices").status_code == 401
 
 
+def _uploaded_doc(doc_id="INV-V001-9999"):
+    from apagent.schemas import Document, LineItem
+
+    return Document(
+        doc_id=doc_id,
+        doc_type="INVOICE",
+        vendor_id="V001",
+        vendor_name="Tan Hardware Supplies Pte Ltd",
+        issue_date="2026-08-01",
+        ref_doc_id="PO-2026-1001",
+        currency="SGD",
+        due_date="2026-08-31",
+        total_cents=5000,
+        lines=[
+            LineItem(
+                line_no=1,
+                sku="X-1",
+                description="widget",
+                qty=1,
+                uom="PCS",
+                unit_price_cents=5000,
+                line_total_cents=5000,
+            )
+        ],
+    )
+
+
+def test_upload_stays_out_of_the_committed_cache(monkeypatch, tmp_path):
+    """Uploads are session state: decided live, listed in the queue, but
+    never written into the committed decisions cache."""
+    import json
+
+    import apagent.api.service as service_module
+
+    svc = Service()
+    doc = _uploaded_doc()
+    monkeypatch.setattr(service_module, "extract_invoice", lambda p, v: doc)
+
+    class FakeDecision:
+        def model_dump(self):
+            return {"invoice_id": doc.doc_id, "action": "HOLD", "hold_reason": None}
+
+    monkeypatch.setattr(service_module, "decide_invoice", lambda *a, **k: FakeDecision())
+    monkeypatch.setattr(service_module, "CACHE", tmp_path / "decisions.json")
+
+    case = svc.upload_invoice("sample.pdf", b"%PDF-fake")
+    assert case["invoice_id"] == "INV-V001-9999"
+    assert case["decision"]["action"] == "HOLD"
+    assert any(c["invoice_id"] == "INV-V001-9999" for c in svc.list_cases())
+    saved = json.loads((tmp_path / "decisions.json").read_text())
+    assert "INV-V001-9999" not in saved  # session state, not committed
+    with pytest.raises(ValueError):  # same invoice number again -> refused
+        svc.upload_invoice("sample.pdf", b"%PDF-fake")
+
+
+def test_upload_guards():
+    svc = Service()
+    with pytest.raises(ValueError):
+        svc.upload_invoice("big.pdf", b"x" * (5 * 1024 * 1024 + 1))
+
+
 def test_handoff_draft_is_code_templated():
     """The internal hand-off email comes from a fixed code template with
     the facts filled in — never model text."""

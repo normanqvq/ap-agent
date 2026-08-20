@@ -18,7 +18,7 @@ and means nothing secret is ever written to disk.
 import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -108,6 +108,16 @@ def get_invoice(invoice_id: str) -> dict:
         return get_service().get_case(invoice_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
+
+
+@app.post("/api/invoices/upload")
+def upload_invoice(file: UploadFile) -> dict:
+    """Extract an uploaded invoice PDF live and run the agent on it."""
+    content = file.file.read()
+    try:
+        return get_service().upload_invoice(file.filename or "invoice.pdf", content)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
 
 
 @app.post("/api/invoices/{invoice_id}/run")

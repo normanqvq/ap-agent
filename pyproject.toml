@@ -18,6 +18,7 @@ dependencies = [
     "pdfplumber",
     "reportlab",
     "fastapi",
+    "python-multipart",  # FastAPI needs it for multipart file uploads
     "uvicorn",
     "sqlalchemy",
 ]

@@ -193,7 +193,11 @@ async function dashboard() {
   view.innerHTML = `
     <div class="head">
       <div><h1>Overview</h1><div class="sub">${m.total} invoices this week · ${needsHuman.length} awaiting a human</div></div>
-      <button class="btn primary" id="run"><span class="play"></span>Review next (${needsHuman.length})</button>
+      <div class="actions">
+        <button class="btn" id="upload">Upload invoice</button>
+        <input type="file" id="upfile" accept="application/pdf" hidden />
+        <button class="btn primary" id="run"><span class="play"></span>Review next (${needsHuman.length})</button>
+      </div>
     </div>
     <div class="kpis">
       <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.total} invoices</div></div>
@@ -239,6 +243,31 @@ async function dashboard() {
   document.getElementById("run").addEventListener("click", () => {
     if (!needsHuman.length) { toast("Queue clear — nothing awaiting review"); return; }
     detail(needsHuman[0].invoice_id);
+  });
+  const upBtn = document.getElementById("upload");
+  const upFile = document.getElementById("upfile");
+  upBtn.addEventListener("click", () => upFile.click());
+  upFile.addEventListener("change", async () => {
+    const f = upFile.files[0];
+    if (!f) return;
+    upBtn.disabled = true;
+    upBtn.textContent = "Extracting… (LLM reading the PDF)";
+    const fd = new FormData();
+    fd.append("file", f);
+    try {
+      const r = await fetch("/api/invoices/upload", { method: "POST", body: fd });
+      if (r.status === 401) { showLogin(); return; }
+      const j = await r.json();
+      if (!r.ok) { toast(j.detail || "Upload failed"); return; }
+      toast(`Extracted ${j.invoice_id} — decision: ${j.decision.action}`);
+      detail(j.invoice_id);
+    } catch {
+      toast("Upload failed — network error");
+    } finally {
+      upBtn.disabled = false;
+      upBtn.textContent = "Upload invoice";
+      upFile.value = "";
+    }
   });
 }
 

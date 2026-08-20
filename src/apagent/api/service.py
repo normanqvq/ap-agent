@@ -14,11 +14,14 @@ moment.
 
 import json
 import os
+import re
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
 from apagent.agent.ap_tools import build_registry, hard_duplicates, recheck_with_contract
 from apagent.eval import evaluate
+from apagent.extraction.invoice import ExtractionError, extract_invoice
 from apagent.matching.engine import match_invoice
 from apagent.pipeline import _blocking_rows, decide_invoice
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
@@ -66,11 +69,16 @@ class Service:
         # In memory only — demo session state, not part of the committed
         # decisions cache (a restart clears it, which is what a demo wants).
         self._human: dict[str, str] = {}
+        # Invoices uploaded through the web. Session state like _human:
+        # they live in the in-memory store, and _save_cache excludes their
+        # decisions so the committed demo cache never picks them up.
+        self._uploaded: set[str] = set()
 
     # --- decisions cache ---------------------------------------------------
 
     def _save_cache(self) -> None:
-        CACHE.write_text(json.dumps(self._cache, indent=2, ensure_ascii=False) + "\n")
+        keep = {k: v for k, v in self._cache.items() if k not in self._uploaded}
+        CACHE.write_text(json.dumps(keep, indent=2, ensure_ascii=False) + "\n")
 
     def cached_decision(self, invoice_id: str) -> dict | None:
         return self._cache.get(invoice_id)
@@ -204,6 +212,38 @@ class Service:
             as_of,
             vendor_names=self.store.vendors(),
         )
+
+    def upload_invoice(self, filename: str, content: bytes) -> dict:
+        """Extract an uploaded invoice PDF live, add it to the store, run
+        the agent on it, and return the full case bundle.
+
+        Uploads are session state: they never touch the committed dataset
+        or the decisions cache on disk. The eval harness will list them as
+        "unexpected" (no manifest ground truth) rather than scoring them —
+        the metrics stay honest.
+        """
+        if len(content) > 5 * 1024 * 1024:
+            raise ValueError("PDF too large (5 MB limit)")
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "-", Path(filename).stem) or "upload"
+        tmp_dir = Path(tempfile.mkdtemp(prefix="apagent-upload-"))
+        pdf_path = tmp_dir / f"{safe_name}.pdf"
+        pdf_path.write_bytes(content)
+        try:
+            doc = extract_invoice(pdf_path, self.store.vendors())
+        except ExtractionError as exc:
+            raise ValueError(str(exc)) from exc
+        finally:
+            pdf_path.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        # The printed invoice number goes into URLs and dict keys — keep it
+        # to a safe shape, and never overwrite an existing document.
+        doc_id = re.sub(r"[^A-Za-z0-9._-]", "-", doc.doc_id)[:40] or safe_name
+        doc = doc.model_copy(update={"doc_id": doc_id})
+        if self.store.get_invoice(doc.doc_id) is not None:
+            raise ValueError(f"invoice {doc.doc_id} already exists in the dataset")
+        self.store.add_invoice(doc)
+        self._uploaded.add(doc.doc_id)
+        return self.run_case(doc.doc_id)
 
     def confirm_payment(self, invoice_id: str) -> dict:
         """A human confirms an APPROVEd invoice for payment.
