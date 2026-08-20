@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-137%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-143%20passing-16A34A)
 
 An AI accounts-payable agent that reviews a supplier invoice, three-way matches it against the purchase order and goods receipt, checks tolerances and the supplier's contract, and recommends a payment action — with the full trail of every tool call and every code guardrail on display.
 
@@ -129,7 +129,7 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 137 offline tests, no API key needed
+pytest                                    # 143 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
@@ -153,7 +153,7 @@ src/apagent/
 └── scheduling/       # weekly payment runs: pay late but never late, only APPROVE moves money
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
-tests/                # 137 offline tests
+tests/                # 143 offline tests
 docs/                 # gap analysis / task list
 ```
 

@@ -15,6 +15,7 @@ moment.
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from apagent.agent.ap_tools import build_registry, hard_duplicates, recheck_with_contract
 from apagent.eval import evaluate
@@ -84,8 +85,22 @@ class Service:
             invoice, self.store, self.registry, self.config, contracts_dir=CONTRACTS
         )
         self._cache[invoice_id] = decision.model_dump()
+        # A re-run is a NEW decision: any human sign-off belonged to the old
+        # one and is void — otherwise a "confirmed" badge could outlive the
+        # APPROVE it certified.
+        self._human.pop(invoice_id, None)
         self._save_cache()
         return self.get_case(invoice_id)
+
+    def _human_state(self, invoice_id: str, action: str | None) -> str | None:
+        """The human-review state, guarded: a "confirmed" is only ever shown
+        while the current decision is still APPROVE. Belt-and-braces on top
+        of run_case clearing the state — a sign-off must never be displayed
+        against a decision it did not certify."""
+        state = self._human.get(invoice_id)
+        if state == "confirmed" and action != Action.APPROVE:
+            return None
+        return state
 
     # --- reads -------------------------------------------------------------
 
@@ -108,6 +123,7 @@ class Service:
                     "action": dec["action"] if dec else None,
                     "hold_reason": dec.get("hold_reason") if dec else None,
                     "reason": _reason_label(dec) if dec else None,
+                    "human_review": self._human_state(inv.doc_id, dec["action"] if dec else None),
                 }
             )
         return out
@@ -146,7 +162,10 @@ class Service:
             "contract_allowance_pct": allowance[0] if allowance else None,
             "guardrails": _guardrails(checked, rechecked, review_gate, duplicates, allowance),
             "decision": self._cache.get(invoice.doc_id),
-            "human_review": self._human.get(invoice.doc_id),
+            "human_review": self._human_state(
+                invoice.doc_id,
+                (self._cache.get(invoice.doc_id) or {}).get("action"),
+            ),
         }
 
     def metrics(self) -> dict:
@@ -214,12 +233,7 @@ class Service:
         """
         manifest = json.loads(MANIFEST.read_text())
         report = evaluate(manifest, self._cache)
-        notes = {e["invoice_id"]: e["notes"] for e in manifest}
-        defects = [
-            {**c, "notes": notes.get(c["invoice_id"], "")}
-            for c in report["cases"]
-            if c["defect"] != "clean"
-        ]
+        defects = [c for c in report["cases"] if c["defect"] != "clean"]
         clean = [c for c in report["cases"] if c["defect"] == "clean"]
 
         vendors = []
@@ -247,13 +261,18 @@ class Service:
                 }
             )
 
+        # Distribution counted inline — calling self.metrics() here would
+        # run evaluate() a second time just to throw most of it away.
+        distribution = {a.value: 0 for a in Action}
+        for d in self._cache.values():
+            distribution[d["action"]] = distribution.get(d["action"], 0) + 1
         return {
             "metrics": report["metrics"],
-            "distribution": self.metrics()["distribution"],
+            "distribution": distribution,
             "defects": defects,
             "clean_total": len(clean),
             "clean_approved": sum(1 for c in clean if c["action"] == "APPROVE"),
-            "friction": report["friction"],
+            "clean_friction": sum(1 for c in clean if c["verdict"] == "friction"),
             "vendors": vendors,
         }
 
@@ -278,9 +297,19 @@ class Service:
                     "source": found[1].source if found else None,
                 }
             )
+        # Honest provider label: default must match llm/client.py's default,
+        # and when the anthropic path is pointed at another host (DeepSeek
+        # serves an anthropic-style API), say so instead of implying the
+        # calls go to Anthropic.
+        provider = os.getenv("LLM_PROVIDER", "anthropic")
+        base_url = os.getenv("ANTHROPIC_BASE_URL")
+        if provider == "anthropic" and base_url:
+            host = urlparse(base_url).netloc or base_url
+            provider = f"anthropic (via {host})"
+
         c = self.config
         return {
-            "provider": os.getenv("LLM_PROVIDER", "deepseek"),
+            "provider": provider,
             "tolerances": {
                 "unit_price_pct": c.unit_price_pct,
                 "total_abs_cents": c.total_abs_cents,

@@ -84,10 +84,61 @@ def test_send_to_human_works_for_any_state():
         svc.send_to_human("INV-NOPE-0000")
 
 
+def test_confirmation_is_void_when_the_decision_changes():
+    """A sign-off certifies one decision. If the cached decision stops
+    being APPROVE, the 'confirmed' state must not be shown against it."""
+    svc = Service()
+    svc.confirm_payment("INV-V001-3001")
+    svc._cache["INV-V001-3001"]["action"] = "HOLD"  # simulate a re-decide
+    assert svc.get_case("INV-V001-3001")["human_review"] is None
+    listed = {c["invoice_id"]: c for c in svc.list_cases()}
+    assert listed["INV-V001-3001"]["human_review"] is None
+
+
+def test_rerun_resets_human_state(monkeypatch):
+    """A re-run is a new decision: any prior sign-off or routing is void."""
+    import apagent.api.service as service_module
+
+    svc = Service()
+    svc.confirm_payment("INV-V001-3001")
+
+    class FakeDecision:
+        def model_dump(self):
+            return dict(svc._cache["INV-V001-3001"])
+
+    monkeypatch.setattr(service_module, "decide_invoice", lambda *a, **k: FakeDecision())
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)  # keep the repo file untouched
+    svc.run_case("INV-V001-3001")
+    assert svc._human == {}
+
+
+def test_analytics_and_metrics_agree():
+    svc = Service()
+    a = svc.analytics()
+    m = svc.metrics()
+    assert a["metrics"]["stp_pct"] == m["stp_pct"]
+    assert a["metrics"]["touchless_pct"] == m["touchless_pct"]
+    assert a["metrics"]["false_approve_count"] == m["false_approve"]
+    assert a["distribution"] == m["distribution"]
+
+
+def test_http_confirm_maps_409_and_404():
+    from fastapi.testclient import TestClient
+
+    from apagent.api.app import app
+
+    client = TestClient(app)
+    assert client.post("/api/invoices/INV-V005-3005/confirm").status_code == 409
+    assert client.post("/api/invoices/INV-NOPE-0000/confirm").status_code == 404
+    assert client.post("/api/invoices/INV-NOPE-0000/send-to-human").status_code == 404
+
+
 def test_config_reports_the_enforced_policy():
     k = Service().config_info()
     assert k["tolerances"]["unit_price_pct"] == 2.0
     assert k["tolerances"]["manual_review_threshold_cents"] == 500_000
     by_id = {v["vendor_id"]: v["allowance_pct"] for v in k["contract_allowances"]}
     assert by_id["V005"] == 5.0  # the headline case's negotiated allowance
+    assert by_id["V004"] == 3.0  # also parsed from its supply agreement
+    assert by_id["V001"] is None  # no clause -> default applies
     assert k["actions"] == ["APPROVE", "HOLD", "EMAIL", "ESCALATE"]

@@ -4,7 +4,9 @@ const api = (p, o) => fetch(p, o).then((r) => { if (!r.ok) throw new Error(r.sta
 // Escapes quotes too — attacker-authored strings (invoice ids, vendor
 // names) land inside double-quoted attributes like data-id="...".
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const money = (c, cur) => c == null ? "—" : `${cur || "SGD"} ${(c / 100).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// Currency comes from attacker-authored invoices — escape it like any
+// other supplier string before it reaches innerHTML.
+const money = (c, cur) => c == null ? "—" : `${esc(cur || "SGD")} ${(c / 100).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const ACT = {
   APPROVE:  { cls: "appr", verb: "Approve for payment", accent: "var(--green)" },
@@ -83,7 +85,7 @@ async function dashboard() {
       <button class="btn primary" id="run"><span class="play"></span>Run review (${m.pending || m.total})</button>
     </div>
     <div class="kpis">
-      <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.decided} decided</div></div>
+      <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.total} invoices</div></div>
       <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE+HOLD / decided</div></div>
       <div class="card kpi ${m.false_approve ? "warn" : "good"}"><div class="l">False approvals</div><div class="v num">${m.false_approve}</div><div class="s">${m.false_approve ? "Zero-tolerance · TARGET BROKEN" : "Zero-tolerance · on target"}</div></div>
       <div class="card kpi warn"><div class="l">Pending</div><div class="v num">${m.pending}</div><div class="s">Awaiting review</div></div>
@@ -116,6 +118,8 @@ async function dashboard() {
     return `<div class="row" data-id="${esc(x.invoice_id)}">
       <div class="rl"><b>${esc(x.invoice_id)}</b><small>${esc(x.vendor_name)}</small></div>
       <div class="rr"><span class="amt num">${money(x.total_cents, x.currency)}</span>
+        ${x.human_review === "confirmed" ? `<span class="badge-human ok">Paid ✓</span>` : ""}
+        ${x.human_review === "sent_to_human" ? `<span class="badge-human mid">With reviewer</span>` : ""}
         <span class="pill ${a.cls}">${x.action || "PENDING"}</span>
         <span class="reason t-${a.cls}">${esc(x.reason || "")}</span></div>
     </div>`;
@@ -233,7 +237,7 @@ async function analytics() {
         }).join("")}
         <div class="row"><div class="rl"><b>Clean invoices (control group)</b><small>${a.clean_total} invoices with nothing planted</small></div>
           <div class="rr"><span class="verdict-chip ok">✓ ${a.clean_approved} approved straight through</span>
-            ${a.clean_total - a.clean_approved ? `<span class="verdict-chip mid">${a.clean_total - a.clean_approved} friction</span>` : ""}</div></div>
+            ${a.clean_friction ? `<span class="verdict-chip mid">${a.clean_friction} friction</span>` : ""}</div></div>
       </div>
       <div class="card dist">
         <h3>Decision mix</h3>
@@ -275,9 +279,9 @@ async function settings() {
     <div class="card">
       <div class="card-h"><h3>Decision policy</h3><span class="runtotal">enforced by the six code gates, never by the prompt</span></div>
       ${setting("Unit-price tolerance", `±${t.unit_price_pct}%`, "vs the PO price; a vendor contract can widen it (below)")}
-      ${setting("Invoice-total tolerance", `${(t.total_abs_cents / 100).toFixed(2)} and ${t.total_pct}%`, "a total must sit inside both the absolute and the percentage bound")}
+      ${setting("Invoice-total tolerance", `${(t.total_abs_cents / 100).toFixed(2)} and ${t.total_pct}%`, "in the invoice's own currency; a total must sit inside both bounds")}
       ${setting("Quantity", t.qty_exact ? "exact match" : "tolerance", "quantity gaps are never noise — they mean goods did not arrive")}
-      ${setting("Manual-review threshold", money(t.manual_review_threshold_cents), "at or above this a human signs off, even on a perfectly clean match")}
+      ${setting("Manual-review threshold", (t.manual_review_threshold_cents / 100).toLocaleString("en", { minimumFractionDigits: 2 }), "in the invoice's own currency; at or above it a human signs off, even on a clean match")}
     </div>
     <div class="card">
       <div class="card-h"><h3>Contract allowances</h3><span class="runtotal">parsed from the contract text by code — the % never passes through the model</span></div>
@@ -399,8 +403,12 @@ function renderDetail(c) {
   document.getElementById("rerun").addEventListener("click", (e) => rerun(c.invoice_id, e.target));
   const post = async (path, btn) => {
     btn.disabled = true;
-    try { renderDetail(await api(`/api/invoices/${c.invoice_id}/${path}`, { method: "POST" })); }
-    catch { btn.disabled = false; btn.textContent = "Refused by code (retry)"; }
+    try {
+      renderDetail(await api(`/api/invoices/${c.invoice_id}/${path}`, { method: "POST" }));
+      // Show the state land, then return to the queue — one case done,
+      // on to the next.
+      setTimeout(() => { setActiveNav(); dashboard(); }, 800);
+    } catch { btn.disabled = false; btn.textContent = "Refused by code (retry)"; }
   };
   const confirmBtn = document.getElementById("confirm");
   if (confirmBtn) confirmBtn.addEventListener("click", (e) => post("confirm", e.target));
