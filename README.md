@@ -56,6 +56,19 @@ Tests never need a key; they all run offline.
 > Moved or re-cloned the repo? Recreate `.venv` — the scripts inside it pin
 > absolute paths and break silently after a move.
 
+## Run the web app
+
+```bash
+python scripts/precompute_decisions.py     # run the agent on all invoices, cache to data/synthetic/decisions.json
+uvicorn apagent.api.app:app --reload       # then open http://127.0.0.1:8000
+```
+
+Two views: a dashboard (KPIs, invoice queue, decision distribution) and an
+invoice-detail page (the decision, the code-guardrail chips, the glass-box
+tool trail, three-way reconciliation, reasoning). The dashboard reads the
+cached decisions (instant, offline); "重新运行" on a detail page re-runs the
+agent live. Regenerate the cache after any pipeline or dataset change.
+
 ## Everyday commands
 
 ```bash
@@ -72,12 +85,13 @@ src/apagent/
 ├── agent/            # loop + tool registry (see agent/README.md)
 ├── llm/              # provider abstraction (client.py)
 ├── retrieval/        # contract search (BM25) + agent tool
-├── extraction/       # ⬜ invoice PDF -> Document
-├── matching/         # ⬜ three-way match engine
-├── rules/            # ⬜ tolerance checks
+├── extraction/       # invoice PDF -> Document (LLM + code)
+├── matching/         # three-way match engine
+├── rules/            # tolerance checks
+├── pipeline.py       # match -> rules -> agent -> code guardrails
 ├── scheduling/       # ⬜ payment scheduling
-└── api/              # ⬜ FastAPI
-scripts/              # dataset generator
+└── api/              # FastAPI + single-page web UI (web/)
+scripts/              # dataset generator, demo runner, decision precompute
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifests
 docs/                 # gap analysis / task list
 eval/                 # ⬜ metrics harness
