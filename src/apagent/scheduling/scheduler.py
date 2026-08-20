@@ -63,35 +63,60 @@ def schedule_payments(
                     "invoice_id": inv.doc_id,
                     "vendor_id": inv.vendor_id,
                     "vendor_name": names.get(inv.vendor_id, inv.vendor_name),
+                    "currency": inv.currency,
                     "total_cents": inv.total_cents,
                     "action": action,
                     "hold_reason": decision.get("hold_reason") if decision else None,
                 }
             )
             continue
-        # No due date on the invoice -> nothing to wait for, pay next run.
-        due = date.fromisoformat(inv.due_date) if inv.due_date else first_run
-        run = max(last_run_on_or_before(due, run_weekday), first_run)
+        # due_date is attacker-authored text. Unparseable (or absent) means
+        # there is nothing to wait for: pay in the next run, never crash.
+        try:
+            due = date.fromisoformat(inv.due_date) if inv.due_date else None
+        except ValueError:
+            due = None
+        if due is None:
+            run, late = first_run, False
+        elif due < first_run:
+            run, late = first_run, True  # past due before we can even pay
+        else:
+            run, late = last_run_on_or_before(due, run_weekday), False
         scheduled.setdefault(run, []).append(
             {
                 "invoice_id": inv.doc_id,
                 "vendor_id": inv.vendor_id,
+                "currency": inv.currency,
                 "due_date": inv.due_date,
                 "total_cents": inv.total_cents,
-                "late": run > due,
+                "late": late,
             }
         )
+
+    def totals_by_currency(items: list[dict]) -> dict[str, int]:
+        # Cents in different currencies must never be added together, so
+        # every total in the plan is a per-currency mapping.
+        out: dict[str, int] = {}
+        for i in items:
+            out[i["currency"]] = out.get(i["currency"], 0) + i["total_cents"]
+        return dict(sorted(out.items()))
 
     runs = []
     for run_date in sorted(scheduled):
         items = scheduled[run_date]
         payments = []
-        for vendor_id in sorted({i["vendor_id"] for i in items}):
-            vendor_items = [i for i in items if i["vendor_id"] == vendor_id]
+        # One transfer per vendor per currency. Late invoices sort first
+        # within a payment — they are the ones to release first.
+        for vendor_id, currency in sorted({(i["vendor_id"], i["currency"]) for i in items}):
+            vendor_items = sorted(
+                (i for i in items if (i["vendor_id"], i["currency"]) == (vendor_id, currency)),
+                key=lambda i: (not i["late"], i["invoice_id"]),
+            )
             payments.append(
                 {
                     "vendor_id": vendor_id,
                     "vendor_name": names.get(vendor_id, vendor_id),
+                    "currency": currency,
                     "total_cents": sum(i["total_cents"] for i in vendor_items),
                     "invoices": vendor_items,
                 }
@@ -99,7 +124,7 @@ def schedule_payments(
         runs.append(
             {
                 "run_date": run_date.isoformat(),
-                "total_cents": sum(i["total_cents"] for i in items),
+                "totals": totals_by_currency(items),
                 "invoice_count": len(items),
                 "payments": payments,
             }
@@ -113,9 +138,9 @@ def schedule_payments(
         "not_scheduled": not_scheduled,
         "summary": {
             "scheduled_count": len(all_items),
-            "scheduled_total_cents": sum(i["total_cents"] for i in all_items),
+            "scheduled_totals": totals_by_currency(all_items),
             "late_count": sum(1 for i in all_items if i["late"]),
             "not_scheduled_count": len(not_scheduled),
-            "not_scheduled_total_cents": sum(i["total_cents"] for i in not_scheduled),
+            "not_scheduled_totals": totals_by_currency(not_scheduled),
         },
     }

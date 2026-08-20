@@ -17,7 +17,7 @@ from apagent.schemas import Document, LineItem
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
 
 
-def _invoice(doc_id, vendor_id="V001", total_cents=10000, due_date="2026-08-20"):
+def _invoice(doc_id, vendor_id="V001", total_cents=10000, due_date="2026-08-20", currency="SGD"):
     return Document(
         doc_id=doc_id,
         doc_type="INVOICE",
@@ -25,7 +25,7 @@ def _invoice(doc_id, vendor_id="V001", total_cents=10000, due_date="2026-08-20")
         vendor_name=vendor_id,
         issue_date="2026-07-21",
         ref_doc_id="PO-2026-9999",
-        currency="SGD",
+        currency=currency,
         due_date=due_date,
         total_cents=total_cents,
         lines=[
@@ -95,6 +95,62 @@ def test_one_payment_per_vendor_per_run():
     assert len(payments) == 1
     assert payments[0]["total_cents"] == 350
     assert len(payments[0]["invoices"]) == 2
+
+
+def test_currencies_are_never_added_together():
+    """Two vendors in different currencies in the same run: separate
+    transfers, and every total is per-currency — no cross-currency sum."""
+    invoices = [
+        _invoice("INV-1", vendor_id="V001", total_cents=100, currency="SGD"),
+        _invoice("INV-2", vendor_id="V004", total_cents=250, currency="MYR"),
+    ]
+    plan = schedule_payments(invoices, _approve("INV-1", "INV-2"), "2026-08-14")
+    run = plan["runs"][0]
+    assert run["totals"] == {"MYR": 250, "SGD": 100}
+    by_vendor = {p["vendor_id"]: p for p in run["payments"]}
+    assert by_vendor["V001"]["currency"] == "SGD"
+    assert by_vendor["V004"]["currency"] == "MYR"
+    assert plan["summary"]["scheduled_totals"] == {"MYR": 250, "SGD": 100}
+
+
+def test_malformed_or_missing_due_date_never_crashes():
+    """due_date is attacker-authored text: unparseable or absent means
+    pay in the next run, not a 500."""
+    invoices = [
+        _invoice("INV-1", due_date="upon receipt"),
+        _invoice("INV-2", due_date="0001-01-01"),
+        _invoice("INV-3", due_date=None),
+    ]
+    plan = schedule_payments(invoices, _approve("INV-1", "INV-2", "INV-3"), "2026-08-14")
+    assert [r["run_date"] for r in plan["runs"]] == ["2026-08-14"]
+    by_id = {i["invoice_id"]: i for p in plan["runs"][0]["payments"] for i in p["invoices"]}
+    assert by_id["INV-1"]["late"] is False  # unparseable -> treated as no due date
+    assert by_id["INV-2"]["late"] is True  # valid ISO, long past due
+    assert by_id["INV-3"]["late"] is False
+
+
+def test_due_on_the_run_day_is_on_time():
+    invoices = [_invoice("INV-1", due_date="2026-08-21")]
+    plan = schedule_payments(invoices, _approve("INV-1"), "2026-08-14")
+    assert plan["runs"][0]["run_date"] == "2026-08-21"
+    assert plan["runs"][0]["payments"][0]["invoices"][0]["late"] is False
+
+
+def test_run_weekday_other_than_friday():
+    """Monday runs: due Thursday 8/20 lands on Monday 8/17."""
+    invoices = [_invoice("INV-1", due_date="2026-08-20")]
+    plan = schedule_payments(invoices, _approve("INV-1"), "2026-08-14", run_weekday=0)
+    assert plan["runs"][0]["run_date"] == "2026-08-17"
+
+
+def test_late_invoices_sort_first_within_a_payment():
+    invoices = [
+        _invoice("INV-1", due_date="2026-08-20"),
+        _invoice("INV-2", due_date="2026-08-11"),  # past due
+    ]
+    plan = schedule_payments(invoices, _approve("INV-1", "INV-2"), "2026-08-14")
+    ids = [i["invoice_id"] for i in plan["runs"][0]["payments"][0]["invoices"]]
+    assert ids == ["INV-2", "INV-1"]
 
 
 def test_demo_plan_over_committed_decisions():

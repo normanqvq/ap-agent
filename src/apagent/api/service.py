@@ -151,7 +151,10 @@ class Service:
             counts[d["action"]] = counts.get(d["action"], 0) + 1
         approve = counts["APPROVE"]
         hold = counts["HOLD"]
-        n = len(decided) or 1
+        # Denominator is ALL invoices (CLAUDE.md metric definitions): an
+        # undecided invoice is not straight-through, so missing decisions
+        # lower STP instead of inflating it.
+        n = total or 1
         # Measured, not asserted: the eval harness scores every decision
         # against the manifest ground truth and counts wrong approvals.
         report = evaluate(json.loads(MANIFEST.read_text()), self._cache)

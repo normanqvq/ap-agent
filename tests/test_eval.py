@@ -54,6 +54,39 @@ def test_missing_decision_is_reported_not_scored():
     assert report["metrics"]["decided"] == 0
 
 
+def test_missing_decisions_lower_stp_not_inflate_it():
+    """STP divides by the full manifest: 1 approve of 2 invoices is 50%,
+    even though only 1 was decided."""
+    manifest = [
+        {"invoice_id": "INV-1", "defect": "clean"},
+        {"invoice_id": "INV-2", "defect": "clean"},
+    ]
+    report = evaluate(manifest, {"INV-1": _decision("APPROVE")})
+    assert report["metrics"]["stp_pct"] == 50
+
+
+def test_unknown_defect_fails_closed():
+    """A defect name the harness does not recognize must raise, not be
+    silently scored as payable."""
+    manifest = [{"invoice_id": "INV-1", "defect": "brand_new_defect"}]
+    try:
+        evaluate(manifest, {"INV-1": _decision("APPROVE")})
+    except ValueError as e:
+        assert "brand_new_defect" in str(e)
+    else:
+        raise AssertionError("evaluate() accepted an unknown defect")
+
+
+def test_decision_without_manifest_entry_is_reported_unexpected():
+    """An approval with no ground truth cannot hide: it shows up in the
+    unexpected list even though it cannot be scored."""
+    manifest = [{"invoice_id": "INV-1", "defect": "clean"}]
+    decisions = {"INV-1": _decision("APPROVE"), "INV-GHOST": _decision("APPROVE")}
+    report = evaluate(manifest, decisions)
+    assert report["unexpected"] == ["INV-GHOST"]
+    assert report["metrics"]["false_approve_count"] == 0  # unscored, but visible
+
+
 def test_metrics_math():
     """3 decided: 2 approve + 1 hold -> STP 67, touchless 100."""
     manifest = [

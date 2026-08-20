@@ -49,6 +49,11 @@ def main() -> None:
         print(f"friction (safe, but not straight-through): {', '.join(report['friction'])}")
     if report["missing"]:
         print(f"missing decisions: {', '.join(report['missing'])}")
+    if report["unexpected"]:
+        print(
+            "WARNING — decisions with no manifest entry (unscored, no ground truth): "
+            + ", ".join(report["unexpected"])
+        )
 
     REPORT.write_text(json.dumps(report, indent=2) + "\n")
     print(f"\nReport written -> {REPORT}")

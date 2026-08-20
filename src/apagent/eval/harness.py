@@ -38,11 +38,22 @@ SHOULD_APPROVE = {"clean", "price_variance_within_contract", "missing_po_ref"}
 
 
 def evaluate(manifest: list[dict], decisions: dict[str, dict]) -> dict:
-    """Compare decisions against the manifest; return the eval report."""
+    """Compare decisions against the manifest; return the eval report.
+
+    Fails closed: a defect name the harness does not recognize raises
+    instead of being scored — otherwise a renamed defect in the generator
+    would silently count as payable and a real false approve could hide
+    behind "false approvals: 0".
+    """
     cases = []
     for entry in manifest:
         invoice_id = entry["invoice_id"]
         defect = entry["defect"]
+        if defect not in MUST_NOT_APPROVE | SHOULD_APPROVE:
+            raise ValueError(
+                f"unknown defect {defect!r} on {invoice_id} — "
+                "classify it in MUST_NOT_APPROVE or SHOULD_APPROVE"
+            )
         decision = decisions.get(invoice_id)
         if decision is None:
             verdict = "missing"
@@ -63,8 +74,16 @@ def evaluate(manifest: list[dict], decisions: dict[str, dict]) -> dict:
     false_approves = [c["invoice_id"] for c in cases if c["verdict"] == "false_approve"]
     friction = [c["invoice_id"] for c in cases if c["verdict"] == "friction"]
     missing = [c["invoice_id"] for c in cases if c["verdict"] == "missing"]
+    # Decisions with no manifest entry cannot be scored (no ground truth),
+    # but they must not vanish either — an approval hiding here would be an
+    # unmeasured payment. Reported so the caller can see the coverage hole.
+    manifest_ids = {c["invoice_id"] for c in cases}
+    unexpected = sorted(k for k in decisions if k not in manifest_ids)
     decided = [c for c in cases if c["action"] is not None]
-    n = len(decided) or 1
+    # Denominator is the FULL manifest, per the project metric definitions:
+    # an undecided invoice is not straight-through, so missing decisions
+    # lower STP rather than inflating it.
+    n = len(cases) or 1
     approve = sum(1 for c in decided if c["action"] == Action.APPROVE)
     hold = sum(1 for c in decided if c["action"] == Action.HOLD)
 
@@ -73,6 +92,7 @@ def evaluate(manifest: list[dict], decisions: dict[str, dict]) -> dict:
         "false_approves": false_approves,
         "friction": friction,
         "missing": missing,
+        "unexpected": unexpected,
         "metrics": {
             "total": len(cases),
             "decided": len(decided),

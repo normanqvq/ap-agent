@@ -1,7 +1,9 @@
 "use strict";
 const view = document.getElementById("view");
 const api = (p, o) => fetch(p, o).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
-const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+// Escapes quotes too — attacker-authored strings (invoice ids, vendor
+// names) land inside double-quoted attributes like data-id="...".
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const money = (c, cur) => c == null ? "—" : `${cur || "SGD"} ${(c / 100).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const ACT = {
@@ -83,7 +85,7 @@ async function dashboard() {
     <div class="kpis">
       <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.decided} decided</div></div>
       <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE+HOLD / decided</div></div>
-      <div class="card kpi good"><div class="l">False approvals</div><div class="v num">${m.false_approve}</div><div class="s">Zero-tolerance · on target</div></div>
+      <div class="card kpi ${m.false_approve ? "warn" : "good"}"><div class="l">False approvals</div><div class="v num">${m.false_approve}</div><div class="s">${m.false_approve ? "Zero-tolerance · TARGET BROKEN" : "Zero-tolerance · on target"}</div></div>
       <div class="card kpi warn"><div class="l">Pending</div><div class="v num">${m.pending}</div><div class="s">Awaiting review</div></div>
     </div>
     <div class="grid">
@@ -129,6 +131,11 @@ const HOLD_EN = {
   PRICE_VARIANCE: "Price variance",
 };
 
+// Cents in different currencies are never added together — totals arrive
+// as {currency: cents} and render side by side.
+const fmtTotals = (t) => Object.entries(t).map(([c, n]) => money(n, c)).join(" · ") || "—";
+const plural = (n) => (n === 1 ? "" : "s");
+
 async function payments() {
   view.innerHTML = `<div class="placeholder">Loading…</div>`;
   const plan = await api("/api/schedule");
@@ -137,28 +144,28 @@ async function payments() {
   const runCard = (r) => `
     <div class="card run">
       <div class="card-h"><h3>Pay run · ${r.run_date}</h3>
-        <span class="runtotal num">${r.invoice_count} invoice${r.invoice_count > 1 ? "s" : ""} · ${money(r.total_cents)}</span></div>
+        <span class="runtotal num">${r.invoice_count} invoice${plural(r.invoice_count)} · ${fmtTotals(r.totals)}</span></div>
       ${r.payments.map((p) => `
         <div class="row payrow">
-          <div class="rl"><b>${esc(p.vendor_name)}</b><small>${p.invoices.length} invoice${p.invoices.length > 1 ? "s" : ""} · one transfer</small></div>
-          <div class="rr"><span class="amt num">${money(p.total_cents)}</span></div>
+          <div class="rl"><b>${esc(p.vendor_name)}</b><small>${p.invoices.length} invoice${plural(p.invoices.length)} · one ${esc(p.currency)} transfer</small></div>
+          <div class="rr"><span class="amt num">${money(p.total_cents, p.currency)}</span></div>
         </div>
         ${p.invoices.map((i) => `
           <div class="subrow" data-id="${esc(i.invoice_id)}">
-            <span><b>${esc(i.invoice_id)}</b> · due ${i.due_date}${i.late ? ` <span class="late-tag">late — pay first</span>` : ""}</span>
-            <span class="num">${money(i.total_cents)}</span>
+            <span><b>${esc(i.invoice_id)}</b> · ${i.due_date ? "due " + esc(i.due_date) : "no due date"}${i.late ? ` <span class="late-tag">late — past due</span>` : ""}</span>
+            <span class="num">${money(i.total_cents, i.currency)}</span>
           </div>`).join("")}`).join("")}
     </div>`;
 
   view.innerHTML = `
     <div class="head">
-      <div><h1>Payments</h1><div class="sub">Weekly pay runs, every Friday · pay late but never late · planned as of ${plan.as_of}</div></div>
+      <div><h1>Payments</h1><div class="sub">Weekly pay runs, every Friday · pay late but never late · planned as of ${esc(plan.as_of)}</div></div>
     </div>
     <div class="kpis">
-      <div class="card kpi"><div class="l">Scheduled</div><div class="v num">${money(s.scheduled_total_cents)}</div><div class="s">${s.scheduled_count} approved invoices</div></div>
-      <div class="card kpi"><div class="l">Next run · ${next ? next.run_date : "—"}</div><div class="v num">${next ? money(next.total_cents) : "—"}</div><div class="s">${next ? next.invoice_count + " invoices, one transfer per vendor" : "nothing due"}</div></div>
-      <div class="card kpi ${s.late_count ? "warn" : "good"}"><div class="l">Past due</div><div class="v num">${s.late_count}</div><div class="s">paid in the next run, first</div></div>
-      <div class="card kpi"><div class="l">Withheld</div><div class="v num">${money(s.not_scheduled_total_cents)}</div><div class="s">${s.not_scheduled_count} not approved — money stays put</div></div>
+      <div class="card kpi"><div class="l">Scheduled</div><div class="v num">${s.scheduled_count}</div><div class="s">${fmtTotals(s.scheduled_totals)}</div></div>
+      <div class="card kpi"><div class="l">Next run</div><div class="v num">${next ? next.run_date.slice(5) : "—"}</div><div class="s">${next ? `${next.invoice_count} invoice${plural(next.invoice_count)} · ${fmtTotals(next.totals)}` : "nothing due"}</div></div>
+      <div class="card kpi ${s.late_count ? "warn" : "good"}"><div class="l">Past due</div><div class="v num">${s.late_count}</div><div class="s">released in the next run</div></div>
+      <div class="card kpi"><div class="l">Withheld</div><div class="v num">${s.not_scheduled_count}</div><div class="s">${fmtTotals(s.not_scheduled_totals)} — money stays put</div></div>
     </div>
     ${plan.runs.map(runCard).join("")}
     <div class="card">
@@ -167,7 +174,7 @@ async function payments() {
         const a = ACT[n.action] || ACT.null;
         return `<div class="row" data-id="${esc(n.invoice_id)}">
           <div class="rl"><b>${esc(n.invoice_id)}</b><small>${esc(n.vendor_name)}</small></div>
-          <div class="rr"><span class="amt num">${money(n.total_cents)}</span>
+          <div class="rr"><span class="amt num">${money(n.total_cents, n.currency)}</span>
             <span class="pill ${a.cls}">${n.action || "PENDING"}</span>
             <span class="reason t-${a.cls}">${esc(HOLD_EN[n.hold_reason] || "")}</span></div>
         </div>`;
