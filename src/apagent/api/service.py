@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 
 from apagent.agent.ap_tools import build_registry, hard_duplicates, recheck_with_contract
+from apagent.eval import evaluate
 from apagent.matching.engine import match_invoice
 from apagent.pipeline import _blocking_rows, decide_invoice
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
@@ -26,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA = ROOT / "data" / "synthetic"
 CONTRACTS = DATA / "contracts"
 CACHE = DATA / "decisions.json"
+MANIFEST = DATA / "manifest.json"
 
 # A stable demo order: the clean control first, then the planted defects in a
 # storyline order, then the rest. Anything not listed keeps its file order.
@@ -143,13 +145,16 @@ class Service:
         approve = counts["APPROVE"]
         hold = counts["HOLD"]
         n = len(decided) or 1
+        # Measured, not asserted: the eval harness scores every decision
+        # against the manifest ground truth and counts wrong approvals.
+        report = evaluate(json.loads(MANIFEST.read_text()), self._cache)
         return {
             "total": total,
             "decided": len(decided),
             "pending": total - len(decided),
             "stp_pct": round(approve / n * 100),
             "touchless_pct": round((approve + hold) / n * 100),
-            "false_approve": 0,  # measured by the eval harness against the manifest
+            "false_approve": report["metrics"]["false_approve_count"],
             "distribution": counts,
         }
 
