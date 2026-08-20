@@ -6,19 +6,72 @@ Then open http://127.0.0.1:8000
 The path operations that only read the cache are async-free and instant.
 POST /run invokes the LLM, so it is a plain `def` — FastAPI runs it in a
 threadpool and the event loop stays responsive.
+
+Sessions: DEMO sign-in, deliberately password-less and honest about it.
+Every /api route (except login/me) requires a session cookie, so the
+state-changing POSTs are not open to the world, and the cookie is
+HttpOnly + SameSite=Lax which is what blunts cross-site POSTs. Sessions
+live in memory: a restart signs everyone out, which is fine for a demo
+and means nothing secret is ever written to disk.
 """
 
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from apagent.api.service import get_service
 
 WEB = Path(__file__).resolve().parent / "web"
 
 app = FastAPI(title="AP Agent", version="0.1.0")
+
+# token -> display name. In memory only.
+SESSIONS: dict[str, str] = {}
+OPEN_PATHS = {"/api/login", "/api/logout", "/api/me"}
+
+
+@app.middleware("http")
+async def require_session(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api") and path not in OPEN_PATHS:
+        token = request.cookies.get("session")
+        if not token or token not in SESSIONS:
+            return JSONResponse({"detail": "not signed in"}, status_code=401)
+    return await call_next(request)
+
+
+class LoginBody(BaseModel):
+    name: str
+
+
+@app.post("/api/login")
+def login(body: LoginBody, response: Response) -> dict:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="a name is required")
+    token = secrets.token_hex(16)
+    SESSIONS[token] = name[:40]
+    response.set_cookie("session", token, httponly=True, samesite="lax")
+    return {"name": SESSIONS[token]}
+
+
+@app.post("/api/logout")
+def logout(request: Request, response: Response) -> dict:
+    SESSIONS.pop(request.cookies.get("session", ""), None)
+    response.delete_cookie("session")
+    return {"ok": True}
+
+
+@app.get("/api/me")
+def me(request: Request) -> dict:
+    token = request.cookies.get("session")
+    if not token or token not in SESSIONS:
+        raise HTTPException(status_code=401, detail="not signed in")
+    return {"name": SESSIONS[token]}
 
 
 @app.get("/api/metrics")

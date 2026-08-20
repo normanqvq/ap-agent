@@ -142,6 +142,9 @@ class Service:
         )
         po = self.store.get_po(match.po_id) if match.po_id else None
         grn = self.store.get_grn_for_po(match.po_id) if match.po_id else None
+        gates = _guardrails(checked, rechecked, review_gate, duplicates, allowance)
+        decision = self._cache.get(invoice.doc_id)
+        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
 
         return {
             "invoice_id": invoice.doc_id,
@@ -160,12 +163,12 @@ class Service:
             "review_gate": review_gate,
             "duplicates": [d.doc_id for d in duplicates],
             "contract_allowance_pct": allowance[0] if allowance else None,
-            "guardrails": _guardrails(checked, rechecked, review_gate, duplicates, allowance),
-            "decision": self._cache.get(invoice.doc_id),
+            "guardrails": gates,
+            "decision": decision,
             "human_review": self._human_state(
-                invoice.doc_id,
-                (self._cache.get(invoice.doc_id) or {}).get("action"),
+                invoice.doc_id, decision.get("action") if decision else None
             ),
+            "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
         }
 
     def metrics(self) -> dict:
@@ -352,6 +355,33 @@ def _reason_label(dec: dict) -> str:
     if action == "ESCALATE":
         return "Needs review"
     return "—"
+
+
+def _handoff_draft(invoice, vendor_name: str, decision: dict | None, gates: list[dict]) -> dict:
+    """The internal hand-off email, rendered by CODE from a fixed template.
+
+    Same rule as vendor-facing messages: the model never authors outbound
+    text. The reviewer sees exactly what the facts say — action, reason,
+    which gates failed — nothing more.
+    """
+    amount = f"{invoice.currency} {(invoice.total_cents or 0) / 100:,.2f}"
+    action = decision["action"] if decision else "not decided yet"
+    failed = [g["label"] for g in gates if not g["passed"]]
+    lines = [
+        f"Invoice {invoice.doc_id} from {vendor_name} ({amount}) needs your review.",
+        "",
+        f"Agent decision: {action}"
+        + (f" ({decision['hold_reason']})" if decision and decision.get("hold_reason") else ""),
+        "Failed gates: " + (", ".join(failed) if failed else "none"),
+        f"Console: http://127.0.0.1:8000 -> Invoices -> {invoice.doc_id}",
+        "",
+        "This message was rendered by code from a fixed template.",
+    ]
+    return {
+        "to": "ap-supervisor@demo.local",
+        "subject": f"[{invoice.doc_id}] Review request — {vendor_name}",
+        "body": "\n".join(lines),
+    }
 
 
 def _guardrails(checked, rechecked, review_gate, duplicates, allowance) -> list[dict]:

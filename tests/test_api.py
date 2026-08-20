@@ -122,15 +122,55 @@ def test_analytics_and_metrics_agree():
     assert a["distribution"] == m["distribution"]
 
 
-def test_http_confirm_maps_409_and_404():
+def _signed_in_client():
     from fastapi.testclient import TestClient
 
     from apagent.api.app import app
 
     client = TestClient(app)
+    assert client.post("/api/login", json={"name": "Norman"}).status_code == 200
+    return client
+
+
+def test_http_confirm_maps_409_and_404():
+    client = _signed_in_client()
     assert client.post("/api/invoices/INV-V005-3005/confirm").status_code == 409
     assert client.post("/api/invoices/INV-NOPE-0000/confirm").status_code == 404
     assert client.post("/api/invoices/INV-NOPE-0000/send-to-human").status_code == 404
+
+
+def test_api_requires_a_session():
+    """Every /api route except login/logout/me answers 401 to strangers —
+    the state-changing POSTs are not open to the world."""
+    from fastapi.testclient import TestClient
+
+    from apagent.api.app import app
+
+    client = TestClient(app)
+    assert client.get("/api/invoices").status_code == 401
+    assert client.post("/api/invoices/INV-V001-3001/confirm").status_code == 401
+    assert client.get("/api/me").status_code == 401
+
+
+def test_login_logout_cycle():
+    client = _signed_in_client()
+    assert client.get("/api/me").json()["name"] == "Norman"
+    assert client.get("/api/invoices").status_code == 200
+    client.post("/api/logout")
+    assert client.get("/api/me").status_code == 401
+    assert client.get("/api/invoices").status_code == 401
+
+
+def test_handoff_draft_is_code_templated():
+    """The internal hand-off email comes from a fixed code template with
+    the facts filled in — never model text."""
+    case = Service().get_case("INV-V006-3019")  # HOLD, missing GRN
+    draft = case["handoff_draft"]
+    assert draft["to"] == "ap-supervisor@demo.local"
+    assert "INV-V006-3019" in draft["subject"]
+    assert "Failed gates:" in draft["body"]
+    assert "Goods received" in draft["body"]  # the gate that failed
+    assert "rendered by code" in draft["body"]
 
 
 def test_config_reports_the_enforced_policy():

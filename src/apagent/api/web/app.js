@@ -1,6 +1,11 @@
 "use strict";
 const view = document.getElementById("view");
-const api = (p, o) => fetch(p, o).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
+// 401 anywhere means the session is gone — drop to the sign-in screen.
+const api = (p, o) => fetch(p, o).then((r) => {
+  if (r.status === 401) { showLogin(); throw new Error("401"); }
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+});
 // Escapes quotes too — attacker-authored strings (invoice ids, vendor
 // names) land inside double-quoted attributes like data-id="...".
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -60,6 +65,94 @@ function toolSummary(t) {
   return t.result.length > 120 ? t.result.slice(0, 120) + "…" : t.result;
 }
 const prettyRaw = (s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } };
+
+// --- auth ------------------------------------------------------------------
+let loginLayer = null;
+function showLogin() {
+  if (!loginLayer) {
+    loginLayer = document.createElement("div");
+    loginLayer.className = "login-layer";
+    document.body.appendChild(loginLayer);
+  }
+  loginLayer.innerHTML = `
+    <div class="login-card">
+      <img src="/logo.svg" width="46" height="46" alt="" />
+      <h2>AP Agent</h2>
+      <p>Sign in to the review console</p>
+      <input id="login-name" placeholder="Your name" maxlength="40" autocomplete="name" />
+      <button class="btn primary" id="login-btn">Sign in</button>
+      <small>Demo sign-in — no password. Sessions are in-memory and cleared on restart.</small>
+    </div>`;
+  loginLayer.hidden = false;
+  const input = loginLayer.querySelector("#login-name");
+  const go = async () => {
+    const name = input.value.trim();
+    if (!name) { input.focus(); return; }
+    const r = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!r.ok) return;
+    const me = await r.json();
+    loginLayer.hidden = true;
+    renderUser(me.name);
+    setActiveNav();
+    dashboard();
+  };
+  loginLayer.querySelector("#login-btn").addEventListener("click", go);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  input.focus();
+}
+
+function renderUser(name) {
+  const el = document.getElementById("user");
+  el.innerHTML = `<div class="av">${esc(name[0].toUpperCase())}</div>
+    <div class="ud"><b>${esc(name)}</b><small>AP reviewer</small></div>
+    <button class="iconbtn" id="logout" title="Sign out">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>`;
+  document.getElementById("logout").addEventListener("click", async () => {
+    await fetch("/api/logout", { method: "POST" });
+    el.innerHTML = "";
+    showLogin();
+  });
+}
+
+// --- email composer + toast ------------------------------------------------
+function toast(msg) {
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600);
+}
+
+// The body is read-only on purpose: outbound text is rendered by code from
+// a fixed template — the model (and the reviewer, here) cannot author it.
+function composer({ to, subject, body, sendLabel, onSend }) {
+  const layer = document.createElement("div");
+  layer.className = "modal-layer";
+  layer.innerHTML = `
+    <div class="compose">
+      <div class="compose-h"><h3>New message</h3><button class="iconbtn dark" data-x>✕</button></div>
+      <div class="compose-f"><label>To</label><input value="${esc(to)}" readonly /></div>
+      <div class="compose-f"><label>Subject</label><input value="${esc(subject)}" readonly /></div>
+      <textarea readonly rows="9">${esc(body)}</textarea>
+      <div class="compose-note">Rendered by code from a fixed template — the model cannot author outbound messages.</div>
+      <div class="compose-a"><button class="btn" data-x>Cancel</button>
+        <button class="btn primary" data-send>${sendLabel || "Send"}</button></div>
+    </div>`;
+  document.body.appendChild(layer);
+  const close = () => layer.remove();
+  layer.querySelectorAll("[data-x]").forEach((b) => b.addEventListener("click", close));
+  layer.addEventListener("click", (e) => { if (e.target === layer) close(); });
+  layer.querySelector("[data-send]").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try { await onSend(); close(); }
+    catch { e.target.disabled = false; e.target.textContent = "Failed — retry"; }
+  });
+}
 
 // --- navigation ------------------------------------------------------------
 const VIEWS = { dashboard, payments, analytics, settings };
@@ -396,24 +489,40 @@ function renderDetail(c) {
         ${dec ? `<div class="card reason-card"><h3>Decision rationale</h3>
           <ol class="points">${reasonPoints(c).map((p) => `<li>${esc(p)}</li>`).join("")}</ol>
           <details class="rawreason"><summary>Model's raw rationale (audit)</summary><p>${esc(dec.reasoning)}</p></details></div>` : ""}
-        ${dec && dec.outbound_message ? `<div class="card outbound"><h3>System-generated outbound message (template)</h3><p>${esc(dec.outbound_message)}</p></div>` : ""}
+        ${dec && dec.outbound_message ? `<div class="card outbound"><h3>System-generated outbound message (template)</h3><p>${esc(dec.outbound_message)}</p><button class="btn" id="email-vendor">Open in email composer</button></div>` : ""}
       </div>
     </div>`;
   document.getElementById("back").addEventListener("click", () => { setActiveNav(); dashboard(); });
   document.getElementById("rerun").addEventListener("click", (e) => rerun(c.invoice_id, e.target));
-  const post = async (path, btn) => {
-    btn.disabled = true;
-    try {
-      renderDetail(await api(`/api/invoices/${c.invoice_id}/${path}`, { method: "POST" }));
-      // Show the state land, then return to the queue — one case done,
-      // on to the next.
-      setTimeout(() => { setActiveNav(); dashboard(); }, 800);
-    } catch { btn.disabled = false; btn.textContent = "Refused by code (retry)"; }
-  };
+  // Show the state land, then return to the queue — one case done, on to
+  // the next.
+  const backToQueue = () => setTimeout(() => { setActiveNav(); dashboard(); }, 800);
   const confirmBtn = document.getElementById("confirm");
-  if (confirmBtn) confirmBtn.addEventListener("click", (e) => post("confirm", e.target));
+  if (confirmBtn) confirmBtn.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      renderDetail(await api(`/api/invoices/${c.invoice_id}/confirm`, { method: "POST" }));
+      toast(`Payment confirmed — ${c.invoice_id}`);
+      backToQueue();
+    } catch { e.target.disabled = false; e.target.textContent = "Refused by code (retry)"; }
+  });
   const sendBtn = document.getElementById("send");
-  if (sendBtn) sendBtn.addEventListener("click", (e) => post("send-to-human", e.target));
+  if (sendBtn) sendBtn.addEventListener("click", () => composer({
+    ...c.handoff_draft,
+    onSend: async () => {
+      renderDetail(await api(`/api/invoices/${c.invoice_id}/send-to-human`, { method: "POST" }));
+      toast(`Sent to human reviewer — ${c.invoice_id}`);
+      backToQueue();
+    },
+  }));
+  const vendorBtn = document.getElementById("email-vendor");
+  if (vendorBtn) vendorBtn.addEventListener("click", () => composer({
+    to: `billing@${c.vendor_id.toLowerCase()}.example.com`,
+    subject: `Query on invoice ${c.invoice_id}`,
+    body: dec.outbound_message,
+    sendLabel: "Send (demo)",
+    onSend: async () => toast("Email queued — demo build, no SMTP connected"),
+  }));
   document.querySelectorAll(".raw-t").forEach((el) => el.addEventListener("click", () => {
     const pre = document.getElementById("raw-" + el.dataset.i);
     pre.hidden = !pre.hidden;
@@ -431,4 +540,13 @@ async function rerun(id, btn) {
   }
 }
 
-dashboard();
+// --- boot: restore the session or ask for a sign-in -------------------------
+(async () => {
+  const r = await fetch("/api/me");
+  if (r.ok) {
+    renderUser((await r.json()).name);
+    dashboard();
+  } else {
+    showLogin();
+  }
+})();

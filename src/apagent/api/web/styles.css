@@ -223,3 +223,50 @@ body {
 .badge-human.ok  { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
 .badge-human.mid { background: var(--amber-bg); color: var(--amber); }
 .btn:disabled { opacity: .55; cursor: default; }
+
+/* Sign-in layer */
+.login-layer { position: fixed; inset: 0; z-index: 40; background: var(--sidebar);
+  display: grid; place-items: center; }
+.login-card { background: var(--card); border-radius: 16px; padding: 34px 36px; width: 340px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.login-card h2 { font-size: 20px; }
+.login-card p { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+.login-card input { width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 9px; font: inherit; }
+.login-card input:focus { outline: 2px solid var(--accent-border); border-color: var(--accent); }
+.login-card .btn { width: 100%; justify-content: center; }
+.login-card small { color: var(--muted); font-size: 11px; margin-top: 6px; }
+
+/* User area + icon buttons */
+.user .ud { flex: 1; min-width: 0; }
+.iconbtn { background: none; border: none; color: var(--side-muted); cursor: pointer;
+  padding: 6px; border-radius: 7px; display: grid; place-items: center; }
+.iconbtn svg { width: 16px; height: 16px; }
+.iconbtn:hover { background: rgba(255,255,255,.08); color: #fff; }
+.iconbtn.dark { color: var(--muted); }
+.iconbtn.dark:hover { background: var(--bg); color: var(--ink); }
+
+/* Email composer */
+.modal-layer { position: fixed; inset: 0; z-index: 30; background: rgba(15,23,42,.45);
+  display: grid; place-items: center; }
+.compose { background: var(--card); border-radius: 14px; width: min(560px, 92vw);
+  display: flex; flex-direction: column; overflow: hidden; }
+.compose-h { display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 18px; border-bottom: 1px solid var(--divider); }
+.compose-h h3 { font-size: 15px; }
+.compose-f { display: flex; align-items: center; gap: 10px; padding: 9px 18px;
+  border-bottom: 1px solid var(--divider); }
+.compose-f label { width: 52px; color: var(--muted); font-size: 12.5px; }
+.compose-f input { flex: 1; border: none; font: inherit; color: var(--ink); background: none; }
+.compose textarea { border: none; resize: vertical; padding: 14px 18px; font: inherit;
+  font-size: 13px; line-height: 1.55; color: var(--ink); background: none; }
+.compose textarea:focus, .compose-f input:focus { outline: none; }
+.compose-note { padding: 9px 18px; background: var(--accent-bg); color: var(--accent);
+  font-size: 11.5px; font-weight: 500; }
+.compose-a { display: flex; justify-content: flex-end; gap: 10px; padding: 13px 18px; }
+
+/* Toast */
+.toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); z-index: 50;
+  background: var(--sidebar); color: #fff; padding: 11px 20px; border-radius: 10px;
+  font-size: 13px; font-weight: 500; animation: toast-in .18s ease-out; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
