@@ -26,6 +26,12 @@ def metrics() -> dict:
     return get_service().metrics()
 
 
+@app.get("/api/schedule")
+def schedule() -> dict:
+    """The planned weekly payment runs for the APPROVEd invoices."""
+    return get_service().schedule()
+
+
 @app.get("/api/invoices")
 def list_invoices() -> list[dict]:
     return get_service().list_cases()

@@ -197,3 +197,16 @@ body {
 .placeholder { color: var(--muted); padding: 60px; text-align: center; }
 .spin { animation: sp 1s linear infinite; display: inline-block; }
 @keyframes sp { to { transform: rotate(360deg); } }
+
+/* Payments view */
+.run { margin-bottom: 16px; }
+.run .payrow { cursor: default; }
+.run .payrow:hover { background: none; }
+.runtotal { font-size: 12.5px; color: var(--muted); font-weight: 500; }
+.subrow { display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 18px 8px 34px; border-top: 1px solid var(--divider);
+  font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.subrow:hover { background: #fafbfd; }
+.subrow b { color: var(--ink); font-weight: 500; }
+.late-tag { margin-left: 6px; padding: 1px 8px; border-radius: 999px;
+  background: var(--red-bg); color: var(--red); font-size: 11px; font-weight: 600; }

@@ -20,6 +20,7 @@ from apagent.eval import evaluate
 from apagent.matching.engine import match_invoice
 from apagent.pipeline import _blocking_rows, decide_invoice
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
+from apagent.scheduling import schedule_payments
 from apagent.schemas import Action, DiscrepancyField, Document, ToleranceConfig
 from apagent.store import DocumentStore
 
@@ -28,6 +29,12 @@ DATA = ROOT / "data" / "synthetic"
 CONTRACTS = DATA / "contracts"
 CACHE = DATA / "decisions.json"
 MANIFEST = DATA / "manifest.json"
+
+# The demo's "today". The dataset lives in Aug 2026, so the schedule is
+# planned from a fixed Friday inside that window — deterministic and
+# offline, same idea as the decisions cache. A real deployment would use
+# the actual date.
+DEMO_AS_OF = "2026-08-14"
 
 # A stable demo order: the clean control first, then the planted defects in a
 # storyline order, then the rest. Anything not listed keeps its file order.
@@ -157,6 +164,15 @@ class Service:
             "false_approve": report["metrics"]["false_approve_count"],
             "distribution": counts,
         }
+
+    def schedule(self, as_of: str = DEMO_AS_OF) -> dict:
+        """Plan the weekly payment runs from the cached decisions."""
+        return schedule_payments(
+            self._ordered_invoices(),
+            self._cache,
+            as_of,
+            vendor_names=self.store.vendors(),
+        )
 
     _chunks_cache = None
 

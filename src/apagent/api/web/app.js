@@ -58,8 +58,9 @@ function toolSummary(t) {
 const prettyRaw = (s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } };
 
 // --- navigation ------------------------------------------------------------
+const VIEWS = { dashboard, payments };
 document.querySelectorAll(".nav a[data-view]").forEach((a) =>
-  a.addEventListener("click", () => { setActiveNav(a); dashboard(); }));
+  a.addEventListener("click", () => { setActiveNav(a); (VIEWS[a.dataset.view] || dashboard)(); }));
 function setActiveNav(el) {
   document.querySelectorAll(".nav a").forEach((a) => a.classList.remove("active"));
   (el || document.querySelector(".nav a")).classList.add("active");
@@ -119,6 +120,61 @@ async function dashboard() {
   }).join("");
   q.querySelectorAll(".row").forEach((r) => r.addEventListener("click", () => detail(r.dataset.id)));
   document.getElementById("run").addEventListener("click", () => detail((list.find((x) => !x.action) || list[0]).invoice_id));
+}
+
+// --- payments --------------------------------------------------------------
+const HOLD_EN = {
+  AWAITING_GRN: "No goods receipt",
+  AWAITING_DELIVERY: "Short delivery",
+  PRICE_VARIANCE: "Price variance",
+};
+
+async function payments() {
+  view.innerHTML = `<div class="placeholder">Loading…</div>`;
+  const plan = await api("/api/schedule");
+  const s = plan.summary;
+  const next = plan.runs[0];
+  const runCard = (r) => `
+    <div class="card run">
+      <div class="card-h"><h3>Pay run · ${r.run_date}</h3>
+        <span class="runtotal num">${r.invoice_count} invoice${r.invoice_count > 1 ? "s" : ""} · ${money(r.total_cents)}</span></div>
+      ${r.payments.map((p) => `
+        <div class="row payrow">
+          <div class="rl"><b>${esc(p.vendor_name)}</b><small>${p.invoices.length} invoice${p.invoices.length > 1 ? "s" : ""} · one transfer</small></div>
+          <div class="rr"><span class="amt num">${money(p.total_cents)}</span></div>
+        </div>
+        ${p.invoices.map((i) => `
+          <div class="subrow" data-id="${esc(i.invoice_id)}">
+            <span><b>${esc(i.invoice_id)}</b> · due ${i.due_date}${i.late ? ` <span class="late-tag">late — pay first</span>` : ""}</span>
+            <span class="num">${money(i.total_cents)}</span>
+          </div>`).join("")}`).join("")}
+    </div>`;
+
+  view.innerHTML = `
+    <div class="head">
+      <div><h1>Payments</h1><div class="sub">Weekly pay runs, every Friday · pay late but never late · planned as of ${plan.as_of}</div></div>
+    </div>
+    <div class="kpis">
+      <div class="card kpi"><div class="l">Scheduled</div><div class="v num">${money(s.scheduled_total_cents)}</div><div class="s">${s.scheduled_count} approved invoices</div></div>
+      <div class="card kpi"><div class="l">Next run · ${next ? next.run_date : "—"}</div><div class="v num">${next ? money(next.total_cents) : "—"}</div><div class="s">${next ? next.invoice_count + " invoices, one transfer per vendor" : "nothing due"}</div></div>
+      <div class="card kpi ${s.late_count ? "warn" : "good"}"><div class="l">Past due</div><div class="v num">${s.late_count}</div><div class="s">paid in the next run, first</div></div>
+      <div class="card kpi"><div class="l">Withheld</div><div class="v num">${money(s.not_scheduled_total_cents)}</div><div class="s">${s.not_scheduled_count} not approved — money stays put</div></div>
+    </div>
+    ${plan.runs.map(runCard).join("")}
+    <div class="card">
+      <div class="card-h"><h3>Not scheduled</h3><span class="runtotal">only APPROVE moves money</span></div>
+      ${plan.not_scheduled.map((n) => {
+        const a = ACT[n.action] || ACT.null;
+        return `<div class="row" data-id="${esc(n.invoice_id)}">
+          <div class="rl"><b>${esc(n.invoice_id)}</b><small>${esc(n.vendor_name)}</small></div>
+          <div class="rr"><span class="amt num">${money(n.total_cents)}</span>
+            <span class="pill ${a.cls}">${n.action || "PENDING"}</span>
+            <span class="reason t-${a.cls}">${esc(HOLD_EN[n.hold_reason] || "")}</span></div>
+        </div>`;
+      }).join("")}
+    </div>`;
+  view.querySelectorAll("[data-id]").forEach((el) =>
+    el.addEventListener("click", () => detail(el.dataset.id)));
 }
 
 // --- detail ----------------------------------------------------------------
