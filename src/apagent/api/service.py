@@ -169,17 +169,19 @@ def _reason_label(dec: dict) -> str:
         return "—"
     hr = dec.get("hold_reason")
     reasons = {
-        "PRICE_VARIANCE": "价格差异",
-        "AWAITING_GRN": "缺收货",
-        "AWAITING_DELIVERY": "货未到齐",
+        "PRICE_VARIANCE": "Price variance",
+        "AWAITING_GRN": "No goods receipt",
+        "AWAITING_DELIVERY": "Short delivery",
     }
     if hr in reasons:
         return reasons[hr]
-    r = dec.get("reasoning", "")
-    if "duplicate" in r.lower() or "重复" in r:
-        return "疑似重复"
+    r = dec.get("reasoning", "").lower()
+    if "hard-duplicate" in r or "duplicate of inv" in r or "duplicates inv" in r:
+        return "Duplicate"
+    if "manual_review_required=true" in r or "at or above the manual-review threshold" in r:
+        return "Over threshold"
     if action == "ESCALATE":
-        return "需人工"
+        return "Needs review"
     return "—"
 
 
@@ -192,16 +194,20 @@ def _guardrails(checked, rechecked, review_gate, duplicates, allowance) -> list[
     other_blocked = any(
         b.field not in (DiscrepancyField.UNIT_PRICE, DiscrepancyField.QTY) for b in blocking
     )
-    pct = f"{allowance[0]:g}%" if allowance else "默认 2%"
+    pct = f"{allowance[0]:g}%" if allowance else "default 2%"
     return [
-        {"key": "money", "label": "金额门槛内", "passed": not review_gate},
-        {"key": "po", "label": "PO 已匹配", "passed": checked.po_id is not None},
-        {"key": "unmatched", "label": "无未订购行", "passed": not checked.unmatched_inv_lines},
-        {"key": "duplicate", "label": "无重复", "passed": not duplicates},
-        {"key": "price", "label": f"价格在容差内（{pct}）", "passed": not price_blocked},
+        {"key": "money", "label": "Amount within threshold", "passed": not review_gate},
+        {"key": "po", "label": "PO matched", "passed": checked.po_id is not None},
+        {
+            "key": "unmatched",
+            "label": "No unordered lines",
+            "passed": not checked.unmatched_inv_lines,
+        },
+        {"key": "duplicate", "label": "No duplicate", "passed": not duplicates},
+        {"key": "price", "label": f"Price within tolerance ({pct})", "passed": not price_blocked},
         {
             "key": "grn",
-            "label": "收货齐全",
+            "label": "Goods received",
             "passed": checked.grn_id is not None and not qty_blocked and not other_blocked,
         },
     ]

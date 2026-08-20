@@ -176,8 +176,20 @@ body {
 
 /* Reasoning + outbound */
 .reason-card { padding: 15px 16px; margin-bottom: 18px; }
-.reason-card h3 { font-size: 15px; margin-bottom: 8px; }
-.reason-card p { color: #40495a; font-size: 12.5px; line-height: 1.6; }
+.reason-card h3 { font-size: 15px; margin-bottom: 10px; }
+.reason-card .points { margin: 0; padding-left: 20px; }
+.reason-card .points li { color: #364152; font-size: 12.5px; line-height: 1.6; margin-bottom: 7px; }
+.reason-card .points li::marker { color: var(--accent); font-weight: 700; }
+.rawreason { margin-top: 12px; border-top: 1px solid var(--divider); padding-top: 10px; }
+.rawreason summary { color: var(--muted); font-size: 11.5px; cursor: pointer; list-style: none; }
+.rawreason summary::before { content: "▸ "; }
+.rawreason[open] summary::before { content: "▾ "; }
+.rawreason p { color: #6b7280; font-size: 11.5px; line-height: 1.55; margin-top: 8px; }
+/* raw JSON expander inside a tool-trail step */
+.step .raw-t { font-size: 10.5px; color: var(--accent); cursor: pointer; user-select: none; }
+.step .raw { margin-top: 7px; background: #0f172a; color: #cbd5e1; font-size: 11px; padding: 9px 11px;
+  border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1.5; }
 .outbound { padding: 14px 16px; background: #f8fafc; }
 .outbound h3 { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 .outbound p { font-size: 12.5px; line-height: 1.5; }
