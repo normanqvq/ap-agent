@@ -6,6 +6,8 @@ present or absent depending on whether the cache exists — the tests never
 depend on it.
 """
 
+import pytest
+
 from apagent.api.service import Service
 
 
@@ -62,6 +64,24 @@ def test_analytics_scorecard_covers_every_planted_defect():
     assert a["clean_total"] == 15
     assert a["metrics"]["false_approve_count"] == 0
     assert len(a["vendors"]) == 6
+
+
+def test_confirm_payment_refused_unless_agent_approved():
+    """The human sign-off endpoint re-checks the precondition in code:
+    a HOLD invoice cannot be confirmed no matter what the UI sends."""
+    svc = Service()
+    with pytest.raises(ValueError):
+        svc.confirm_payment("INV-V005-3005")  # HOLD · price variance
+    case = svc.confirm_payment("INV-V001-3001")  # clean APPROVE
+    assert case["human_review"] == "confirmed"
+
+
+def test_send_to_human_works_for_any_state():
+    svc = Service()
+    case = svc.send_to_human("INV-V005-3005")
+    assert case["human_review"] == "sent_to_human"
+    with pytest.raises(KeyError):
+        svc.send_to_human("INV-NOPE-0000")
 
 
 def test_config_reports_the_enforced_policy():

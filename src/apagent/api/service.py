@@ -61,6 +61,10 @@ class Service:
         self._cache: dict[str, dict] = {}
         if CACHE.exists():
             self._cache = json.loads(CACHE.read_text())
+        # Human sign-off state, per invoice: "confirmed" or "sent_to_human".
+        # In memory only — demo session state, not part of the committed
+        # decisions cache (a restart clears it, which is what a demo wants).
+        self._human: dict[str, str] = {}
 
     # --- decisions cache ---------------------------------------------------
 
@@ -142,6 +146,7 @@ class Service:
             "contract_allowance_pct": allowance[0] if allowance else None,
             "guardrails": _guardrails(checked, rechecked, review_gate, duplicates, allowance),
             "decision": self._cache.get(invoice.doc_id),
+            "human_review": self._human.get(invoice.doc_id),
         }
 
     def metrics(self) -> dict:
@@ -177,6 +182,29 @@ class Service:
             as_of,
             vendor_names=self.store.vendors(),
         )
+
+    def confirm_payment(self, invoice_id: str) -> dict:
+        """A human confirms an APPROVEd invoice for payment.
+
+        Code checks the precondition, not the frontend: only an invoice the
+        agent APPROVEd (i.e. that already passed all six gates) can be
+        confirmed. Anything else is refused here regardless of what the UI
+        sends — same authority rule as everywhere.
+        """
+        decision = self._cache.get(invoice_id)
+        if self.store.get_invoice(invoice_id) is None:
+            raise KeyError(invoice_id)
+        if decision is None or decision["action"] != Action.APPROVE:
+            raise ValueError("only an APPROVEd invoice can be confirmed for payment")
+        self._human[invoice_id] = "confirmed"
+        return self.get_case(invoice_id)
+
+    def send_to_human(self, invoice_id: str) -> dict:
+        """Route an invoice to a human reviewer, whatever its state."""
+        if self.store.get_invoice(invoice_id) is None:
+            raise KeyError(invoice_id)
+        self._human[invoice_id] = "sent_to_human"
+        return self.get_case(invoice_id)
 
     def analytics(self) -> dict:
         """The eval scorecard and per-vendor rollup for the Analytics view.

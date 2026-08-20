@@ -37,8 +37,7 @@ body {
   position: sticky; top: 0; height: 100vh;
 }
 .brand { display: flex; align-items: center; gap: 11px; }
-.brand .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--accent);
-  display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px; }
+.brand .logo { width: 30px; height: 30px; display: block; }
 .brand b { font-size: 16px; }
 .nav { display: flex; flex-direction: column; gap: 4px; }
 .nav a { display: flex; align-items: center; gap: 11px; padding: 10px 11px; border-radius: 9px;
@@ -218,3 +217,9 @@ body {
 .verdict-chip.mid { background: var(--amber-bg); color: var(--amber); }
 .code-chip { padding: 2px 8px; border-radius: 6px; background: var(--accent-bg); color: var(--accent);
   border: 1px solid var(--accent-border); font-size: 10.5px; font-weight: 600; }
+
+/* Human sign-off badges */
+.badge-human { padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.badge-human.ok  { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+.badge-human.mid { background: var(--amber-bg); color: var(--amber); }
+.btn:disabled { opacity: .55; cursor: default; }

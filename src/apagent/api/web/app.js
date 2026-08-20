@@ -351,8 +351,14 @@ function renderDetail(c) {
     <div class="head">
       <div><div class="crumb">Invoices / ${esc(c.invoice_id)}</div><h2>Invoice detail</h2></div>
       <div class="actions">
-        ${dec && dec.action === "APPROVE" ? `<button class="btn primary">Confirm payment</button>` : ""}
-        <button class="btn">Send to human</button>
+        ${dec && dec.action === "APPROVE"
+          ? (c.human_review === "confirmed"
+            ? `<button class="btn primary" disabled>✓ Payment confirmed</button>`
+            : `<button class="btn primary" id="confirm">Confirm payment</button>`)
+          : ""}
+        ${c.human_review === "sent_to_human"
+          ? `<button class="btn" disabled>✓ Sent to human</button>`
+          : `<button class="btn" id="send">Send to human</button>`}
         <button class="btn" id="rerun">Re-run</button>
         <button class="btn" id="back">← Back</button>
       </div>
@@ -363,7 +369,9 @@ function renderDetail(c) {
         <div class="top">
           <div class="lf"><span class="pill ${a.cls}">${dec ? dec.action : "PENDING"}</span>
             <span class="verdict">${a.verb}</span>
-            ${override ? `<span class="badge-override">Code override</span>` : ""}</div>
+            ${override ? `<span class="badge-override">Code override</span>` : ""}
+            ${c.human_review === "confirmed" ? `<span class="badge-human ok">✓ Confirmed by reviewer</span>` : ""}
+            ${c.human_review === "sent_to_human" ? `<span class="badge-human mid">With human reviewer</span>` : ""}</div>
           <div class="conf"><div class="c1" style="color:${a.accent}">Gates ${passed} / ${c.guardrails.length} passed</div>
             ${dec ? `<div class="c2 num">Model confidence ${dec.confidence}</div>` : ""}</div>
         </div>
@@ -389,6 +397,15 @@ function renderDetail(c) {
     </div>`;
   document.getElementById("back").addEventListener("click", () => { setActiveNav(); dashboard(); });
   document.getElementById("rerun").addEventListener("click", (e) => rerun(c.invoice_id, e.target));
+  const post = async (path, btn) => {
+    btn.disabled = true;
+    try { renderDetail(await api(`/api/invoices/${c.invoice_id}/${path}`, { method: "POST" })); }
+    catch { btn.disabled = false; btn.textContent = "Refused by code (retry)"; }
+  };
+  const confirmBtn = document.getElementById("confirm");
+  if (confirmBtn) confirmBtn.addEventListener("click", (e) => post("confirm", e.target));
+  const sendBtn = document.getElementById("send");
+  if (sendBtn) sendBtn.addEventListener("click", (e) => post("send-to-human", e.target));
   document.querySelectorAll(".raw-t").forEach((el) => el.addEventListener("click", () => {
     const pre = document.getElementById("raw-" + el.dataset.i);
     pre.hidden = !pre.hidden;

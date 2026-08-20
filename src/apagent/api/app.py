@@ -66,6 +66,26 @@ def run_invoice(invoice_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
 
 
+@app.post("/api/invoices/{invoice_id}/confirm")
+def confirm_payment(invoice_id: str) -> dict:
+    """Human sign-off on an APPROVEd invoice. Code re-checks the
+    precondition; a non-APPROVE is refused with 409."""
+    try:
+        return get_service().confirm_payment(invoice_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+
+
+@app.post("/api/invoices/{invoice_id}/send-to-human")
+def send_to_human(invoice_id: str) -> dict:
+    try:
+        return get_service().send_to_human(invoice_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(WEB / "index.html")
