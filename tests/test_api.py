@@ -53,3 +53,21 @@ def test_metrics_shape():
     assert m["total"] == 22
     assert set(m["distribution"]) == {"APPROVE", "HOLD", "EMAIL", "ESCALATE"}
     assert 0 <= m["stp_pct"] <= 100
+
+
+def test_analytics_scorecard_covers_every_planted_defect():
+    a = Service().analytics()
+    assert len(a["defects"]) == 7
+    assert all(c["verdict"] == "pass" for c in a["defects"])
+    assert a["clean_total"] == 15
+    assert a["metrics"]["false_approve_count"] == 0
+    assert len(a["vendors"]) == 6
+
+
+def test_config_reports_the_enforced_policy():
+    k = Service().config_info()
+    assert k["tolerances"]["unit_price_pct"] == 2.0
+    assert k["tolerances"]["manual_review_threshold_cents"] == 500_000
+    by_id = {v["vendor_id"]: v["allowance_pct"] for v in k["contract_allowances"]}
+    assert by_id["V005"] == 5.0  # the headline case's negotiated allowance
+    assert k["actions"] == ["APPROVE", "HOLD", "EMAIL", "ESCALATE"]

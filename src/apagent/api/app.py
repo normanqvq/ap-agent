@@ -32,6 +32,18 @@ def schedule() -> dict:
     return get_service().schedule()
 
 
+@app.get("/api/analytics")
+def analytics() -> dict:
+    """The eval scorecard and per-vendor rollup."""
+    return get_service().analytics()
+
+
+@app.get("/api/config")
+def config() -> dict:
+    """The code-enforced policy, read-only."""
+    return get_service().config_info()
+
+
 @app.get("/api/invoices")
 def list_invoices() -> list[dict]:
     return get_service().list_cases()

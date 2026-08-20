@@ -210,3 +210,11 @@ body {
 .subrow b { color: var(--ink); font-weight: 500; }
 .late-tag { margin-left: 6px; padding: 1px 8px; border-radius: 999px;
   background: var(--red-bg); color: var(--red); font-size: 11px; font-weight: 600; }
+
+/* Analytics + Settings */
+.verdict-chip { padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.verdict-chip.ok  { background: var(--green-bg); color: var(--green); }
+.verdict-chip.bad { background: var(--red-bg); color: var(--red); }
+.verdict-chip.mid { background: var(--amber-bg); color: var(--amber); }
+.code-chip { padding: 2px 8px; border-radius: 6px; background: var(--accent-bg); color: var(--accent);
+  border: 1px solid var(--accent-border); font-size: 10.5px; font-weight: 600; }

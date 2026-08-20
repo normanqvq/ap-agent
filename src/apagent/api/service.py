@@ -13,6 +13,7 @@ moment.
 """
 
 import json
+import os
 from pathlib import Path
 
 from apagent.agent.ap_tools import build_registry, hard_duplicates, recheck_with_contract
@@ -176,6 +177,93 @@ class Service:
             as_of,
             vendor_names=self.store.vendors(),
         )
+
+    def analytics(self) -> dict:
+        """The eval scorecard and per-vendor rollup for the Analytics view.
+
+        Same evaluate() the CLI and the CI gate use — the page shows the
+        measured numbers, not a separate hand-maintained copy of them.
+        """
+        manifest = json.loads(MANIFEST.read_text())
+        report = evaluate(manifest, self._cache)
+        notes = {e["invoice_id"]: e["notes"] for e in manifest}
+        defects = [
+            {**c, "notes": notes.get(c["invoice_id"], "")}
+            for c in report["cases"]
+            if c["defect"] != "clean"
+        ]
+        clean = [c for c in report["cases"] if c["defect"] == "clean"]
+
+        vendors = []
+        names = self.store.vendors()
+        for vendor_id in sorted(names):
+            invs = self.store.invoices_for_vendor(vendor_id)
+            approved = [
+                i for i in invs if (self._cache.get(i.doc_id) or {}).get("action") == "APPROVE"
+            ]
+            totals: dict[str, int] = {}
+            approved_totals: dict[str, int] = {}
+            for i in invs:
+                totals[i.currency] = totals.get(i.currency, 0) + (i.total_cents or 0)
+            for i in approved:
+                cur = i.currency
+                approved_totals[cur] = approved_totals.get(cur, 0) + (i.total_cents or 0)
+            vendors.append(
+                {
+                    "vendor_id": vendor_id,
+                    "vendor_name": names[vendor_id],
+                    "invoice_count": len(invs),
+                    "approved_count": len(approved),
+                    "billed_totals": dict(sorted(totals.items())),
+                    "approved_totals": dict(sorted(approved_totals.items())),
+                }
+            )
+
+        return {
+            "metrics": report["metrics"],
+            "distribution": self.metrics()["distribution"],
+            "defects": defects,
+            "clean_total": len(clean),
+            "clean_approved": sum(1 for c in clean if c["action"] == "APPROVE"),
+            "friction": report["friction"],
+            "vendors": vendors,
+        }
+
+    def config_info(self) -> dict:
+        """The policy the code enforces, for the (read-only) Settings view.
+
+        Deliberately not editable from the web: every limit here lives in
+        version-controlled code, so changing one is a reviewed commit, not
+        a click. The page shows the policy; it does not own it.
+        """
+        from apagent.retrieval.search import price_variance_allowance
+
+        names = self.store.vendors()
+        allowances = []
+        for vendor_id in sorted(names):
+            found = price_variance_allowance(list(self._chunks()), vendor_id)
+            allowances.append(
+                {
+                    "vendor_id": vendor_id,
+                    "vendor_name": names[vendor_id],
+                    "allowance_pct": found[0] if found else None,
+                    "source": found[1].source if found else None,
+                }
+            )
+        c = self.config
+        return {
+            "provider": os.getenv("LLM_PROVIDER", "deepseek"),
+            "tolerances": {
+                "unit_price_pct": c.unit_price_pct,
+                "total_abs_cents": c.total_abs_cents,
+                "total_pct": c.total_pct,
+                "qty_exact": c.qty_exact,
+                "manual_review_threshold_cents": c.manual_review_threshold_cents,
+            },
+            "contract_allowances": allowances,
+            "schedule": {"as_of": DEMO_AS_OF, "run_day": "Friday"},
+            "actions": [a.value for a in Action],
+        }
 
     _chunks_cache = None
 

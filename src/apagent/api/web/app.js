@@ -60,7 +60,7 @@ function toolSummary(t) {
 const prettyRaw = (s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } };
 
 // --- navigation ------------------------------------------------------------
-const VIEWS = { dashboard, payments };
+const VIEWS = { dashboard, payments, analytics, settings };
 document.querySelectorAll(".nav a[data-view]").forEach((a) =>
   a.addEventListener("click", () => { setActiveNav(a); (VIEWS[a.dataset.view] || dashboard)(); }));
 function setActiveNav(el) {
@@ -182,6 +182,126 @@ async function payments() {
     </div>`;
   view.querySelectorAll("[data-id]").forEach((el) =>
     el.addEventListener("click", () => detail(el.dataset.id)));
+}
+
+// --- analytics -------------------------------------------------------------
+const DEFECT_EN = {
+  price_variance: "Price variance beyond tolerance",
+  price_variance_within_contract: "Price within contract allowance",
+  missing_grn: "No goods receipt",
+  prompt_injection: "Prompt injection",
+  partial_delivery: "Partial delivery billed in full",
+  duplicate: "Duplicate invoice",
+  missing_po_ref: "Missing PO reference",
+};
+const VERDICT_EN = {
+  pass: { cls: "ok", text: "✓ handled correctly" },
+  false_approve: { cls: "bad", text: "✗ FALSE APPROVE" },
+  friction: { cls: "mid", text: "friction — safe" },
+  missing: { cls: "mid", text: "not run" },
+};
+
+async function analytics() {
+  view.innerHTML = `<div class="placeholder">Loading…</div>`;
+  const a = await api("/api/analytics");
+  const m = a.metrics, d = a.distribution;
+  const maxN = Math.max(1, ...Object.values(d));
+  const bar = (label, n, color) =>
+    `<div class="bar"><span class="bl">${label}</span><span class="bk" style="width:${Math.max(8, n / maxN * 190)}px;background:${color}"></span><span class="bc num">${n}</span></div>`;
+
+  view.innerHTML = `
+    <div class="head">
+      <div><h1>Analytics</h1><div class="sub">Every number on this page is measured by the eval harness against the manifest ground truth — not asserted.</div></div>
+    </div>
+    <div class="kpis">
+      <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.total} invoices</div></div>
+      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE + HOLD / ${m.total}</div></div>
+      <div class="card kpi ${m.false_approve_count ? "warn" : "good"}"><div class="l">False approvals</div><div class="v num">${m.false_approve_count}</div><div class="s">${m.false_approve_count ? "Zero-tolerance · TARGET BROKEN" : "every planted defect blocked"}</div></div>
+      <div class="card kpi"><div class="l">Friction</div><div class="v num">${m.friction_count}</div><div class="s">payable but held — safe, costs STP</div></div>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="card-h"><h3>Planted-defect scorecard</h3><span class="runtotal">ground truth: manifest.json</span></div>
+        ${a.defects.map((c) => {
+          const act = ACT[c.action] || ACT.null;
+          const v = VERDICT_EN[c.verdict] || VERDICT_EN.missing;
+          return `<div class="row" data-id="${esc(c.invoice_id)}">
+            <div class="rl"><b>${DEFECT_EN[c.defect] || esc(c.defect.replace(/_/g, " "))}</b><small>${esc(c.invoice_id)}</small></div>
+            <div class="rr"><span class="pill ${act.cls}">${c.action || "PENDING"}</span>
+              <span class="verdict-chip ${v.cls}">${v.text}</span></div>
+          </div>`;
+        }).join("")}
+        <div class="row"><div class="rl"><b>Clean invoices (control group)</b><small>${a.clean_total} invoices with nothing planted</small></div>
+          <div class="rr"><span class="verdict-chip ok">✓ ${a.clean_approved} approved straight through</span>
+            ${a.clean_total - a.clean_approved ? `<span class="verdict-chip mid">${a.clean_total - a.clean_approved} friction</span>` : ""}</div></div>
+      </div>
+      <div class="card dist">
+        <h3>Decision mix</h3>
+        ${bar("APPROVE", d.APPROVE, "var(--green)")}
+        ${bar("HOLD", d.HOLD, "var(--amber)")}
+        ${bar("ESCALATE", d.ESCALATE, "var(--red)")}
+        ${bar("EMAIL", d.EMAIL, "var(--accent)")}
+        <div class="cap num">${m.decided} / ${m.total} decided</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>By vendor</h3><span class="runtotal">billed vs approved for payment</span></div>
+      ${a.vendors.map((v) => `
+        <div class="row payrow">
+          <div class="rl"><b>${esc(v.vendor_name)}</b><small>${esc(v.vendor_id)} · ${v.invoice_count} invoice${plural(v.invoice_count)}, ${v.approved_count} approved</small></div>
+          <div class="rr"><span class="amt num">${fmtTotals(v.approved_totals)}</span>
+            <span class="reason num" style="width:auto">of ${fmtTotals(v.billed_totals)}</span></div>
+        </div>`).join("")}
+    </div>`;
+  view.querySelectorAll("[data-id]").forEach((el) =>
+    el.addEventListener("click", () => detail(el.dataset.id)));
+}
+
+// --- settings --------------------------------------------------------------
+async function settings() {
+  view.innerHTML = `<div class="placeholder">Loading…</div>`;
+  const c = await api("/api/config");
+  const t = c.tolerances;
+  const setting = (label, value, note) => `
+    <div class="row payrow">
+      <div class="rl"><b>${label}</b><small>${note}</small></div>
+      <div class="rr"><span class="amt num">${value}</span><span class="code-chip">code</span></div>
+    </div>`;
+
+  view.innerHTML = `
+    <div class="head">
+      <div><h1>Settings</h1><div class="sub">Read-only. Every limit lives in version-controlled code — changing one is a reviewed commit, not a click.</div></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Decision policy</h3><span class="runtotal">enforced by the six code gates, never by the prompt</span></div>
+      ${setting("Unit-price tolerance", `±${t.unit_price_pct}%`, "vs the PO price; a vendor contract can widen it (below)")}
+      ${setting("Invoice-total tolerance", `${(t.total_abs_cents / 100).toFixed(2)} and ${t.total_pct}%`, "a total must sit inside both the absolute and the percentage bound")}
+      ${setting("Quantity", t.qty_exact ? "exact match" : "tolerance", "quantity gaps are never noise — they mean goods did not arrive")}
+      ${setting("Manual-review threshold", money(t.manual_review_threshold_cents), "at or above this a human signs off, even on a perfectly clean match")}
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Contract allowances</h3><span class="runtotal">parsed from the contract text by code — the % never passes through the model</span></div>
+      ${c.contract_allowances.map((v) => `
+        <div class="row payrow">
+          <div class="rl"><b>${esc(v.vendor_name)}</b><small>${v.source ? esc(v.source) : "no price-variance clause on file"}</small></div>
+          <div class="rr"><span class="amt num">${v.allowance_pct != null ? "+" + v.allowance_pct + "%" : `default ±${t.unit_price_pct}%`}</span></div>
+        </div>`).join("")}
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="card-h"><h3>Agent runtime</h3></div>
+        ${setting("LLM provider", esc(c.provider), "judgement and extraction; swap with LLM_PROVIDER, the guardrails do not move")}
+        <div class="row payrow">
+          <div class="rl"><b>Actions</b><small>a four-value enum — the model cannot invent a fifth</small></div>
+          <div class="rr">${c.actions.map((x) => `<span class="pill ${(ACT[x] || ACT.null).cls}">${x}</span>`).join(" ")}</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Payment runs</h3></div>
+        ${setting("Run day", c.schedule.run_day, "one batch per week, one transfer per vendor per currency")}
+        ${setting("Planned as of", c.schedule.as_of, "fixed demo date so the plan is deterministic and offline")}
+      </div>
+    </div>`;
 }
 
 // --- detail ----------------------------------------------------------------

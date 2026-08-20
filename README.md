@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-135%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-137%20passing-16A34A)
 
 An AI accounts-payable agent that reviews a supplier invoice, three-way matches it against the purchase order and goods receipt, checks tolerances and the supplier's contract, and recommends a payment action — with the full trail of every tool call and every code guardrail on display.
 
@@ -42,6 +42,10 @@ Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 **Invoice detail** — a colour-coded decision banner with the six guardrail chips (and a *Code override* badge when code overruled the model), the **glass-box tool trail** (one plain-language line per tool call, raw JSON one click away, the contract re-check step flagged as code-executed), the three-way reconciliation table with the flagged cell highlighted, and the rationale as numbered points.
 
 **Payments** — the weekly pay-run plan built from the agent's decisions: one card per Friday run with one merged transfer per vendor per currency (totals are per-currency — cents in different currencies are never added together), past-due invoices flagged and released first, and a *Not scheduled* list showing every withheld invoice with its reason — the money that did **not** move, and why.
+
+**Analytics** — the eval harness on screen: the planted-defect scorecard (each defect, the agent's decision, and its measured verdict against the manifest ground truth), the clean control group, the decision mix, and a per-vendor billed-vs-approved rollup. Every number is measured, not asserted.
+
+**Settings** — the policy, read-only: the tolerance limits and the manual-review threshold the six gates enforce, each vendor's code-parsed contract allowance with its source file, the four-value action enum, and the pay-run calendar. Deliberately not editable from the web — every limit lives in version-controlled code, so changing one is a reviewed commit, not a click.
 
 The dashboard reads a decisions cache (`data/synthetic/decisions.json`) so it is instant and works offline; *Re-run* on a detail page runs the agent live.
 
@@ -125,7 +129,7 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 135 offline tests, no API key needed
+pytest                                    # 137 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
@@ -149,7 +153,7 @@ src/apagent/
 └── scheduling/       # weekly payment runs: pay late but never late, only APPROVE moves money
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
-tests/                # 135 offline tests
+tests/                # 137 offline tests
 docs/                 # gap analysis / task list
 ```
 
