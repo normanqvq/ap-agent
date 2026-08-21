@@ -129,18 +129,26 @@ def match_vendor_id(printed_name: str, vendors: dict[str, str]) -> str:
 
     def normalize(name: str) -> str:
         name = name.lower()
-        # Legal-form suffixes carry no identity and differ across documents
-        for noise in ("pte. ltd.", "pte ltd", "sdn. bhd.", "sdn bhd", "inc.", "inc"):
-            name = name.replace(noise, "")
+        # Legal-form suffixes carry no identity and differ across documents.
+        # Strip them on WORD boundaries — a plain substring replace would eat
+        # "inc" out of "Prince" and collapse distinct vendors to one string.
+        name = re.sub(r"\b(pte\.?\s*ltd\.?|sdn\.?\s*bhd\.?|inc\.?)\b", "", name)
         return re.sub(r"[^a-z0-9 ]", "", name).strip()
 
     target = normalize(printed_name)
-    best_id, best_score = "UNKNOWN", 0.0
+    # Track the two best scores: a confident match must not only clear the
+    # floor but also stand clearly ahead of the runner-up, or a one-typo name
+    # sitting between two close canonicals would resolve to a coin-flip id.
+    best_id, best_score, runner_up = "UNKNOWN", 0.0, 0.0
     for vendor_id, canonical in vendors.items():
         score = difflib.SequenceMatcher(None, target, normalize(canonical)).ratio()
         if score > best_score:
-            best_id, best_score = vendor_id, score
-    return best_id if best_score >= 0.75 else "UNKNOWN"
+            best_id, best_score, runner_up = vendor_id, score, best_score
+        elif score > runner_up:
+            runner_up = score
+    if best_score < 0.75 or best_score - runner_up < 0.05:
+        return "UNKNOWN"
+    return best_id
 
 
 def extract_invoice(

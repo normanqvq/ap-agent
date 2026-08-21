@@ -122,6 +122,11 @@ def pair_lines(
         # cost = 1 - similarity, because the solver minimizes
         cost = [[1.0 - _similarity(po_left[p], inv_left[i]) for i in inv_nos] for p in po_nos]
         row_idx, col_idx = linear_sum_assignment(cost)
+        # The floor is applied AFTER the global-optimal assignment, so a pair
+        # the optimizer picked but that falls below the floor is dropped, not
+        # re-assigned. That errs toward "unmatched" — the safe direction here,
+        # since an unmatched invoice line trips the no-unordered-lines
+        # guardrail rather than being waved through as a confident pairing.
         for r, c in zip(row_idx, col_idx, strict=True):
             if 1.0 - cost[r][c] >= PAIR_SIMILARITY_FLOOR:
                 pairs.append((po_nos[r], inv_nos[c]))

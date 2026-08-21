@@ -169,8 +169,20 @@ function composer({ to, subject, body, sendLabel, onSend }) {
 
 // --- navigation ------------------------------------------------------------
 const VIEWS = { dashboard, invoices, payments, outbox, analytics, settings };
+// A deferred "land on another page after the badge shows" timer. Any manual
+// navigation cancels it, so a user who clicks away is never yanked back.
+let pendingNav = null;
+function cancelPendingNav() { if (pendingNav) { clearTimeout(pendingNav); pendingNav = null; } }
+function navSoon(view, fn, ms) {
+  cancelPendingNav();
+  pendingNav = setTimeout(() => {
+    pendingNav = null;
+    setActiveNav(document.querySelector(`.nav a[data-view="${view}"]`));
+    fn();
+  }, ms);
+}
 document.querySelectorAll(".nav a[data-view]").forEach((a) =>
-  a.addEventListener("click", () => { setActiveNav(a); (VIEWS[a.dataset.view] || dashboard)(); }));
+  a.addEventListener("click", () => { cancelPendingNav(); setActiveNav(a); (VIEWS[a.dataset.view] || dashboard)(); }));
 function setActiveNav(el) {
   document.querySelectorAll(".nav a").forEach((a) => a.classList.remove("active"));
   (el || document.querySelector(".nav a")).classList.add("active");
@@ -359,7 +371,7 @@ async function payments(highlightId) {
           <div class="rl"><b>${esc(r.invoice_id)}</b><small>${esc(r.vendor_name)}</small></div>
           <div class="rr"><span class="amt num">${money(r.total_cents, r.currency)}</span>
             <span class="mailmeta num">by ${esc(r.confirmed_by)} · ${esc(r.confirmed_at.slice(11, 16))}</span>
-            <span class="badge-human ok">Paid ✓</span></div>
+            ${r.voided ? `<span class="badge-human mid">Voided · re-decided</span>` : `<span class="badge-human ok">Paid ✓</span>`}</div>
         </div>`).join("")}
     </div>` : ""}
     ${plan.runs.map(runCard).join("")}
@@ -391,7 +403,7 @@ async function outbox() {
     <div class="card">${list.length ? list.map((m) => `
       <details class="mail">
         <summary>
-          <span class="pill ${m.kind === "handoff" ? "hold" : "appr"}">${m.kind === "handoff" ? "INTERNAL" : "VENDOR"}</span>
+          <span class="pill ${m.kind === "vendor_query" ? "appr" : "hold"}">${m.kind === "vendor_query" ? "VENDOR" : "INTERNAL"}</span>
           <b>${esc(m.subject)}</b>
           <span class="mailmeta num">to ${esc(m.to)} · by ${esc(m.sent_by)} · ${esc(m.sent_at.slice(11, 16))}</span>
         </summary>
@@ -521,6 +533,7 @@ async function settings() {
 
 // --- detail ----------------------------------------------------------------
 async function detail(id) {
+  cancelPendingNav();  // a row click cancels any pending post-action navigation
   setActiveNav(document.querySelectorAll(".nav a")[1]);
   view.innerHTML = `<div class="placeholder">Loading ${esc(id)}…</div>`;
   const c = await api(`/api/invoices/${id}`);
@@ -610,7 +623,7 @@ function renderDetail(c) {
         ${dec && dec.outbound_message ? `<div class="card outbound"><h3>System-generated outbound message (template)</h3><p>${esc(dec.outbound_message)}</p><button class="btn" id="email-vendor">Open in email composer</button></div>` : ""}
       </div>
     </div>`;
-  document.getElementById("back").addEventListener("click", () => { setActiveNav(); dashboard(); });
+  document.getElementById("back").addEventListener("click", () => { cancelPendingNav(); setActiveNav(); dashboard(); });
   document.getElementById("rerun").addEventListener("click", (e) => rerun(c.invoice_id, e.target));
   const confirmBtn = document.getElementById("confirm");
   if (confirmBtn) confirmBtn.addEventListener("click", async (e) => {
@@ -620,33 +633,27 @@ function renderDetail(c) {
       toast(`Payment confirmed — ${c.invoice_id}`);
       // A confirmed payment's natural next question is "when does it go
       // out?" — land on the pay-run plan with this invoice highlighted.
-      setTimeout(() => {
-        setActiveNav(document.querySelector('.nav a[data-view="payments"]'));
-        payments(c.invoice_id);
-      }, 800);
+      navSoon('payments', () => payments(c.invoice_id), 800);
     } catch { e.target.disabled = false; e.target.textContent = "Refused by code (retry)"; }
   });
   // Both sends land on the Outbox — the visible answer to "where did it go".
-  const goOutbox = () => setTimeout(() => {
-    setActiveNav(document.querySelector('.nav a[data-view="outbox"]'));
-    outbox();
-  }, 700);
+  const goOutbox = () => navSoon('outbox', outbox, 700);
   const sendBtn = document.getElementById("send");
   if (sendBtn) sendBtn.addEventListener("click", () => composer({
     ...c.handoff_draft,
     onSend: async () => {
-      await api(`/api/invoices/${c.invoice_id}/send-to-human`, { method: "POST" });
+      renderDetail(await api(`/api/invoices/${c.invoice_id}/send-to-human`, { method: "POST" }));
       toast(`Sent to human reviewer — ${c.invoice_id}`);
       goOutbox();
     },
   }));
   const vendorBtn = document.getElementById("email-vendor");
   if (vendorBtn) vendorBtn.addEventListener("click", () => composer({
-    to: `billing@${c.vendor_id.toLowerCase()}.example.com`,
-    subject: `Query on invoice ${c.invoice_id}`,
+    to: c.outbound_to || "operations",
+    subject: c.outbound_to && c.outbound_to.startsWith("billing@") ? `Query on invoice ${c.invoice_id}` : `[${c.invoice_id}] Action needed`,
     body: dec.outbound_message,
     onSend: async () => {
-      await api(`/api/invoices/${c.invoice_id}/email-vendor`, { method: "POST" });
+      renderDetail(await api(`/api/invoices/${c.invoice_id}/send-message`, { method: "POST" }));
       toast("Recorded in Outbox — demo build, no SMTP");
       goOutbox();
     },

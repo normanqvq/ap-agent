@@ -274,3 +274,26 @@ def test_dataset_injection_case_price_delta_unaffected_by_text(dataset):
     price_rows = [d for d in result.discrepancies if d.field == DiscrepancyField.UNIT_PRICE]
     assert len(price_rows) == 1
     assert price_rows[0].delta_pct == pytest.approx(10.0, abs=0.1)
+
+
+def test_pair_lines_finds_the_optimal_not_greedy_assignment():
+    """When items print no SKU, greedy nearest-neighbour can chain-steal a
+    line's best match; the Hungarian assignment must find the global optimum.
+    Here greedy pairs (1,1) first and forces line 2 into a worse match, while
+    the optimal assignment keeps both lines on their true counterpart."""
+    po = [line(1, None, "premium copy paper a4 ream"), line(2, None, "copy paper a4")]
+    inv = [line(1, None, "copy paper a4 ream"), line(2, None, "copy paper a4")]
+    pairs, un_po, un_inv = pair_lines(po, inv)
+    assert pairs == [(1, 1), (2, 2)]
+    assert un_po == [] and un_inv == []
+
+
+def test_pair_lines_drops_below_floor_pair_to_unmatched():
+    """A pair the optimizer picks but that falls below the similarity floor
+    is reported as unmatched — the safe direction, which trips the
+    no-unordered-lines guardrail rather than a false confident pairing."""
+    po = [line(1, None, "hex bolt m8 stainless")]
+    inv = [line(1, None, "office chair mesh back")]
+    pairs, un_po, un_inv = pair_lines(po, inv)
+    assert pairs == []
+    assert un_po == [1] and un_inv == [1]

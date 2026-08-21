@@ -104,8 +104,13 @@ class Service:
         self._cache[invoice_id] = decision.model_dump()
         # A re-run is a NEW decision: any human sign-off belonged to the old
         # one and is void — otherwise a "confirmed" badge could outlive the
-        # APPROVE it certified.
-        self._human.pop(invoice_id, None)
+        # APPROVE it certified. Mark the recorded payment as voided too, so
+        # the payment log stops asserting "Paid" for a decision that changed.
+        if self._human.pop(invoice_id, None) == "confirmed":
+            for entry in reversed(self._payment_record):
+                if entry["invoice_id"] == invoice_id and not entry["voided"]:
+                    entry["voided"] = True
+                    break
         self._save_cache()
         return self.get_case(invoice_id)
 
@@ -186,6 +191,7 @@ class Service:
                 invoice.doc_id, decision.get("action") if decision else None
             ),
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
+            "outbound_to": self.outbound_recipient(invoice.doc_id),
         }
 
     def metrics(self) -> dict:
@@ -279,7 +285,15 @@ class Service:
         decision = self._cache.get(invoice_id)
         if decision is None or decision["action"] != Action.APPROVE:
             raise ValueError("only an APPROVEd invoice can be confirmed for payment")
+        # Idempotent on the RECORD, not on _human: send_to_human can
+        # overwrite the human state, so the real "already paid" signal is an
+        # existing un-voided payment row for this invoice, not the badge.
         self._human[invoice_id] = "confirmed"
+        already_recorded = any(
+            e["invoice_id"] == invoice_id and not e["voided"] for e in self._payment_record
+        )
+        if already_recorded:
+            return self.get_case(invoice_id)
         self._payment_record.append(
             {
                 "invoice_id": invoice_id,
@@ -288,6 +302,7 @@ class Service:
                 "total_cents": invoice.total_cents,
                 "confirmed_by": actor,
                 "confirmed_at": datetime.now().isoformat(timespec="seconds"),
+                "voided": False,
             }
         )
         return self.get_case(invoice_id)
@@ -303,22 +318,48 @@ class Service:
         self._record_sent(invoice_id, "handoff", draft, actor)
         return self.get_case(invoice_id)
 
-    def email_vendor(self, invoice_id: str, actor: str = "reviewer") -> dict:
-        """Record the system-generated vendor query in the outbox. Only
-        possible when the DECISION carries an outbound message — there is
-        no path for free-text vendor email."""
+    def send_outbound(self, invoice_id: str, actor: str = "reviewer") -> dict:
+        """Record the decision's system-generated message in the outbox.
+
+        The recipient is decided by CODE from the action, not by the button:
+        an EMAIL action is a vendor query (billing@vendor); a HOLD carries an
+        internal operations note, so it goes to operations — never leaking an
+        internal note to the counterparty. Only possible when the decision
+        carries an outbound message; there is no free-text path.
+        """
         invoice = self.store.get_invoice(invoice_id)
         if invoice is None:
             raise KeyError(invoice_id)
-        message = (self._cache.get(invoice_id) or {}).get("outbound_message")
+        decision = self._cache.get(invoice_id) or {}
+        message = decision.get("outbound_message")
         if not message:
-            raise ValueError("this invoice has no system-generated vendor message")
-        draft = {
-            "to": f"billing@{invoice.vendor_id.lower()}.example.com",
-            "subject": f"Query on invoice {invoice_id}",
-            "body": message,
-        }
-        return self._record_sent(invoice_id, "vendor_query", draft, actor)
+            raise ValueError("this invoice has no system-generated message")
+        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
+        if decision.get("action") == Action.EMAIL:
+            to, kind, subject = (
+                f"billing@{invoice.vendor_id.lower()}.example.com",
+                "vendor_query",
+                f"Query on invoice {invoice_id}",
+            )
+        else:  # internal operations note (HOLD)
+            to, kind, subject = (
+                "ap-supervisor@demo.local",
+                "ops_note",
+                f"[{invoice_id}] Action needed — {vendor_name}",
+            )
+        self._record_sent(invoice_id, kind, {"to": to, "subject": subject, "body": message}, actor)
+        return self.get_case(invoice_id)
+
+    def outbound_recipient(self, invoice_id: str) -> str | None:
+        """Where the decision's outbound message would go — for the composer
+        preview. Same code path that send_outbound enforces."""
+        invoice = self.store.get_invoice(invoice_id)
+        decision = self._cache.get(invoice_id) or {}
+        if invoice is None or not decision.get("outbound_message"):
+            return None
+        if decision.get("action") == Action.EMAIL:
+            return f"billing@{invoice.vendor_id.lower()}.example.com"
+        return "ap-supervisor@demo.local"
 
     def _record_sent(self, invoice_id: str, kind: str, draft: dict, actor: str) -> dict:
         entry = {

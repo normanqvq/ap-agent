@@ -125,15 +125,25 @@ def test_send_to_human_records_the_handoff_in_the_outbox():
     assert "rendered by code" in sent[0]["body"]
 
 
-def test_email_vendor_only_sends_the_system_message():
-    """Vendor email exists only when the decision carries an outbound
-    message — there is no free-text path."""
+def test_send_outbound_routes_internal_notes_to_operations():
+    """A HOLD's message is an internal ops note — it must go to operations,
+    never to the vendor's billing address (no internal-status leak)."""
     svc = Service()
-    entry = svc.email_vendor("INV-V006-3019", actor="Norman")  # HOLD with outbound
-    assert entry["kind"] == "vendor_query"
-    assert entry["to"] == "billing@v006.example.com"
+    svc.send_outbound("INV-V006-3019", actor="Norman")  # HOLD/AWAITING_GRN
+    sent = svc.outbox()[0]
+    assert sent["kind"] == "ops_note"
+    assert sent["to"] == "ap-supervisor@demo.local"
+    assert "billing@" not in sent["to"]
+    assert svc.outbound_recipient("INV-V006-3019") == "ap-supervisor@demo.local"
+
+
+def test_send_outbound_requires_a_system_message():
+    """No free-text path: an invoice whose decision carries no outbound
+    message cannot send anything."""
+    svc = Service()
     with pytest.raises(ValueError):
-        svc.email_vendor("INV-V001-3001")  # clean APPROVE, no outbound message
+        svc.send_outbound("INV-V001-3001")  # clean APPROVE, no outbound message
+    assert svc.outbound_recipient("INV-V001-3001") is None
 
 
 def test_confirm_writes_the_payment_record():
@@ -145,6 +155,71 @@ def test_confirm_writes_the_payment_record():
     assert rec[0]["invoice_id"] == "INV-V001-3001"
     assert rec[0]["confirmed_by"] == "Norman"
     assert rec[0]["currency"] == "SGD"
+    assert rec[0]["voided"] is False
+
+
+def test_confirm_is_idempotent():
+    """A double-POST must not log a second payment for the same sign-off."""
+    svc = Service()
+    svc.confirm_payment("INV-V001-3001")
+    svc.confirm_payment("INV-V001-3001")
+    svc.confirm_payment("INV-V001-3001")
+    assert len(svc.schedule()["payment_record"]) == 1
+
+
+def test_confirm_stays_single_row_across_send_to_human():
+    """The idempotency guard keys on the record, not the (clobberable)
+    human badge: confirm -> send-to-human -> confirm is still one payment."""
+    svc = Service()
+    svc.confirm_payment("INV-V001-3001")
+    svc.send_to_human("INV-V001-3001")  # overwrites _human to sent_to_human
+    svc.confirm_payment("INV-V001-3001")
+    assert len(svc.schedule()["payment_record"]) == 1
+
+
+def test_rerun_voids_the_payment_record(monkeypatch):
+    """When a re-run changes the decision, the payment record stops
+    asserting 'Paid' — it is marked voided, not silently kept."""
+    import apagent.api.service as service_module
+
+    svc = Service()
+    svc.confirm_payment("INV-V001-3001")
+
+    class HoldDecision:
+        def model_dump(self):
+            return {"invoice_id": "INV-V001-3001", "action": "HOLD", "hold_reason": "AWAITING_GRN"}
+
+    monkeypatch.setattr(service_module, "decide_invoice", lambda *a, **k: HoldDecision())
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)
+    svc.run_case("INV-V001-3001")
+    rec = svc.schedule()["payment_record"]
+    assert len(rec) == 1 and rec[0]["voided"] is True
+
+
+def test_outbox_endpoint_auth_and_ordering():
+    client = _signed_in_client()
+    assert client.get("/api/outbox").json() == []
+    client.post("/api/invoices/INV-V006-3019/send-to-human")
+    client.post("/api/invoices/INV-V006-3019/send-message")
+    box = client.get("/api/outbox").json()
+    assert [m["kind"] for m in box] == ["ops_note", "handoff"]  # newest first
+    assert box[0]["sent_by"] == "Norman"  # session name threaded through
+
+
+def test_send_message_http_mappings():
+    client = _signed_in_client()
+    assert client.post("/api/invoices/INV-V001-3001/send-message").status_code == 409  # no message
+    assert client.post("/api/invoices/INV-NOPE-0000/send-message").status_code == 404
+
+
+def test_outbox_and_send_message_need_a_session():
+    from fastapi.testclient import TestClient
+
+    from apagent.api.app import app
+
+    client = TestClient(app)
+    assert client.get("/api/outbox").status_code == 401
+    assert client.post("/api/invoices/INV-V006-3019/send-message").status_code == 401
 
 
 def test_schedule_marks_confirmed_invoices():

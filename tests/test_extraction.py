@@ -97,6 +97,21 @@ def test_match_vendor_id_says_unknown_below_floor():
     assert match_vendor_id("Totally Different Trading LLC", VENDORS) == "UNKNOWN"
 
 
+def test_match_vendor_id_strips_suffixes_on_word_boundaries():
+    """The legal-suffix strip must not eat 'inc' out of 'Prince' and collapse
+    two distinct vendors onto one normalized string."""
+    directory = {"V1": "Prince Trading Pte Ltd", "V2": "Pre Trading Pte Ltd"}
+    assert match_vendor_id("Prince Trading Pte Ltd", directory) == "V1"
+    assert match_vendor_id("Pre Trading Pte Ltd", directory) == "V2"
+
+
+def test_match_vendor_id_unknown_when_two_canonicals_tie():
+    """A one-typo name sitting between two close canonicals must not resolve
+    to a coin-flip id — an ambiguous best is reported UNKNOWN."""
+    directory = {"E": "Eastern Trading Co", "W": "Western Trading Co"}
+    assert match_vendor_id("estern trading co", directory) == "UNKNOWN"
+
+
 def test_extract_invoice_builds_document(monkeypatch):
     monkeypatch.setattr("apagent.extraction.invoice.call_model", fake_model(json.dumps(GOOD_JSON)))
     doc = extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS)

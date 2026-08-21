@@ -154,12 +154,13 @@ def send_to_human(invoice_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
 
 
-@app.post("/api/invoices/{invoice_id}/email-vendor")
-def email_vendor(invoice_id: str, request: Request) -> dict:
-    """Record the system-generated vendor query in the outbox. 409 when the
-    decision carries no outbound message — free-text email has no path."""
+@app.post("/api/invoices/{invoice_id}/send-message")
+def send_message(invoice_id: str, request: Request) -> dict:
+    """Record the decision's system-generated message in the outbox, routed
+    by code to the vendor (EMAIL) or operations (HOLD). 409 when the decision
+    carries no outbound message — free-text has no path."""
     try:
-        return get_service().email_vendor(invoice_id, _actor(request))
+        return get_service().send_outbound(invoice_id, _actor(request))
     except KeyError:
         raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
     except ValueError as e:
