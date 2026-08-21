@@ -112,6 +112,41 @@ def test_rerun_resets_human_state(monkeypatch):
     assert svc._human == {}
 
 
+def test_send_to_human_records_the_handoff_in_the_outbox():
+    """The outbox is the answer to "where did Send go": the code-templated
+    hand-off email is recorded with who sent it."""
+    svc = Service()
+    svc.send_to_human("INV-V006-3019", actor="Norman")
+    sent = svc.outbox()
+    assert len(sent) == 1
+    assert sent[0]["kind"] == "handoff"
+    assert sent[0]["sent_by"] == "Norman"
+    assert "INV-V006-3019" in sent[0]["subject"]
+    assert "rendered by code" in sent[0]["body"]
+
+
+def test_email_vendor_only_sends_the_system_message():
+    """Vendor email exists only when the decision carries an outbound
+    message — there is no free-text path."""
+    svc = Service()
+    entry = svc.email_vendor("INV-V006-3019", actor="Norman")  # HOLD with outbound
+    assert entry["kind"] == "vendor_query"
+    assert entry["to"] == "billing@v006.example.com"
+    with pytest.raises(ValueError):
+        svc.email_vendor("INV-V001-3001")  # clean APPROVE, no outbound message
+
+
+def test_confirm_writes_the_payment_record():
+    svc = Service()
+    svc.confirm_payment("INV-V001-3001", actor="Norman")
+    plan = svc.schedule()
+    rec = plan["payment_record"]
+    assert len(rec) == 1
+    assert rec[0]["invoice_id"] == "INV-V001-3001"
+    assert rec[0]["confirmed_by"] == "Norman"
+    assert rec[0]["currency"] == "SGD"
+
+
 def test_schedule_marks_confirmed_invoices():
     """The Payments page shows which scheduled invoices a reviewer signed
     off; the annotation lives in the service, the scheduler stays pure."""

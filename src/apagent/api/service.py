@@ -16,6 +16,7 @@ import json
 import os
 import re
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -73,6 +74,14 @@ class Service:
         # they live in the in-memory store, and _save_cache excludes their
         # decisions so the committed demo cache never picks them up.
         self._uploaded: set[str] = set()
+        # Every message the system "sent" this session. Demo build: recorded
+        # here instead of delivered (no SMTP). Bodies are always rebuilt
+        # server-side from the code templates — never accepted from the
+        # client, so nobody can put words in the system's mouth.
+        self._outbox: list[dict] = []
+        # Confirmed payments, newest last: who signed off which invoice,
+        # when, for how much. The "where did my click go" record.
+        self._payment_record: list[dict] = []
 
     # --- decisions cache ---------------------------------------------------
 
@@ -221,6 +230,7 @@ class Service:
                     item["confirmed"] = self._human.get(item["invoice_id"]) == "confirmed"
         for n in plan["not_scheduled"]:
             n["human_review"] = self._human_state(n["invoice_id"], n["action"])
+        plan["payment_record"] = list(reversed(self._payment_record))
         return plan
 
     def upload_invoice(self, filename: str, content: bytes) -> dict:
@@ -255,7 +265,7 @@ class Service:
         self._uploaded.add(doc.doc_id)
         return self.run_case(doc.doc_id)
 
-    def confirm_payment(self, invoice_id: str) -> dict:
+    def confirm_payment(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """A human confirms an APPROVEd invoice for payment.
 
         Code checks the precondition, not the frontend: only an invoice the
@@ -263,20 +273,69 @@ class Service:
         confirmed. Anything else is refused here regardless of what the UI
         sends — same authority rule as everywhere.
         """
-        decision = self._cache.get(invoice_id)
-        if self.store.get_invoice(invoice_id) is None:
+        invoice = self.store.get_invoice(invoice_id)
+        if invoice is None:
             raise KeyError(invoice_id)
+        decision = self._cache.get(invoice_id)
         if decision is None or decision["action"] != Action.APPROVE:
             raise ValueError("only an APPROVEd invoice can be confirmed for payment")
         self._human[invoice_id] = "confirmed"
+        self._payment_record.append(
+            {
+                "invoice_id": invoice_id,
+                "vendor_name": self.store.vendors().get(invoice.vendor_id, invoice.vendor_name),
+                "currency": invoice.currency,
+                "total_cents": invoice.total_cents,
+                "confirmed_by": actor,
+                "confirmed_at": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
         return self.get_case(invoice_id)
 
-    def send_to_human(self, invoice_id: str) -> dict:
-        """Route an invoice to a human reviewer, whatever its state."""
+    def send_to_human(self, invoice_id: str, actor: str = "reviewer") -> dict:
+        """Route an invoice to a human reviewer and record the hand-off
+        email in the outbox. The body comes from the code template in
+        get_case — whatever the client sent is ignored."""
         if self.store.get_invoice(invoice_id) is None:
             raise KeyError(invoice_id)
+        draft = self.get_case(invoice_id)["handoff_draft"]
         self._human[invoice_id] = "sent_to_human"
+        self._record_sent(invoice_id, "handoff", draft, actor)
         return self.get_case(invoice_id)
+
+    def email_vendor(self, invoice_id: str, actor: str = "reviewer") -> dict:
+        """Record the system-generated vendor query in the outbox. Only
+        possible when the DECISION carries an outbound message — there is
+        no path for free-text vendor email."""
+        invoice = self.store.get_invoice(invoice_id)
+        if invoice is None:
+            raise KeyError(invoice_id)
+        message = (self._cache.get(invoice_id) or {}).get("outbound_message")
+        if not message:
+            raise ValueError("this invoice has no system-generated vendor message")
+        draft = {
+            "to": f"billing@{invoice.vendor_id.lower()}.example.com",
+            "subject": f"Query on invoice {invoice_id}",
+            "body": message,
+        }
+        return self._record_sent(invoice_id, "vendor_query", draft, actor)
+
+    def _record_sent(self, invoice_id: str, kind: str, draft: dict, actor: str) -> dict:
+        entry = {
+            "invoice_id": invoice_id,
+            "kind": kind,
+            "to": draft["to"],
+            "subject": draft["subject"],
+            "body": draft["body"],
+            "sent_by": actor,
+            "sent_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        self._outbox.append(entry)
+        return entry
+
+    def outbox(self) -> list[dict]:
+        """Sent messages, newest first."""
+        return list(reversed(self._outbox))
 
     def analytics(self) -> dict:
         """The eval scorecard and per-vendor rollup for the Analytics view.

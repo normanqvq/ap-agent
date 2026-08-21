@@ -129,12 +129,17 @@ def run_invoice(invoice_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
 
 
+def _actor(request: Request) -> str:
+    """The signed-in reviewer's name, for the payment record and outbox."""
+    return SESSIONS.get(request.cookies.get("session", ""), "reviewer")
+
+
 @app.post("/api/invoices/{invoice_id}/confirm")
-def confirm_payment(invoice_id: str) -> dict:
+def confirm_payment(invoice_id: str, request: Request) -> dict:
     """Human sign-off on an APPROVEd invoice. Code re-checks the
     precondition; a non-APPROVE is refused with 409."""
     try:
-        return get_service().confirm_payment(invoice_id)
+        return get_service().confirm_payment(invoice_id, _actor(request))
     except KeyError:
         raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
     except ValueError as e:
@@ -142,11 +147,29 @@ def confirm_payment(invoice_id: str) -> dict:
 
 
 @app.post("/api/invoices/{invoice_id}/send-to-human")
-def send_to_human(invoice_id: str) -> dict:
+def send_to_human(invoice_id: str, request: Request) -> dict:
     try:
-        return get_service().send_to_human(invoice_id)
+        return get_service().send_to_human(invoice_id, _actor(request))
     except KeyError:
         raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
+
+
+@app.post("/api/invoices/{invoice_id}/email-vendor")
+def email_vendor(invoice_id: str, request: Request) -> dict:
+    """Record the system-generated vendor query in the outbox. 409 when the
+    decision carries no outbound message — free-text email has no path."""
+    try:
+        return get_service().email_vendor(invoice_id, _actor(request))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+
+
+@app.get("/api/outbox")
+def outbox() -> list[dict]:
+    """Messages the system sent this session — recorded, not delivered."""
+    return get_service().outbox()
 
 
 @app.get("/")

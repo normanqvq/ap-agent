@@ -168,7 +168,7 @@ function composer({ to, subject, body, sendLabel, onSend }) {
 }
 
 // --- navigation ------------------------------------------------------------
-const VIEWS = { dashboard, invoices, payments, analytics, settings };
+const VIEWS = { dashboard, invoices, payments, outbox, analytics, settings };
 document.querySelectorAll(".nav a[data-view]").forEach((a) =>
   a.addEventListener("click", () => { setActiveNav(a); (VIEWS[a.dataset.view] || dashboard)(); }));
 function setActiveNav(el) {
@@ -351,6 +351,17 @@ async function payments(highlightId) {
       <div class="card kpi ${s.late_count ? "warn" : "good"}"><div class="l">Past due</div><div class="v num">${s.late_count}</div><div class="s">released in the next run</div></div>
       <div class="card kpi"><div class="l">Withheld</div><div class="v num">${s.not_scheduled_count}</div><div class="s">${fmtTotals(s.not_scheduled_totals)} — money stays put</div></div>
     </div>
+    ${plan.payment_record.length ? `
+    <div class="card run">
+      <div class="card-h"><h3>Payment record</h3><span class="runtotal">confirmed this session · cleared on restart</span></div>
+      ${plan.payment_record.map((r) => `
+        <div class="row" data-id="${esc(r.invoice_id)}">
+          <div class="rl"><b>${esc(r.invoice_id)}</b><small>${esc(r.vendor_name)}</small></div>
+          <div class="rr"><span class="amt num">${money(r.total_cents, r.currency)}</span>
+            <span class="mailmeta num">by ${esc(r.confirmed_by)} · ${esc(r.confirmed_at.slice(11, 16))}</span>
+            <span class="badge-human ok">Paid ✓</span></div>
+        </div>`).join("")}
+    </div>` : ""}
     ${plan.runs.map(runCard).join("")}
     <div class="card">
       <div class="card-h"><h3>Not scheduled</h3><span class="runtotal">only APPROVE moves money</span></div>
@@ -367,6 +378,25 @@ async function payments(highlightId) {
     </div>`;
   view.querySelectorAll("[data-id]").forEach((el) =>
     el.addEventListener("click", () => detail(el.dataset.id)));
+}
+
+// --- outbox ----------------------------------------------------------------
+async function outbox() {
+  view.innerHTML = `<div class="placeholder">Loading…</div>`;
+  const list = await api("/api/outbox");
+  view.innerHTML = `
+    <div class="head">
+      <div><h1>Outbox</h1><div class="sub">Messages the system sent this session — recorded here, not delivered (demo build, no SMTP). Bodies are code-templated; nobody types them.</div></div>
+    </div>
+    <div class="card">${list.length ? list.map((m) => `
+      <details class="mail">
+        <summary>
+          <span class="pill ${m.kind === "handoff" ? "hold" : "appr"}">${m.kind === "handoff" ? "INTERNAL" : "VENDOR"}</span>
+          <b>${esc(m.subject)}</b>
+          <span class="mailmeta num">to ${esc(m.to)} · by ${esc(m.sent_by)} · ${esc(m.sent_at.slice(11, 16))}</span>
+        </summary>
+        <pre>${esc(m.body)}</pre>
+      </details>`).join("") : `<div class="placeholder">Nothing sent yet — use Send to human or the vendor query on an invoice.</div>`}</div>`;
 }
 
 // --- analytics -------------------------------------------------------------
@@ -582,9 +612,6 @@ function renderDetail(c) {
     </div>`;
   document.getElementById("back").addEventListener("click", () => { setActiveNav(); dashboard(); });
   document.getElementById("rerun").addEventListener("click", (e) => rerun(c.invoice_id, e.target));
-  // Show the state land, then return to the queue — one case done, on to
-  // the next.
-  const backToQueue = () => setTimeout(() => { setActiveNav(); dashboard(); }, 800);
   const confirmBtn = document.getElementById("confirm");
   if (confirmBtn) confirmBtn.addEventListener("click", async (e) => {
     e.target.disabled = true;
@@ -599,13 +626,18 @@ function renderDetail(c) {
       }, 800);
     } catch { e.target.disabled = false; e.target.textContent = "Refused by code (retry)"; }
   });
+  // Both sends land on the Outbox — the visible answer to "where did it go".
+  const goOutbox = () => setTimeout(() => {
+    setActiveNav(document.querySelector('.nav a[data-view="outbox"]'));
+    outbox();
+  }, 700);
   const sendBtn = document.getElementById("send");
   if (sendBtn) sendBtn.addEventListener("click", () => composer({
     ...c.handoff_draft,
     onSend: async () => {
-      renderDetail(await api(`/api/invoices/${c.invoice_id}/send-to-human`, { method: "POST" }));
+      await api(`/api/invoices/${c.invoice_id}/send-to-human`, { method: "POST" });
       toast(`Sent to human reviewer — ${c.invoice_id}`);
-      backToQueue();
+      goOutbox();
     },
   }));
   const vendorBtn = document.getElementById("email-vendor");
@@ -613,8 +645,11 @@ function renderDetail(c) {
     to: `billing@${c.vendor_id.toLowerCase()}.example.com`,
     subject: `Query on invoice ${c.invoice_id}`,
     body: dec.outbound_message,
-    sendLabel: "Send (demo)",
-    onSend: async () => toast("Email queued — demo build, no SMTP connected"),
+    onSend: async () => {
+      await api(`/api/invoices/${c.invoice_id}/email-vendor`, { method: "POST" });
+      toast("Recorded in Outbox — demo build, no SMTP");
+      goOutbox();
+    },
   }));
   document.querySelectorAll(".raw-t").forEach((el) => el.addEventListener("click", () => {
     const pre = document.getElementById("raw-" + el.dataset.i);

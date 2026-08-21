@@ -284,3 +284,15 @@ body {
 /* Row highlight after a confirm lands on the Payments page */
 .subrow.flash { animation: rowflash 1.8s ease-out; }
 @keyframes rowflash { 0%, 35% { background: var(--accent-bg); } 100% { background: transparent; } }
+
+/* Outbox */
+.mail { border-top: 1px solid var(--divider); }
+.mail summary { display: flex; align-items: center; gap: 10px; padding: 13px 18px;
+  cursor: pointer; list-style: none; }
+.mail summary::-webkit-details-marker { display: none; }
+.mail summary:hover { background: #fafbfd; }
+.mail summary b { font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mailmeta { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.mail pre { margin: 0 18px 14px 18px; padding: 13px 15px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 10px; font-size: 12.5px;
+  line-height: 1.55; white-space: pre-wrap; font-family: inherit; }
