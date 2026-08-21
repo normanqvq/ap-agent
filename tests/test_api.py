@@ -112,6 +112,20 @@ def test_rerun_resets_human_state(monkeypatch):
     assert svc._human == {}
 
 
+def test_schedule_marks_confirmed_invoices():
+    """The Payments page shows which scheduled invoices a reviewer signed
+    off; the annotation lives in the service, the scheduler stays pure."""
+    svc = Service()
+    svc.confirm_payment("INV-V001-3001")
+    svc.send_to_human("INV-V005-3005")
+    plan = svc.schedule()
+    items = {i["invoice_id"]: i for r in plan["runs"] for p in r["payments"] for i in p["invoices"]}
+    assert items["INV-V001-3001"]["confirmed"] is True
+    assert items["INV-V005-3018"]["confirmed"] is False
+    held = {n["invoice_id"]: n for n in plan["not_scheduled"]}
+    assert held["INV-V005-3005"]["human_review"] == "sent_to_human"
+
+
 def test_analytics_and_metrics_agree():
     svc = Service()
     a = svc.analytics()

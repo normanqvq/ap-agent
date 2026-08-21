@@ -280,3 +280,7 @@ body {
   cursor: pointer; font-family: inherit; }
 .chip:hover { border-color: #cfd5e0; }
 .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Row highlight after a confirm lands on the Payments page */
+.subrow.flash { animation: rowflash 1.8s ease-out; }
+@keyframes rowflash { 0%, 35% { background: var(--accent-bg); } 100% { background: transparent; } }

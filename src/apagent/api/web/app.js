@@ -320,7 +320,7 @@ const HOLD_EN = {
 const fmtTotals = (t) => Object.entries(t).map(([c, n]) => money(n, c)).join(" · ") || "—";
 const plural = (n) => (n === 1 ? "" : "s");
 
-async function payments() {
+async function payments(highlightId) {
   view.innerHTML = `<div class="placeholder">Loading…</div>`;
   const plan = await api("/api/schedule");
   const s = plan.summary;
@@ -335,8 +335,8 @@ async function payments() {
           <div class="rr"><span class="amt num">${money(p.total_cents, p.currency)}</span></div>
         </div>
         ${p.invoices.map((i) => `
-          <div class="subrow" data-id="${esc(i.invoice_id)}">
-            <span><b>${esc(i.invoice_id)}</b> · ${i.due_date ? "due " + esc(i.due_date) : "no due date"}${i.late ? ` <span class="late-tag">late — past due</span>` : ""}</span>
+          <div class="subrow ${i.invoice_id === highlightId ? "flash" : ""}" data-id="${esc(i.invoice_id)}">
+            <span><b>${esc(i.invoice_id)}</b> · ${i.due_date ? "due " + esc(i.due_date) : "no due date"}${i.late ? ` <span class="late-tag">late — past due</span>` : ""}${i.confirmed ? ` <span class="badge-human ok">Paid ✓</span>` : ""}</span>
             <span class="num">${money(i.total_cents, i.currency)}</span>
           </div>`).join("")}`).join("")}
     </div>`;
@@ -359,6 +359,7 @@ async function payments() {
         return `<div class="row" data-id="${esc(n.invoice_id)}">
           <div class="rl"><b>${esc(n.invoice_id)}</b><small>${esc(n.vendor_name)}</small></div>
           <div class="rr"><span class="amt num">${money(n.total_cents, n.currency)}</span>
+            ${n.human_review === "sent_to_human" ? `<span class="badge-human mid">With reviewer</span>` : ""}
             <span class="pill ${a.cls}">${n.action || "PENDING"}</span>
             <span class="reason t-${a.cls}">${esc(HOLD_EN[n.hold_reason] || "")}</span></div>
         </div>`;
@@ -590,7 +591,12 @@ function renderDetail(c) {
     try {
       renderDetail(await api(`/api/invoices/${c.invoice_id}/confirm`, { method: "POST" }));
       toast(`Payment confirmed — ${c.invoice_id}`);
-      backToQueue();
+      // A confirmed payment's natural next question is "when does it go
+      // out?" — land on the pay-run plan with this invoice highlighted.
+      setTimeout(() => {
+        setActiveNav(document.querySelector('.nav a[data-view="payments"]'));
+        payments(c.invoice_id);
+      }, 800);
     } catch { e.target.disabled = false; e.target.textContent = "Refused by code (retry)"; }
   });
   const sendBtn = document.getElementById("send");

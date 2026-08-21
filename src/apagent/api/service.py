@@ -206,12 +206,22 @@ class Service:
 
     def schedule(self, as_of: str = DEMO_AS_OF) -> dict:
         """Plan the weekly payment runs from the cached decisions."""
-        return schedule_payments(
+        plan = schedule_payments(
             self._ordered_invoices(),
             self._cache,
             as_of,
             vendor_names=self.store.vendors(),
         )
+        # Annotate with the session's human state so the Payments page can
+        # show which scheduled invoices a reviewer already signed off.
+        # Done here, not in the scheduler — the scheduler stays pure.
+        for run in plan["runs"]:
+            for payment in run["payments"]:
+                for item in payment["invoices"]:
+                    item["confirmed"] = self._human.get(item["invoice_id"]) == "confirmed"
+        for n in plan["not_scheduled"]:
+            n["human_review"] = self._human_state(n["invoice_id"], n["action"])
+        return plan
 
     def upload_invoice(self, filename: str, content: bytes) -> dict:
         """Extract an uploaded invoice PDF live, add it to the store, run
