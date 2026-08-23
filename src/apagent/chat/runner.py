@@ -17,6 +17,7 @@ app behaves exactly as it did before this feature existed. That also keeps
 the test suite offline without special-casing anything.
 """
 
+import logging
 import threading
 import time
 
@@ -26,6 +27,8 @@ from apagent.chat.harvest import ChatHarvester
 # After an error, wait before trying again. Long polling already blocks for
 # its timeout, so this only paces the failure path.
 _BACKOFF_SECONDS = 5
+
+log = logging.getLogger(__name__)
 
 
 class ChatRunner:
@@ -49,7 +52,10 @@ class ChatRunner:
                 self.tick()
             except Exception:
                 # A daemon thread that dies takes the feature down silently
-                # for the rest of the process's life. Sleep and carry on.
+                # for the rest of the process's life. Sleep and carry on --
+                # but log it, because "carry on quietly" is how a broken
+                # integration looks identical to an idle one.
+                log.exception("chat poll failed; retrying")
                 time.sleep(_BACKOFF_SECONDS)
 
     def tick(self) -> None:
@@ -59,7 +65,11 @@ class ChatRunner:
             self.harvester.observe(message)
             if not self.adapter.mentions_bot(message):
                 continue
+            log.info("mention from %s in %s: %r", message.sender_id, message.chat_id, message.text)
             result = self.harvester.on_mention(message)
+            log.info(
+                "replied: %r (receipt=%s)", result.reply, result.receipt and result.receipt.doc_id
+            )
             if result.reply:
                 self.adapter.reply(message.chat_id, result.reply)
             if result.receipt is not None and self.on_receipt is not None:
@@ -76,5 +86,6 @@ def start_if_configured(harvester: ChatHarvester, on_receipt=None) -> ChatRunner
     if not adapter.configured:
         return None
     runner = ChatRunner(adapter, harvester, on_receipt=on_receipt)
+    log.info("chat poller starting for @%s", adapter.username or "?")
     threading.Thread(target=runner.run_forever, daemon=True, name="apagent-chat").start()
     return runner

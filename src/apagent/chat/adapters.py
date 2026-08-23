@@ -45,6 +45,7 @@ this package sends is already rendered by code from a fixed template
 (templates.py), that is a registration exercise rather than a redesign.
 """
 
+import logging
 import os
 from datetime import UTC, datetime
 from typing import Protocol
@@ -52,6 +53,8 @@ from typing import Protocol
 from apagent.schemas import ChatMessage
 
 TELEGRAM_API = "https://api.telegram.org"
+
+log = logging.getLogger(__name__)
 
 
 class ChatAdapter(Protocol):
@@ -102,7 +105,12 @@ class TelegramAdapter:
         """Fetch new updates. Returns [] on any transport problem.
 
         Never raises: this runs in a background loop, and a network blip must
-        not take down the process the web console is served from.
+        not take down the process the web console is served from. But it does
+        SAY so. Swallowing the error silently made the one failure that
+        actually happens undiagnosable: Telegram allows a single getUpdates
+        consumer per bot and answers 409 to the rest, so running a debug
+        script beside the poller leaves the poller receiving nothing, for as
+        long as the conflict lasts, with no sign anything is wrong.
         """
         import httpx
 
@@ -113,9 +121,11 @@ class TelegramAdapter:
                 timeout=timeout + 10,
             )
             payload = response.json()
-        except Exception:
+        except Exception as exc:
+            log.warning("telegram getUpdates failed: %s: %s", type(exc).__name__, exc)
             return []
         if not payload.get("ok"):
+            log.warning("telegram getUpdates refused: %s", payload.get("description"))
             return []
 
         out = []
@@ -164,13 +174,15 @@ class TelegramAdapter:
         import httpx
 
         try:
-            httpx.post(
+            r = httpx.post(
                 self._url("sendMessage"),
                 json={"chat_id": chat_id, "text": text},
                 timeout=15,
             )
-        except Exception:
-            return
+            if not r.json().get("ok"):
+                log.warning("telegram sendMessage refused: %s", r.json().get("description"))
+        except Exception as exc:
+            log.warning("telegram sendMessage failed: %s: %s", type(exc).__name__, exc)
 
 
 class WeComAdapter:
