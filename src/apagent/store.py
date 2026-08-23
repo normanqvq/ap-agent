@@ -15,7 +15,7 @@ it. A global store would make every test depend on the committed dataset.
 import json
 from pathlib import Path
 
-from apagent.schemas import DocType, Document
+from apagent.schemas import DocType, Document, EvidenceSource
 
 
 class DocumentStore:
@@ -84,3 +84,43 @@ class DocumentStore:
         if doc.doc_type != DocType.INVOICE:
             raise ValueError(f"add_invoice got a {doc.doc_type}, not an invoice")
         self._invoices[doc.doc_id] = doc
+
+    def add_grn(self, doc: Document) -> None:
+        """Register a goods receipt (the chat-confirmation path).
+
+        Three hard rejects, all failing closed:
+
+        - Not a GRN. Same rule as add_invoice.
+        - No ref_doc_id. __init__ silently DROPS such GRNs (see above) and
+          all_grns() reads the by-PO index, so a ref-less GRN would vanish
+          instead of failing. A silent no-op is the worst outcome here: the
+          caller would believe delivery was recorded when nothing was.
+        - Replacing an ERP receipt with a CHAT one. That is a downgrade
+          attack — a chat message overwriting what the warehouse actually
+          recorded, potentially with smaller quantities. CHAT -> CHAT
+          (re-confirmation) and CHAT -> ERP (the warehouse catches up later)
+          are both fine; only ERP -> CHAT is refused.
+
+        Note the single slot per PO: a second CHAT confirmation replaces the
+        first rather than adding to it. Partial deliveries must therefore
+        arrive as multiple LINES on one receipt (build_discrepancies sums per
+        sku), not as multiple documents.
+        """
+        if doc.doc_type != DocType.GRN:
+            raise ValueError(f"add_grn got a {doc.doc_type}, not a goods receipt")
+        if not doc.ref_doc_id:
+            raise ValueError(
+                f"add_grn got {doc.doc_id} with no ref_doc_id; a goods receipt is "
+                "indexed by the PO it confirms and would be silently dropped"
+            )
+        existing = self._grns_by_po.get(doc.ref_doc_id)
+        if (
+            existing is not None
+            and existing.source == EvidenceSource.ERP
+            and doc.source == EvidenceSource.CHAT
+        ):
+            raise ValueError(
+                f"add_grn refused to replace ERP receipt {existing.doc_id} with "
+                f"chat-sourced {doc.doc_id} for {doc.ref_doc_id}"
+            )
+        self._grns_by_po[doc.ref_doc_id] = doc

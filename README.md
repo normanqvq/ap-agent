@@ -44,6 +44,7 @@ The core idea is **code owns the authority; the model explains the judgement.**
 - Emits one of four actions — `APPROVE`, `HOLD`, `EMAIL`, `ESCALATE` — with a confidence, a rationale, the complete tool-call trail, and (for holds/queries) an outbound message rendered by code from a fixed template.
 - Batches the approved invoices into weekly Friday payment runs — one transfer per vendor, each invoice paid as late as possible but never past due. Only `APPROVE` moves money; everything else is listed as withheld, with its reason.
 - Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice.
+- Accepts a delivery **confirmed in a chat group**: a receiver @-mentions the bot in Telegram, code reads the surrounding conversation, resolves the items against the purchase order, and records an *informal* goods receipt. Whether that receipt releases payment is a policy setting (`OFF` / `EVIDENCE_ONLY` / `TIERED` / `TRUSTED`), enforced in code — an unauthorised sender's confirmation is kept as evidence for a reviewer, never as grounds to pay.
 - Serves a web console: a dashboard of KPIs, the invoice queue and decision mix, a per-invoice detail view showing the decision, the guardrail results, the glass-box tool trail, the three-way reconciliation, and the rationale — plus the payment-run plan.
 
 ## Product Tour
@@ -135,7 +136,7 @@ Seven defects are planted in the synthetic set (ground truth in `data/synthetic/
 | --- | --- | --- |
 | `INV-V005-3018` | price 4% over PO, within V005's contractual 5% | **APPROVE**, citing the clause (the headline) |
 | `INV-V005-3005` | price 8% over PO, beyond even the 5% allowance | HOLD · price variance |
-| `INV-V006-3019` | PO exists, no goods receipt | HOLD · no delivery proof |
+| `INV-V006-3019` | PO exists, no goods receipt | HOLD · no delivery proof — until someone confirms the delivery in the company chat group |
 | `INV-V002-3020` | 10% overcharge + prompt-injection text | not approved — injection has nothing to attack |
 | `INV-V001-3021` | partial delivery billed in full | HOLD · short delivery |
 | `INV-V003-3901` | exact duplicate under a new number | ESCALATE |
@@ -181,7 +182,8 @@ src/apagent/
 ├── llm/              # provider abstraction (DeepSeek / Groq / OpenAI / Bedrock)
 ├── eval/             # scores decisions against the manifest (STP / touchless / false approves)
 ├── api/              # FastAPI + single-page web console (web/)
-└── scheduling/       # weekly payment runs: pay late but never late, only APPROVE moves money
+├── scheduling/       # weekly payment runs: pay late but never late, only APPROVE moves money
+└── chat/             # deliveries confirmed in a chat group -> an informal goods receipt
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
 data/samples/         # three attack PDFs for the live upload demo
@@ -192,3 +194,5 @@ docs/                 # screenshots, gap analysis / task list
 ## What's Left
 
 All planned modules are built. Beyond the hackathon scope: sending the code-templated outbound messages through a real mailbox, and reading documents from an actual ERP instead of the synthetic dataset.
+
+On the chat-confirmation path specifically, the honest gaps: **photos** of a signed delivery note are ignored (text only, and photographing the docket is how many deliveries are actually confirmed); **WeCom and Slack** are documented stubs rather than implementations, and WhatsApp can only ever work one-to-one because its Business Cloud API has no group chats; and a single confirmation covers **every** invoice against that purchase order, bounded only by the informal ceiling and the duplicate gate. The residual risk that has no technical fix is an authorised receiver who is wrong or complicit — segregation of duties needs a PO-requester field the data model does not have.

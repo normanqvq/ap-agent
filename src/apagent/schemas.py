@@ -27,6 +27,66 @@ class DocType(StrEnum):
     INVOICE = "INVOICE"
 
 
+class EvidenceSource(StrEnum):
+    """How a document reached us — the difference between a record someone
+    typed into the ERP and a confirmation harvested from a chat group.
+
+    This exists because a goods receipt is a claim about the physical world,
+    and who made the claim decides how much it is worth. An ERP GRN was
+    entered by warehouse staff against a process; a CHAT one is a colleague
+    saying "yeah it came" in Telegram. Both are evidence, and the code
+    guardrail treats them differently (see pipeline.grn_gate).
+
+    Only GRNs are CHAT today. POs and invoices are ERP by definition here.
+    Other option: a bool like `informal`. Rejected — the moment a third
+    channel appears (a supplier portal, an email confirmation) a bool has to
+    become an enum anyway, and a bool cannot be read in a JSON dump.
+    """
+
+    ERP = "ERP"
+    CHAT = "CHAT"
+
+
+class ChatGrnPolicy(StrEnum):
+    """How much a delivery confirmed in a chat group is worth to this company.
+
+    A judgement call that genuinely differs between businesses, so it is a
+    setting rather than a hard-coded rule. A firm whose warehouse staff are
+    the only people in the group will want TIERED or TRUSTED; one whose
+    supplier sits in the same group may want EVIDENCE_ONLY.
+
+    It is a setting in CODE, not in the web console. The console's policy
+    page is deliberately read-only -- every limit that decides whether money
+    moves lives in a version-controlled file, so changing one is a reviewed
+    commit rather than a click. This field follows the same rule as
+    manual_review_threshold_cents, and like it can be overridden per vendor.
+
+    OFF            chat confirmations are not proof of delivery at all. The
+                   invoice holds exactly as it did before this feature, even
+                   if a reviewer endorses the confirmation -- the company has
+                   turned the mechanism off, so it should be off end to end.
+    EVIDENCE_ONLY  never releases payment on its own. The confirmation is
+                   recorded and shown to the reviewer, who accepts it or does
+                   not. The safest setting that still saves the chasing.
+    TIERED         releases payment when someone on the roster confirmed it
+                   AND the invoice is under informal_grn_ceiling_cents.
+                   Anything else waits for a reviewer. The default.
+    TRUSTED        releases payment whenever someone on the roster confirmed
+                   it, ignoring the ceiling. For a company that treats its
+                   receivers' word as final regardless of amount. Note the
+                   manual-review threshold still applies above it -- that is
+                   a separate promise about large amounts, not about proof.
+
+    No setting ever waives the quantity check. Whether a receipt covers what
+    is being billed is arithmetic, not policy.
+    """
+
+    OFF = "OFF"
+    EVIDENCE_ONLY = "EVIDENCE_ONLY"
+    TIERED = "TIERED"
+    TRUSTED = "TRUSTED"
+
+
 class LineItem(BaseModel):
     """One line of goods on a document.
 
@@ -115,6 +175,33 @@ class Document(BaseModel):
     due_date: str | None = None
     tax_cents: int | None = None
     total_cents: int | None = None
+
+    # Where this document came from. Until chat confirmation existed every
+    # document was an ERP record and provenance was not a question, so these
+    # all carry defaults — the committed dataset has no such keys and must
+    # keep loading (store.from_dir builds Document(**d) straight from JSON).
+    #
+    # Only code-controlled scalars live here, never the confirmer's words.
+    # agent/ap_tools._doc_summary dumps the whole model into the prompt on
+    # every lookup_grn, so a raw chat quote on this model would be a fresh
+    # injection surface on a path that currently has none. The quotes live
+    # in ChatGrnEvidence and are reached through a tool instead.
+    source: EvidenceSource = EvidenceSource.ERP
+    source_ref: str | None = None  # a ChatGrnEvidence id, code-generated
+    confirmed_by: str | None = None  # internal employee label, resolved via the roster
+    captured_at: str | None = None  # ISO string, same rule as issue_date
+
+    # A reviewer who looked at the chat evidence in the console and vouched
+    # for it. This is the escape hatch for everything the automatic tier
+    # refuses, and it exists because the alternative does not: telling an SME
+    # "record a formal goods receipt to release this" assumes an ERP process
+    # they do not have. If a formal receipt were the only way out of a hold,
+    # the whole chat-confirmation feature would be pointless for the people
+    # it is built for. So the escalation path is a human accepting the
+    # evidence, not a human doing data entry.
+    # It waives WHO may confirm and HOW MUCH, never the quantity arithmetic:
+    # endorsing "80 arrived" says nothing about an invoice billing 100.
+    endorsed_by: str | None = None
 
 
 class DiscrepancyField(StrEnum):
@@ -240,6 +327,60 @@ class HoldReason(StrEnum):
     PRICE_VARIANCE = "PRICE_VARIANCE"
 
 
+class ChatMessage(BaseModel):
+    """One message out of a chat group, as the adapter saw it.
+
+    sender_id is the platform's NUMERIC user id, kept as a string only so it
+    survives JSON. It is the only field the roster is allowed to key on:
+    sender_name is whatever the person set as their display name today, and on
+    Telegram both the display name and the @username can be changed freely (a
+    released @username can even be re-registered by someone else). Trusting
+    either would let anyone in the group become "the warehouse manager".
+
+    text is untrusted third-party data, exactly like an invoice description.
+    It is never rendered into an outbound message and never treated as an
+    instruction — see AP_SYSTEM_PROMPT's SECURITY block.
+    """
+
+    message_id: str
+    chat_id: str
+    sender_id: str
+    sender_name: str
+    text: str
+    sent_at: str  # ISO string, same rule as issue_date
+
+
+class ChatGrnEvidence(BaseModel):
+    """A goods-receipt confirmation harvested from a chat group.
+
+    Named ChatGrnEvidence, not ChatReceiptEvidence: per CLAUDE.md's glossary a
+    goods receipt is a `grn`, never a "receipt".
+
+    This is EVIDENCE, not a verdict. There is deliberately no action field and
+    no approve flag — the most this can ever become is an informal GRN that the
+    code guardrail then judges. A chat message that says "approve this
+    immediately" has nowhere to put that instruction, which is what makes the
+    injection defence architectural rather than a matter of prompt wording.
+
+    confirmed_by is None when the speaker is not on the authorised roster. We
+    still keep the evidence in that case — a human reviewing the hold should
+    see what was said and by whom — but the guardrail will not act on it.
+
+    messages keeps the verbatim window for the audit trail. It stays OFF the
+    GRN Document on purpose (see Document.source), because that model gets
+    dumped wholesale into the agent's prompt.
+    """
+
+    evidence_id: str  # code-generated, e.g. CHAT-EV-0001 — never text from chat
+    platform: str
+    chat_id: str
+    po_id: str | None
+    confirmed_by: str | None
+    captured_at: str
+    messages: list[ChatMessage]
+    refusal_reason: str | None = None
+
+
 class ToolCall(BaseModel):
     """A record of one tool call the agent made.
 
@@ -323,6 +464,19 @@ class ToleranceConfig(BaseModel):
         SGD 10,000 would give a nicer STP rate but leaves a painful amount of
         money unchecked. This number directly moves our headline metric, so it is
         a deliberate choice, not a leftover default.
+    informal_grn_ceiling_cents 200_000 (SGD 2,000) - the most we will pay on a
+        goods receipt that came from a chat message rather than the ERP. A
+        colleague typing "yeah it arrived" is real evidence but weaker evidence,
+        so it buys automation only for small routine spend. Sits well under
+        manual_review_threshold_cents (SGD 5,000) on purpose: an informal
+        receipt must never be the thing that carries a large invoice.
+        It is called a CEILING, not a threshold — per CLAUDE.md, "threshold" is
+        reserved for the manual-review cutoff above.
+        SGD 1,000 was the first draft and was wrong: it sits below
+        INV-V006-3019 (SGD 1,270.29), the exact case this feature exists to
+        solve, so the rule would never have fired on its own motivating
+        example. Same class of number as the one above — it moves the headline
+        metric, so it is chosen, not defaulted.
 
     All of these are still first guesses. Once we see the problem set on 8/14 and
     can measure the STP rate against it, tune them here, in one place.
@@ -333,4 +487,6 @@ class ToleranceConfig(BaseModel):
     total_pct: float = 1.0
     qty_exact: bool = True
     manual_review_threshold_cents: int = 500_000
+    informal_grn_ceiling_cents: int = 200_000
+    chat_grn_policy: ChatGrnPolicy = ChatGrnPolicy.TIERED
     per_vendor_overrides: dict[str, "ToleranceConfig"] | None = None

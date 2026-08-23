@@ -6,3 +6,4 @@ __pycache__/
 data/*.db
 data/generated/
 .DS_Store
+data/chat/roster.json

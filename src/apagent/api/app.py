@@ -16,6 +16,7 @@ and means nothing secret is ever written to disk.
 """
 
 import secrets
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
@@ -27,7 +28,32 @@ from apagent.api.service import get_service
 
 WEB = Path(__file__).resolve().parent / "web"
 
-app = FastAPI(title="AP Agent", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start the chat poller in this process, if one is configured.
+
+    In-process is a requirement, not a convenience: Service is a singleton
+    holding the DocumentStore in memory, and chat-harvested receipts are
+    session state that never reaches disk. A bot running separately would
+    record deliveries into a different store, and this console would keep
+    showing the invoice on hold.
+
+    No TELEGRAM_BOT_TOKEN means no thread and no behaviour change at all,
+    which is also what keeps the test suite offline with no special casing.
+    """
+    from apagent.chat.runner import start_if_configured
+
+    service = get_service()
+    runner = start_if_configured(service.chat_harvester(), on_receipt=service.on_chat_receipt)
+    try:
+        yield
+    finally:
+        if runner is not None:
+            runner.stop()
+
+
+app = FastAPI(title="AP Agent", version="0.1.0", lifespan=lifespan)
 
 # token -> display name. In memory only.
 SESSIONS: dict[str, str] = {}
@@ -140,6 +166,23 @@ def confirm_payment(invoice_id: str, request: Request) -> dict:
     precondition; a non-APPROVE is refused with 409."""
     try:
         return get_service().confirm_payment(invoice_id, _actor(request))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+
+
+@app.post("/api/invoices/{invoice_id}/accept-chat-grn")
+def accept_chat_grn(invoice_id: str, request: Request) -> dict:
+    """A reviewer vouches for a delivery that was confirmed in a chat group.
+
+    The manual counterpart to the automatic chat tier, and the reason it can
+    afford to be strict. 409 when there is no chat confirmation to accept —
+    code checks that, not the frontend. Re-runs the agent, so the answer is
+    the pipeline's, not this endpoint's.
+    """
+    try:
+        return get_service().accept_chat_grn(invoice_id, _actor(request))
     except KeyError:
         raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
     except ValueError as e:

@@ -24,10 +24,17 @@ from apagent.agent.ap_tools import build_registry, hard_duplicates, recheck_with
 from apagent.eval import evaluate
 from apagent.extraction.invoice import ExtractionError, extract_invoice
 from apagent.matching.engine import match_invoice
-from apagent.pipeline import _blocking_rows, decide_invoice
+from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
 from apagent.scheduling import schedule_payments
-from apagent.schemas import Action, DiscrepancyField, Document, ToleranceConfig
+from apagent.schemas import (
+    Action,
+    ChatGrnPolicy,
+    DiscrepancyField,
+    Document,
+    EvidenceSource,
+    ToleranceConfig,
+)
 from apagent.store import DocumentStore
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -74,6 +81,14 @@ class Service:
         # they live in the in-memory store, and _save_cache excludes their
         # decisions so the committed demo cache never picks them up.
         self._uploaded: set[str] = set()
+        # Invoices whose decision this session used chat evidence for. Session
+        # state like the two above, but held out of the eval differently — see
+        # _eval_view for why dropping them would be wrong.
+        self._chat_confirmed: set[str] = set()
+        # The decisions as committed, before this session touched anything.
+        # _eval_view serves these for chat-confirmed invoices so the measured
+        # benchmark stays the benchmark.
+        self._committed: dict[str, dict] = dict(self._cache)
         # Every message the system "sent" this session. Demo build: recorded
         # here instead of delivered (no SMTP). Bodies are always rebuilt
         # server-side from the code templates — never accepted from the
@@ -82,12 +97,53 @@ class Service:
         # Confirmed payments, newest last: who signed off which invoice,
         # when, for how much. The "where did my click go" record.
         self._payment_record: list[dict] = []
+        # Built lazily and shared with the chat poller, so a harvested
+        # receipt lands in THIS store and the console reflects it.
+        self._harvester = None
+        # receipt id -> the ChatGrnEvidence behind it, so the detail page
+        # can show the conversation. Session state: the verbatim messages
+        # are never written to disk.
+        self._chat_evidence: dict = {}
 
     # --- decisions cache ---------------------------------------------------
 
+    def _eval_view(self) -> dict[str, dict]:
+        """The decisions the eval harness scores: the committed benchmark,
+        with this session's own evidence held out.
+
+        The two kinds of session evidence need OPPOSITE treatment, which is
+        the whole reason this helper exists:
+
+        - An uploaded invoice has no manifest entry, so the harness cannot
+          score it either way. Dropping it is invisible and correct.
+        - A chat-confirmed invoice DOES have a manifest entry (INV-V006-3019
+          is planted as `missing_grn`). Drop its key and the harness reports
+          it under `missing`, which fails the committed assertions and drags
+          the touchless rate down. So it keeps its committed decision here.
+
+        The benchmark measures the system against the ERP dataset, and chat
+        evidence is outside that ground truth; the invoice's own detail page
+        still shows the live decision. Stated openly rather than quietly
+        filtered, because "false approvals: 0" is only worth something if it
+        is measured over something honest.
+
+        Used by _save_cache, metrics and analytics, so the file on disk and
+        the two on-screen scorecards can never disagree.
+        """
+        view = {}
+        for invoice_id, decision in self._cache.items():
+            if invoice_id in self._uploaded:
+                continue
+            if invoice_id in self._chat_confirmed and invoice_id in self._committed:
+                view[invoice_id] = self._committed[invoice_id]
+            else:
+                view[invoice_id] = decision
+        return view
+
     def _save_cache(self) -> None:
-        keep = {k: v for k, v in self._cache.items() if k not in self._uploaded}
-        CACHE.write_text(json.dumps(keep, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        CACHE.write_text(
+            json.dumps(self._eval_view(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
 
     def cached_decision(self, invoice_id: str) -> dict | None:
         return self._cache.get(invoice_id)
@@ -164,7 +220,9 @@ class Service:
         )
         po = self.store.get_po(match.po_id) if match.po_id else None
         grn = self.store.get_grn_for_po(match.po_id) if match.po_id else None
-        gates = _guardrails(checked, rechecked, review_gate, duplicates, allowance)
+        gates = _guardrails(
+            checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config
+        )
         decision = self._cache.get(invoice.doc_id)
         vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
 
@@ -181,6 +239,7 @@ class Service:
             "lines": [line.model_dump() for line in invoice.lines],
             "po": po.model_dump() if po else None,
             "grn": grn.model_dump() if grn else None,
+            "chat_grn": self._chat_grn_view(grn, po),
             "match": checked.model_dump(),
             "review_gate": review_gate,
             "duplicates": [d.doc_id for d in duplicates],
@@ -195,7 +254,23 @@ class Service:
         }
 
     def metrics(self) -> dict:
-        decided = [d for d in self._cache.values()]
+        """The dashboard's headline numbers, all measured over the same set.
+
+        Every number here reads _eval_view, not the live cache. They used to
+        disagree: STP counted this session's decisions while false approvals
+        were scored against the committed benchmark, so a chat confirmation
+        flipping an invoice pushed STP up without the defect it cleared ever
+        being re-scored. Three tiles measured over one population and a
+        fourth over another, side by side, presented as one scorecard.
+
+        Which one wins is not arbitrary. The benchmark's ground truth knows
+        nothing about a message someone sent this morning, so counting that
+        invoice as straight-through inflates a headline number with evidence
+        the manifest cannot check. The chat flip is real and worth showing —
+        it is shown on the invoice's own page, where the conversation behind
+        it is visible too, rather than folded into a rate.
+        """
+        decided = list(self._eval_view().values())
         total = len(self._ordered_invoices())
         counts = {a.value: 0 for a in Action}
         for d in decided:
@@ -208,7 +283,7 @@ class Service:
         n = total or 1
         # Measured, not asserted: the eval harness scores every decision
         # against the manifest ground truth and counts wrong approvals.
-        report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), self._cache)
+        report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), self._eval_view())
         return {
             "total": total,
             "decided": len(decided),
@@ -307,6 +382,103 @@ class Service:
         )
         return self.get_case(invoice_id)
 
+    def accept_chat_grn(self, invoice_id: str, actor: str = "reviewer") -> dict:
+        """A reviewer vouches for a chat-confirmed delivery.
+
+        This is the manual half of the chat-confirmation feature, and the
+        reason the automatic half can afford to be strict. Everything the
+        gate refuses on its own — a sender who is not on the receiver list,
+        an amount above the informal ceiling — lands here as a hold with the
+        conversation attached, and clearing it is one click by someone who
+        is signed in.
+
+        Deliberately NOT "record a formal goods receipt": the small
+        businesses this serves confirm delivery in a chat group precisely
+        because they keep no receipt book, so a formal record is not a step
+        they can be sent away to perform. Endorsement is the terminal state,
+        not a placeholder for one.
+
+        It never touches the quantities. Accepting a confirmation that says
+        80 arrived leaves an invoice billing 100 blocked at the facts gate,
+        where it belongs — the reviewer vouched for the delivery, not for
+        the bill.
+        """
+        invoice = self.store.get_invoice(invoice_id)
+        if invoice is None:
+            raise KeyError(invoice_id)
+        match = match_invoice(invoice, self.store.all_pos(), self.store.all_grns())
+        grn = self.store.get_grn_for_po(match.po_id) if match.po_id else None
+        if grn is None or grn.source != EvidenceSource.CHAT:
+            raise ValueError("only a chat-confirmed goods receipt can be accepted this way")
+        self.store.add_grn(grn.model_copy(update={"endorsed_by": actor}))
+        # Session-only, like every other piece of chat evidence: the endorsed
+        # receipt lives in memory and never reaches data/synthetic/.
+        self._chat_confirmed.add(invoice_id)
+        return self.run_case(invoice_id)
+
+    def _chat_grn_view(self, grn, po) -> dict | None:
+        """The chat confirmation behind a receipt, for the detail page.
+
+        None when the receipt is an ordinary ERP one, so the card simply does
+        not render. Everything a reviewer needs to judge the confirmation is
+        assembled HERE, in Python, because CLAUDE.md keeps business logic out
+        of the frontend — "was this person allowed to confirm" and "which
+        ordered lines went unconfirmed" are exactly that.
+
+        The verbatim messages ride in `messages`. They are the one genuinely
+        attacker-authored thing on this page, so the browser must escape them
+        like any supplier-printed string.
+        """
+        if grn is None or grn.source != EvidenceSource.CHAT:
+            return None
+        evidence = self._chat_evidence.get(grn.doc_id)
+        confirmed = {line.line_no for line in grn.lines}
+        unconfirmed = (
+            [line.description for line in po.lines if line.line_no not in confirmed] if po else []
+        )
+        return {
+            "receipt_id": grn.doc_id,
+            "confirmed_by": grn.confirmed_by,
+            "authorised": grn.confirmed_by is not None,
+            "endorsed_by": grn.endorsed_by,
+            "captured_at": grn.captured_at,
+            "policy": resolve_config(grn.vendor_id, self.config).chat_grn_policy.value,
+            "lines": [
+                {"sku": line.sku, "description": line.description, "qty": line.qty}
+                for line in grn.lines
+            ],
+            "unconfirmed": unconfirmed,
+            "messages": [m.model_dump() for m in evidence.messages] if evidence else [],
+        }
+
+    def on_chat_receipt(self, result) -> None:
+        """A chat-harvested receipt landed; re-decide what it affects.
+
+        Called from the chat poller's thread. The receipt is already in the
+        store (the harvester shares this service's DocumentStore, which is
+        the reason the poller runs in-process), so all that is left is to
+        re-run the invoices whose proof of delivery just changed -- that
+        re-run is what makes the console flip while someone is looking at it.
+        """
+        if result.receipt is not None and result.evidence is not None:
+            self._chat_evidence[result.receipt.doc_id] = result.evidence
+        for invoice_id in result.invoice_ids:
+            self._chat_confirmed.add(invoice_id)
+            try:
+                self.run_case(invoice_id)
+            except Exception:
+                # One bad invoice must not stop the others, and must not
+                # propagate into the poller loop.
+                continue
+
+    def chat_harvester(self):
+        """The harvester bound to THIS service's store, built once."""
+        from apagent.chat.harvest import ChatHarvester
+
+        if self._harvester is None:
+            self._harvester = ChatHarvester(self.store)
+        return self._harvester
+
     def send_to_human(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """Route an invoice to a human reviewer and record the hand-off
         email in the outbox. The body comes from the code template in
@@ -385,7 +557,7 @@ class Service:
         measured numbers, not a separate hand-maintained copy of them.
         """
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        report = evaluate(manifest, self._cache)
+        report = evaluate(manifest, self._eval_view())
         defects = [c for c in report["cases"] if c["defect"] != "clean"]
         clean = [c for c in report["cases"] if c["defect"] == "clean"]
 
@@ -470,6 +642,14 @@ class Service:
                 "total_pct": c.total_pct,
                 "qty_exact": c.qty_exact,
                 "manual_review_threshold_cents": c.manual_review_threshold_cents,
+                # Shown here because it decides whether money moves, and every
+                # such limit belongs on this page rather than buried in code
+                # nobody reads. Read-only like the rest of it.
+                "informal_grn_ceiling_cents": c.informal_grn_ceiling_cents,
+            },
+            "chat_grn": {
+                "policy": c.chat_grn_policy.value,
+                "options": [p.value for p in ChatGrnPolicy],
             },
             "contract_allowances": allowances,
             "schedule": {"as_of": DEMO_AS_OF, "run_day": "Friday"},
@@ -535,9 +715,18 @@ def _handoff_draft(invoice, vendor_name: str, decision: dict | None, gates: list
     }
 
 
-def _guardrails(checked, rechecked, review_gate, duplicates, allowance) -> list[dict]:
+def _guardrails(
+    checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config
+) -> list[dict]:
     """The six code gates as pass/fail, for the detail view. Mirrors
-    pipeline._apply_guardrails so the UI shows exactly what code enforces."""
+    pipeline._apply_guardrails so the UI shows exactly what code enforces.
+
+    The GRN gate is not mirrored by hand any more — it CALLS pipeline.grn_gate,
+    the same function the pipeline enforces with. Hand-copying it was already
+    drifting (this copy folded gate-5 outcomes into the GRN chip, which the
+    pipeline keeps separate), and the chat tier would have widened the gap. A
+    UI that says a gate passed while code refuses it is worse than no UI.
+    """
     blocking = _blocking_rows(rechecked)
     price_blocked = any(b.field == DiscrepancyField.UNIT_PRICE for b in blocking)
     qty_blocked = any(b.field == DiscrepancyField.QTY for b in blocking)
@@ -545,6 +734,7 @@ def _guardrails(checked, rechecked, review_gate, duplicates, allowance) -> list[
         b.field not in (DiscrepancyField.UNIT_PRICE, DiscrepancyField.QTY) for b in blocking
     )
     pct = f"{allowance[0]:g}%" if allowance else "default 2%"
+    grn_passed, _ = grn_gate(checked, grn, po, invoice, config)
     return [
         {"key": "money", "label": "Amount within threshold", "passed": not review_gate},
         {"key": "po", "label": "PO matched", "passed": checked.po_id is not None},
@@ -557,10 +747,19 @@ def _guardrails(checked, rechecked, review_gate, duplicates, allowance) -> list[
         {"key": "price", "label": f"Price within tolerance ({pct})", "passed": not price_blocked},
         {
             "key": "grn",
-            "label": "Goods received",
-            "passed": checked.grn_id is not None and not qty_blocked and not other_blocked,
+            "label": _grn_gate_label(grn),
+            "passed": grn_passed and not qty_blocked and not other_blocked,
         },
     ]
+
+
+def _grn_gate_label(grn) -> str:
+    """The gate chip's wording. Computed here, in Python, because CLAUDE.md
+    forbids business logic in the frontend — and "was this confirmed in chat
+    or entered in the ERP" is exactly that."""
+    if grn is not None and grn.source == EvidenceSource.CHAT:
+        return "Goods received (chat-confirmed)"
+    return "Goods received"
 
 
 _service: Service | None = None

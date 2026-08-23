@@ -5,7 +5,7 @@ what each one does, where it lives, why it was chosen over the obvious
 alternative, and how it is tested. Every reference is `file:line` against the
 committed code.
 
-There are **six**. They split cleanly into the project's core principle —
+There are **seven**. They split cleanly into the project's core principle —
 *code computes facts, the model judges meaning, code owns authority* — so all
 six are deterministic code. The model never runs any of them; it reads their
 output.
@@ -18,6 +18,7 @@ output.
 | 4 | Fuzzy name matching | `extraction/invoice.py` | map a printed supplier name to an internal vendor id |
 | 5 | Duplicate-key detection | `agent/ap_tools.py` | catch a re-billed invoice under a new number |
 | 6 | Modular weekday arithmetic | `scheduling/scheduler.py` | place each approved invoice in the right weekly pay run |
+| 7 | Containment-or-ratio matching | `chat/resolve.py` | tie a phrase typed in a chat group to a purchase-order line |
 
 ---
 
@@ -265,3 +266,53 @@ day, missing/garbage due date) are pinned in `tests/test_scheduling.py`.
 4. **Ratcliff–Obershelp fuzzy match** — printed name → vendor id, with a floor and an ambiguity margin.
 5. **PO-resolved duplicate key** — keyed on resolved PO + amount tolerance, closing four evasion paths.
 6. **Modular weekday scheduling** — pay-late-but-never-late batching by modulo-7 arithmetic.
+7. **Containment-or-ratio matching** — ties a chat phrase to an order line; refuses rather than guesses when two lines score alike.
+
+---
+
+## 7. Containment-or-ratio matching — a chat phrase to an order line
+
+**File:** `src/apagent/chat/resolve.py` — `_score` and `_match_line`.
+
+**Problem.** Someone in a delivery group types "gloves came, 100 boxes". The
+order line reads "Nitrile gloves size L, box of 100". To record a goods
+receipt we must know *which line* they meant, and getting it wrong records a
+delivery that did not happen.
+
+**Why not the fuzzy matcher we already had.** `difflib.SequenceMatcher.ratio()`
+compares two strings end to end, so it is penalised for every word the speaker
+did not bother to repeat. Measured against the real dataset:
+
+```
+"nitrile gloves" vs "Nitrile gloves size L, box of 100"   ratio 0.60
+"trash bag"      vs "Trash bag 120L, roll of 20"          ratio 0.51
+```
+
+With the 0.6 floor both were refused as unrecognisable — the matcher rejecting
+plain, correct English. The mismatch is structural: people type a **fragment**
+of what the order calls something, and ratio is the wrong shape for fragments.
+
+**The algorithm.** Score each PO line by the better of two readings, then apply
+the same floor-and-margin rule the vendor matcher uses:
+
+```python
+containment = len(probe_words & line_words) / len(probe_words)
+return max(containment, difflib.SequenceMatcher(None, target, candidate).ratio())
+```
+
+- **Containment** answers "are the speaker's words in this line?", which is what
+  a human reading the message does. "gloves" inside "nitrile gloves size l box
+  of 100" is a complete hit.
+- **Ratio** is kept for typos and for phrases that are not a clean subset.
+
+**Why containment alone would be worse.** A bare "box" is contained in every
+line that mentions a box. That is handled by the ambiguity margin rather than
+by the score: a word common to two lines scores identically for both, the
+margin collapses, and the item is **refused** instead of guessed at. Floor
+`0.6`, margin `0.1` — stricter than the matcher's `PAIR_SIMILARITY_FLOOR = 0.4`,
+because that one pairs two structured documents describing the same order,
+while this one reads a sentence typed on a phone.
+
+**Tested:** the fragment cases above resolve; an item matching nothing on the
+order is refused; a word common to two lines is refused rather than coin-flipped
+(`tests/test_chat.py`).

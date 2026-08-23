@@ -1,0 +1,39 @@
+{
+  "_README": [
+    "Who may confirm a delivery in chat, and in which groups.",
+    "",
+    "This file grants permission to release money, so it is version-controlled",
+    "and reviewed rather than editable from the web console -- the same rule",
+    "the tolerance limits follow.",
+    "",
+    "bound_chats: groups we listen to at all. Anything else is ignored, not",
+    "  even buffered. Get a chat id by adding the bot to the group and",
+    "  reading update.message.chat.id from getUpdates (group ids are negative).",
+    "",
+    "confirmers: keyed 'platform:NUMERIC_USER_ID'. Never a display name or an",
+    "  @username -- both are editable, and a released @username can be taken",
+    "  by someone else, so keying on either would let anyone in the group",
+    "  rename themselves into the warehouse manager. Get an id from",
+    "  update.message.from.id.",
+    "",
+    "NEVER list a supplier here. An SME delivery group usually contains the",
+    "vendor, and a vendor confirming their own delivery is the conflict of",
+    "interest the three-way match exists to catch. Their confirmation still",
+    "gets recorded as evidence -- it just will not release payment by itself.",
+    "",
+    "The ids below are placeholders. An unconfigured roster authorises nobody,",
+    "which is the correct failure direction: no automation, never open",
+    "automation."
+  ],
+  "bound_chats": {
+    "-1001234567890": {
+      "label": "Ops / deliveries"
+    }
+  },
+  "confirmers": {
+    "telegram:88888888": {
+      "employee_id": "EMP-003",
+      "employee_label": "Li Wei (warehouse)"
+    }
+  }
+}
