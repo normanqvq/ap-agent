@@ -261,6 +261,73 @@ def test_empty_chat_receipt_never_counts_as_proof(monkeypatch, demo):
     assert decision.action == Action.HOLD
 
 
+# --- the reviewer's escape hatch ------------------------------------------
+#
+# Everything the automatic tier refuses has to lead somewhere, and it must not
+# be "record a formal goods receipt": the businesses this serves confirm
+# delivery in a chat group precisely because they keep no receipt book, so
+# demanding a formal record would make every hold permanent in practice.
+
+
+def test_endorsement_releases_an_unauthorised_confirmation(monkeypatch, demo):
+    """A reviewer reading the conversation IS the check the roster stands in
+    for, so satisfying it directly is the intended path, not a bypass."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    endorsed = _chat_grn(po, confirmed_by=None).model_copy(update={"endorsed_by": "123"})
+    store.add_grn(endorsed)
+    assert _decide(store, invoice).action == Action.APPROVE
+
+
+def test_endorsement_releases_an_invoice_over_the_ceiling(monkeypatch, demo):
+    """The ceiling means "too much money to release without a human", so a
+    human is exactly what clears it."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003").model_copy(update={"endorsed_by": "123"}))
+    strict = ToleranceConfig(informal_grn_ceiling_cents=invoice.total_cents)
+    decision = decide_invoice(
+        invoice,
+        store,
+        build_registry(store, CONTRACTS),
+        base_config=strict,
+        contracts_dir=CONTRACTS,
+    )
+    assert decision.action == Action.APPROVE
+
+
+def test_endorsement_never_waives_the_quantity_check(monkeypatch, demo):
+    """The line that keeps endorsement honest: accepting a receipt that says
+    80 arrived does not accept an invoice billing 100. The reviewer vouched
+    for the delivery, not for the bill."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    short = _chat_grn(po, confirmed_by=None, qty_scale=0.8).model_copy(
+        update={"endorsed_by": "123"}
+    )
+    store.add_grn(short)
+    decision = _decide(store, invoice)
+    assert decision.action == Action.HOLD
+    assert decision.hold_reason == HoldReason.AWAITING_DELIVERY
+
+
+def test_endorsement_does_not_lift_the_manual_review_threshold(monkeypatch, demo):
+    """Gate 1 is a different promise from gate 6 and outranks it. Accepting a
+    delivery says nothing about an amount that needs a signature."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003").model_copy(update={"endorsed_by": "123"}))
+    strict = ToleranceConfig(manual_review_threshold_cents=1)
+    decision = decide_invoice(
+        invoice,
+        store,
+        build_registry(store, CONTRACTS),
+        base_config=strict,
+        contracts_dir=CONTRACTS,
+    )
+    assert decision.action == Action.ESCALATE
+
+
 # --- the store's replacement rule -----------------------------------------
 
 
