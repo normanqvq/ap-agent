@@ -17,7 +17,14 @@ import difflib
 
 from scipy.optimize import linear_sum_assignment
 
-from apagent.schemas import Discrepancy, DiscrepancyField, Document, LineItem, MatchResult
+from apagent.schemas import (
+    Discrepancy,
+    DiscrepancyField,
+    Document,
+    EvidenceSource,
+    LineItem,
+    MatchResult,
+)
 
 # Below this description similarity two lines are not the same item, even if
 # the assignment algorithm would love to pair them. Without a floor, an
@@ -299,14 +306,28 @@ def build_discrepancies(
 # Evidence-quality scores for match_confidence. Coarse on purpose: the
 # agent reads these as "how much should I trust this match", and three
 # clearly-separated levels communicate better than false precision.
+# The second axis used to be "is there a GRN at all". It is now WHICH KIND,
+# because a receipt confirmed in a chat group is real evidence but not the
+# same evidence as one entered in the ERP against a process — so it must not
+# read as the same 1.0 confidence to the agent.
 CONFIDENCE = {
-    ("ref", True): 1.0,  # invoice named the PO, GRN present — full three-way
-    ("ref", False): 0.7,  # named PO but no receipt — two-way only
-    ("search", True): 0.5,  # PO guessed from vendor+amount
-    ("search", False): 0.4,
-    ("none", True): 0.0,
-    ("none", False): 0.0,
+    ("ref", "erp"): 1.0,  # invoice named the PO, ERP receipt — full three-way
+    ("ref", "chat"): 0.8,  # named PO, but delivery proof is a chat message
+    ("ref", "none"): 0.7,  # named PO but no receipt — two-way only
+    ("search", "erp"): 0.5,  # PO guessed from vendor+amount
+    ("search", "chat"): 0.45,
+    ("search", "none"): 0.4,
+    ("none", "erp"): 0.0,
+    ("none", "chat"): 0.0,
+    ("none", "none"): 0.0,
 }
+
+
+def _grn_kind(grn: Document | None) -> str:
+    """The CONFIDENCE table's second axis."""
+    if grn is None:
+        return "none"
+    return "chat" if grn.source == EvidenceSource.CHAT else "erp"
 
 
 def match_invoice(invoice: Document, pos: list[Document], grns: list[Document]) -> MatchResult:
@@ -338,5 +359,8 @@ def match_invoice(invoice: Document, pos: list[Document], grns: list[Document]) 
         unmatched_po_lines=unmatched_po,
         unmatched_inv_lines=unmatched_inv,
         discrepancies=discrepancies,
-        match_confidence=CONFIDENCE[(how, grn is not None)],
+        # .get, not a bare subscript: this runs inside decide_invoice with no
+        # try around it, so with nine keys a single typo would be a 500. 0.0
+        # is the fail-safe value — "trust this match not at all".
+        match_confidence=CONFIDENCE.get((how, _grn_kind(grn)), 0.0),
     )

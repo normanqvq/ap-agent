@@ -1,0 +1,335 @@
+"""The tiered proof-of-delivery gate: what a chat-confirmed receipt can and
+cannot buy.
+
+Every test here runs against a model that APPROVES EVERYTHING, because the
+claim being tested is not "the model behaves" — it is "code refuses even when
+the model does not". Same adversary as tests/test_pipeline.py.
+
+The cases are chosen around the two ways this feature could be dangerous:
+- it could let an unauthorised person release money (the roster tier), and
+- it could accept a receipt that does not actually cover what is being billed
+  (the reconciliation check).
+
+All offline: no API key, no network, no chat platform.
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from apagent.agent.ap_tools import build_registry
+from apagent.agent.registry import ToolRegistry
+from apagent.matching.engine import CONFIDENCE, match_invoice
+from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate
+from apagent.rules.tolerance import apply_tolerances
+from apagent.schemas import (
+    Action,
+    DocType,
+    Document,
+    EvidenceSource,
+    HoldReason,
+    LineItem,
+    ToleranceConfig,
+)
+from apagent.store import DocumentStore
+
+DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
+CONTRACTS = DATA / "contracts"
+
+# The demo case: PO exists, no goods receipt was ever typed. Its manifest note
+# says "the warehouse confirmed by phone" — this feature is that phone call.
+DEMO_INVOICE = "INV-V006-3019"
+DEMO_PO = "PO-2026-1019"
+
+
+def _defiant_approve(monkeypatch):
+    """A model that approves everything — the adversary every guardrail test
+    runs against. Stands in for a model taken in by injected text."""
+
+    def defiant_model(messages, tools, system, provider=None):
+        return {
+            "text": json.dumps(
+                {
+                    "action": "APPROVE",
+                    "hold_reason": None,
+                    "confidence": 0.99,
+                    "reasoning": "looks fine to me",
+                }
+            ),
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr("apagent.agent.loop.call_model", defiant_model)
+
+
+def _chat_grn(po: Document, confirmed_by: str | None, qty_scale: float = 1.0) -> Document:
+    """A chat-sourced receipt mirroring the PO's lines — what resolve.py
+    produces for "everything arrived". qty_scale < 1 is a partial delivery."""
+    return Document(
+        doc_id="GRN-CHAT-1019-1",
+        doc_type=DocType.GRN,
+        vendor_id=po.vendor_id,
+        vendor_name=po.vendor_name,
+        issue_date="2026-08-12",
+        ref_doc_id=po.doc_id,
+        currency=po.currency,
+        lines=[
+            LineItem(
+                line_no=line.line_no,
+                sku=line.sku,
+                description=line.description,
+                qty=int(line.qty * qty_scale),
+                uom=line.uom,
+                unit_price_cents=None,  # a receipt records quantities, not prices
+                line_total_cents=None,
+            )
+            for line in po.lines
+        ],
+        source=EvidenceSource.CHAT,
+        source_ref="CHAT-EV-0001",
+        confirmed_by=confirmed_by,
+        captured_at="2026-08-12T14:32:00",
+    )
+
+
+@pytest.fixture
+def demo():
+    """A fresh store each time: add_grn mutates, and a leaked chat receipt
+    would silently change every later test."""
+    store = DocumentStore.from_dir(DATA)
+    return store, store.get_invoice(DEMO_INVOICE), store.get_po(DEMO_PO)
+
+
+def _decide(store, invoice):
+    return decide_invoice(invoice, store, build_registry(store, CONTRACTS), contracts_dir=CONTRACTS)
+
+
+# --- the tiers ------------------------------------------------------------
+
+
+def test_no_chat_evidence_still_holds(monkeypatch, demo):
+    """The unchanged case. Without this passing, the feature would have
+    loosened the gate for every invoice rather than the intended ones."""
+    _defiant_approve(monkeypatch)
+    store, invoice, _ = demo
+    decision = _decide(store, invoice)
+    assert decision.action == Action.HOLD
+    assert decision.hold_reason == HoldReason.AWAITING_GRN
+
+
+def test_unauthorised_confirmer_is_evidence_not_authority(monkeypatch, demo):
+    """The security property of the whole feature: a receipt confirmed by
+    someone not on the roster does NOT release money.
+
+    This is the case where the supplier sits in the group chat — extremely
+    common for an SME — and confirms their own delivery."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by=None))
+    decision = _decide(store, invoice)
+    assert decision.action == Action.HOLD
+    assert decision.hold_reason == HoldReason.AWAITING_GRN
+    assert "[code guardrail]" in decision.reasoning
+    assert "not an authorised receiver" in decision.reasoning
+    assert "looks fine to me" in decision.reasoning  # model reasoning kept for audit
+
+
+def test_authorised_confirmer_under_ceiling_releases_the_invoice(monkeypatch, demo):
+    """The point of the feature. INV-V006-3019 is the dataset's own
+    'warehouse confirmed by phone' case; a roster member confirming it in
+    chat is what finally lets it through."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003"))
+    decision = _decide(store, invoice)
+    assert decision.action == Action.APPROVE
+
+
+def test_ceiling_blocks_a_large_invoice_on_an_informal_receipt(monkeypatch, demo):
+    """Above the ceiling an informal receipt is not enough, however
+    impeccable the confirmer. Pins the ceiling as the thing that bounds the
+    blast radius of a wrong confirmation.
+
+    The ceiling is lowered rather than the invoice inflated: editing
+    total_cents would put the total out of step with its own lines and the
+    PO, and gate 5 would escalate on THAT instead — testing the wrong gate.
+    """
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003"))
+    strict = ToleranceConfig(informal_grn_ceiling_cents=invoice.total_cents)  # >= blocks
+    decision = decide_invoice(
+        invoice,
+        store,
+        build_registry(store, CONTRACTS),
+        base_config=strict,
+        contracts_dir=CONTRACTS,
+    )
+    assert decision.action == Action.HOLD
+    assert decision.hold_reason == HoldReason.AWAITING_GRN
+    assert "ceiling" in decision.reasoning
+
+
+def test_the_ceiling_clears_the_case_it_exists_for(demo):
+    """A ceiling below the motivating invoice would make the rule dead code.
+    An earlier draft set it to SGD 1,000, under INV-V006-3019's SGD 1,270.29."""
+    _, invoice, _ = demo
+    assert invoice.total_cents < ToleranceConfig().informal_grn_ceiling_cents
+
+
+def test_short_delivery_blocks_even_when_authorised(monkeypatch, demo):
+    """A roster member confirming only part of the order cannot release an
+    invoice billing all of it. Here gate 5 catches it first (the receipt
+    records fewer units than the invoice bills)."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003", qty_scale=0.8))
+    decision = _decide(store, invoice)
+    assert decision.action == Action.HOLD
+    assert decision.hold_reason == HoldReason.AWAITING_DELIVERY
+
+
+# --- the gap gate 5 does not cover ----------------------------------------
+
+
+def _sku_less(doc_id, doc_type, qty, ref=None, **kw):
+    return Document(
+        doc_id=doc_id,
+        doc_type=doc_type,
+        vendor_id="V001",
+        vendor_name="Acme Pte Ltd",
+        issue_date="2026-08-01",
+        ref_doc_id=ref,
+        currency="SGD",
+        lines=[
+            LineItem(
+                line_no=1,
+                sku=None,  # the whole point: no item code, as SME documents often are
+                description="copy paper A4 ream",
+                qty=qty,
+                uom="PCS",
+                unit_price_cents=100,
+                line_total_cents=qty * 100,
+            )
+        ],
+        total_cents=qty * 100,
+        **kw,
+    )
+
+
+def test_sku_less_po_line_would_slip_past_gate_five(monkeypatch):
+    """The reason _chat_grn_reconciles exists rather than trusting gate 5.
+
+    matching.build_discrepancies only compares invoice against receipt when
+    the PO line carries a sku (engine.py:185). With sku=None the comparison
+    silently vanishes and gate 5 has NOTHING to say — asserted below — so a
+    chat receipt confirming 50 units would have released an invoice billing
+    100. Every committed PO happens to print SKUs, which is exactly what
+    makes this the kind of hole that ships.
+    """
+    _defiant_approve(monkeypatch)
+    po = _sku_less("PO-T", DocType.PO, 100)
+    invoice = _sku_less("INV-T", DocType.INVOICE, 100, ref="PO-T")
+    grn = _sku_less(
+        "GRN-T",
+        DocType.GRN,
+        50,  # only half was confirmed
+        ref="PO-T",
+        source=EvidenceSource.CHAT,
+        confirmed_by="EMP-003",
+        source_ref="CHAT-EV-0001",
+    )
+    store = DocumentStore([po], [grn], [invoice])
+
+    # Gate 5 is genuinely silent here — this assert is the point of the test.
+    checked = apply_tolerances(match_invoice(invoice, [po], [grn]), ToleranceConfig())
+    assert _blocking_rows(checked) == []
+
+    decision = decide_invoice(invoice, store, ToolRegistry())
+    assert decision.action == Action.HOLD
+    assert decision.hold_reason == HoldReason.AWAITING_GRN
+
+
+def test_empty_chat_receipt_never_counts_as_proof(monkeypatch, demo):
+    """A receipt with no lines confirms no quantity of anything."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    empty = _chat_grn(po, confirmed_by="EMP-003").model_copy(update={"lines": []})
+    store.add_grn(empty)
+    decision = _decide(store, invoice)
+    assert decision.action == Action.HOLD
+
+
+# --- the store's replacement rule -----------------------------------------
+
+
+def test_chat_receipt_cannot_overwrite_an_erp_one(demo):
+    """A downgrade attack: a chat message replacing what the warehouse
+    actually recorded, potentially with smaller quantities."""
+    store, _, _ = demo
+    po = store.get_po("PO-2026-1001")
+    assert store.get_grn_for_po(po.doc_id).source == EvidenceSource.ERP
+    with pytest.raises(ValueError, match="refused to replace"):
+        store.add_grn(_chat_grn(po, confirmed_by="EMP-003"))
+
+
+def test_erp_receipt_may_supersede_a_chat_one(demo):
+    """The warehouse catching up later is an upgrade, and must be allowed."""
+    store, _, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003"))
+    formal = _chat_grn(po, confirmed_by=None).model_copy(
+        update={"doc_id": "GRN-2019", "source": EvidenceSource.ERP, "source_ref": None}
+    )
+    store.add_grn(formal)
+    assert store.get_grn_for_po(po.doc_id).source == EvidenceSource.ERP
+
+
+def test_add_grn_refuses_a_receipt_it_would_silently_drop(demo):
+    """Receipts are indexed by the PO they confirm, so one without a
+    ref_doc_id would vanish instead of failing — the worst outcome, because
+    the caller would believe delivery had been recorded."""
+    store, _, po = demo
+    orphan = _chat_grn(po, confirmed_by="EMP-003").model_copy(update={"ref_doc_id": None})
+    with pytest.raises(ValueError, match="no ref_doc_id"):
+        store.add_grn(orphan)
+
+
+def test_add_grn_refuses_a_document_that_is_not_a_receipt(demo):
+    store, invoice, _ = demo
+    with pytest.raises(ValueError, match="not a goods receipt"):
+        store.add_grn(invoice)
+
+
+# --- provenance and confidence --------------------------------------------
+
+
+def test_committed_documents_are_all_erp_sourced(demo):
+    """The provenance fields must default, or the committed dataset stops
+    loading — Document(**d) is built straight from JSON that has no such keys."""
+    store, _, _ = demo
+    docs = store.all_pos() + store.all_grns()
+    assert docs and all(d.source == EvidenceSource.ERP for d in docs)
+    assert all(d.source_ref is None and d.confirmed_by is None for d in docs)
+
+
+def test_a_chat_receipt_scores_below_an_erp_one():
+    """match_confidence tells the agent how much to trust the match. A
+    Telegram message is not worth the same as a warehouse record."""
+    assert len(CONFIDENCE) == 9  # 3 lookup outcomes x 3 receipt kinds
+    for how in ("ref", "search"):
+        assert CONFIDENCE[(how, "chat")] < CONFIDENCE[(how, "erp")]
+        assert CONFIDENCE[(how, "chat")] > CONFIDENCE[(how, "none")]
+
+
+def test_gate_survives_an_invoice_with_no_printed_total(demo):
+    """The pipeline escalates a None total at gate 1, so gate 6 never sees
+    one — but the API's gate strip evaluates all six unconditionally, and
+    `None < ceiling` is a TypeError. It must fail closed instead."""
+    store, invoice, po = demo
+    grn = _chat_grn(po, confirmed_by="EMP-003")
+    checked = apply_tolerances(match_invoice(invoice, [po], [grn]), ToleranceConfig())
+    no_total = invoice.model_copy(update={"total_cents": None})
+    passed, why = grn_gate(checked, grn, po, no_total, ToleranceConfig())
+    assert passed is False
+    assert why

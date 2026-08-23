@@ -37,6 +37,7 @@ from apagent.schemas import (
     Discrepancy,
     DiscrepancyField,
     Document,
+    EvidenceSource,
     HoldReason,
     MatchResult,
     ToleranceConfig,
@@ -92,8 +93,12 @@ def decide_invoice(
     )
 
     chunks = _contract_chunks(str(contracts_dir)) if contracts_dir else ()
+    # The GRN document itself, not just checked.grn_id: gate 6 now tiers on
+    # WHERE the receipt came from, and a bare id cannot answer that.
+    grn = store.get_grn_for_po(checked.po_id) if checked.po_id else None
+    po = store.get_po(checked.po_id) if checked.po_id else None
     decision = _apply_guardrails(
-        decision, invoice, checked, review_gate, duplicates, config, chunks
+        decision, invoice, checked, review_gate, duplicates, config, chunks, grn, po
     )
 
     outbound = _render_outbound_message(decision, invoice, checked, store)
@@ -133,6 +138,111 @@ def _billed_within_order(d: Discrepancy) -> bool:
     return True
 
 
+def _chat_grn_reconciles(
+    po: Document, grn: Document, invoice: Document, match: MatchResult
+) -> bool:
+    """Every billed line has an explicit confirmed quantity that covers it.
+
+    Gate 5 already BLOCKS a short chat receipt in the common case, so this
+    looks redundant — it is not. matching.build_discrepancies only compares
+    invoice against GRN when the PO line carries a sku (engine.py:185); a PO
+    line with sku=None makes grn_qty None, the comparison silently vanishes,
+    and gate 5 goes quiet. Every committed PO happens to print SKUs, so that
+    hole is invisible today, but LineItem.sku is str | None precisely because
+    SME documents lack item codes — and the invisible version of this bug is
+    "one Telegram message approves anything under the ceiling".
+
+    So a chat receipt clears a POSITIVE bar (we FOUND a confirmed quantity
+    that covers every billed line) rather than merely surviving the absence
+    of a negative finding. Weaker evidence, higher burden of proof.
+
+    Matched by line_no carried over from the PO, deliberately NOT by sku, so
+    this check does not inherit the very indexing weakness it exists to cover.
+    Rejected alternative: relying on gate 5 alone.
+    """
+    confirmed: dict[int, int] = {}
+    for line in grn.lines:
+        confirmed[line.line_no] = confirmed.get(line.line_no, 0) + line.qty
+
+    po_by_no = {line.line_no: line for line in po.lines}
+    inv_by_no = {line.line_no: line for line in invoice.lines}
+
+    for po_no, inv_no in match.line_pairs:
+        inv_line = inv_by_no.get(inv_no)
+        if inv_line is None or po_no not in po_by_no:
+            return False  # a pairing we cannot re-derive: refuse rather than guess
+        received = confirmed.get(po_no)
+        if received is None or received < inv_line.qty:
+            return False
+    # An invoice line that paired with nothing is gate 3's business, but it also
+    # means we have no confirmed quantity for money being billed.
+    return not match.unmatched_inv_lines
+
+
+def grn_gate(
+    checked: MatchResult,
+    grn: Document | None,
+    po: Document | None,
+    invoice: Document,
+    config: ToleranceConfig,
+) -> tuple[bool, str | None]:
+    """Gate 6 as a pure function: (passed, refusal_reason).
+
+    Called by _apply_guardrails, which ENFORCES it, and by the API's gate
+    strip, which DISPLAYS it. One definition so the two cannot disagree —
+    before this existed the UI kept its own hand-written copy of the six
+    gates, and a UI that claims a gate passed while code refuses it is worse
+    than no UI at all.
+
+    The tiering: an ERP receipt is a record made against a process, a CHAT
+    one is a colleague saying it arrived. The second is real evidence and
+    genuinely unblocks the SME case this feature exists for, but it buys
+    automation only for small money, only from someone we authorised in
+    advance, and only when the quantities actually add up.
+
+    A chat receipt a reviewer has endorsed clears the first two of those --
+    a signed-in human vouching for the evidence is exactly what the roster
+    and the ceiling exist to demand, so satisfying it directly is the
+    intended path, not a bypass. The quantity check still applies: endorsing
+    a receipt that says 80 arrived does not endorse an invoice billing 100.
+    Nothing here ever asks for a formal receipt to be typed up instead --
+    an SME that had that habit would not need this feature.
+    """
+    if grn is None:
+        return False, (
+            "No goods receipt is recorded for this invoice's PO, so code "
+            "overrides APPROVE to HOLD until receipt is confirmed."
+        )
+    if grn.source != EvidenceSource.CHAT:
+        return True, None
+
+    # From here down: a chat-sourced receipt, held to a higher bar.
+    if grn.endorsed_by is None:
+        if grn.confirmed_by is None:
+            return False, (
+                f"Goods receipt {grn.doc_id} came from a chat message whose sender is "
+                "not an authorised receiver, so it is evidence for a reviewer but not "
+                "grounds to pay; code overrides APPROVE to HOLD."
+            )
+        # None fails closed. It cannot reach here today (gate 1 escalates a
+        # None total first) but this function is also called by the UI, which
+        # evaluates every gate unconditionally — and None < int is a TypeError.
+        if invoice.total_cents is None or invoice.total_cents >= config.informal_grn_ceiling_cents:
+            return False, (
+                f"Goods receipt {grn.doc_id} was confirmed in chat, and this invoice is "
+                f"at or above the {config.informal_grn_ceiling_cents / 100:,.2f} ceiling "
+                "for paying on an informal receipt alone, so code overrides APPROVE to "
+                "HOLD for a reviewer to accept the confirmation."
+            )
+    if po is None or not _chat_grn_reconciles(po, grn, invoice, checked):
+        return False, (
+            f"Goods receipt {grn.doc_id} was confirmed in chat but does not record a "
+            "confirmed quantity covering every billed line, so code overrides "
+            "APPROVE to HOLD."
+        )
+    return True, None
+
+
 def _blocking_rows(match: MatchResult) -> list[Discrepancy]:
     """The out-of-tolerance rows that forbid an APPROVE.
 
@@ -159,6 +269,8 @@ def _apply_guardrails(
     duplicates: list[Document],
     config: ToleranceConfig,
     chunks: tuple[Chunk, ...],
+    grn: Document | None = None,
+    po: Document | None = None,
 ) -> AgentDecision:
     """The authority layer: an APPROVE must survive every code check.
 
@@ -271,14 +383,14 @@ def _apply_guardrails(
     # a three-way match exists to prevent. (If the business later handles
     # service invoices with no GRN concept, this gate gains an exemption —
     # in code, reviewed, not via prompt wording.)
-    if checked.grn_id is None:
-        return _override(
-            decision,
-            Action.HOLD,
-            HoldReason.AWAITING_GRN,
-            "No goods receipt is recorded for this invoice's PO, so code "
-            "overrides APPROVE to HOLD until receipt is confirmed.",
-        )
+    #
+    # That exemption arrived, in the shape this comment demanded: a receipt
+    # confirmed in a chat group is accepted, but only under conditions code
+    # checks (grn_gate), never conditions the prompt describes. The tiering
+    # lives in grn_gate so the API's gate strip enforces the same rule.
+    passed, why = grn_gate(checked, grn, po, invoice, config)
+    if not passed:
+        return _override(decision, Action.HOLD, HoldReason.AWAITING_GRN, why)
 
     return decision
 
@@ -334,6 +446,29 @@ def _render_outbound_message(
         amount = f"{invoice.total_cents / 100:,.2f} (currency unverified)"
 
     if decision.action == Action.HOLD and decision.hold_reason == HoldReason.AWAITING_GRN:
+        # Chat evidence exists but did not clear gate 6 (too much money, or an
+        # unauthorised confirmer). Asking operations to "confirm the goods
+        # arrived" would be telling them to do the thing they just did.
+        #
+        # And the ask is NOT "record a formal goods receipt" either. The
+        # companies this is built for do not keep one — that is the whole
+        # reason delivery gets confirmed in a chat group. A message demanding
+        # a formal receipt would make the hold permanent in practice and the
+        # feature useless. So the ask is the action that actually exists:
+        # a reviewer opens the invoice, reads the confirmation, and accepts it.
+        #
+        # We cannot branch on hold_reason alone — the same reason covers "no
+        # evidence at all". Nothing from the chat message is echoed here: not
+        # the confirmer's words, not their display name, not the PO as typed.
+        chat_grn = store.get_grn_for_po(checked.po_id) if checked.po_id else None
+        if chat_grn is not None and chat_grn.source == EvidenceSource.CHAT:
+            return (
+                f"To the AP reviewer: delivery for {po_ref} ({vendor_name}) was "
+                f"confirmed in chat, but not by someone on the receiver list or not "
+                f"for an amount we release automatically. Please open invoice "
+                f"{inv_ref} ({amount}), read the confirmation, and accept it if it "
+                "looks right."
+            )
         return (
             f"To operations: please confirm whether the goods for {po_ref} "
             f"({vendor_name}) have arrived, and record the goods receipt so "
