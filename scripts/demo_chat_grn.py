@@ -18,6 +18,7 @@ not by the model behaving.
 """
 
 import json
+import re
 import sys
 
 import uvicorn
@@ -139,9 +140,75 @@ def seed(authorised: bool) -> None:
     print("\n  http://127.0.0.1:8000  ->  INV-V006-3019\n")
 
 
+def _keyword_extractor(window, provider=None):
+    """A crude stand-in for the extraction model, for running against real
+    Telegram without an LLM key.
+
+    It is deliberately dumb: a PO pattern, a few item words, and numbers next
+    to them. That is all. The point is not to replace the model but to leave
+    everything AROUND it real -- the messages really arrive from Telegram, the
+    roster really decides who may confirm, resolve.py really matches against
+    the purchase order, and the guardrails really judge the result. Only the
+    "read how people actually write" step is faked, and it shows: reorder the
+    words and it will miss things a model would catch.
+
+    Lives in the demo script, not in the package, so nobody mistakes it for a
+    fallback the product ships with.
+    """
+    text = " ".join(m.text for m in window).lower()
+    po = re.search(r"po-\d{4}-\d{4}", text)
+    # Take the PO reference out before hunting for quantities, or the year in
+    # PO-2026-1019 gets read as "2026 detergent". A real model does not make
+    # this mistake, which is rather the point of using one.
+    text = text.replace(po.group(), " ") if po else text
+    items = []
+    for word, aliases in (
+        ("detergent", ("detergent",)),
+        ("nitrile gloves", ("glove", "gloves")),
+        ("trash bag", ("bag", "bags")),
+    ):
+        hit = next((a for a in aliases if a in text), None)
+        if not hit:
+            continue
+        # The number must come BEFORE the item, which is how English states a
+        # quantity: "100 boxes of gloves". Allowing it after as well read
+        # "detergent all here, 100 boxes of gloves" as 100 detergent -- the
+        # kind of mistake this whole approach is prone to, and the reason the
+        # product uses a model instead.
+        before = re.search(rf"(\d+)[^.]{{0,12}}?{hit}", text)
+        qty = before.group(1) if before else None
+        complete = None
+        if qty is None:
+            # "detergent all here" states completeness without a number.
+            complete = bool(re.search(rf"{hit}[^.]{{0,6}}\ball\b", text))
+        items.append({"description": word, "qty": qty, "complete": complete})
+    return {
+        "is_delivery_confirmation": bool(po) and bool(items),
+        "po_reference": po.group().upper() if po else None,
+        "items": items,
+        "everything_arrived": "all" in text and "short" not in text,
+        "notes": None,
+    }
+
+
+def live_telegram() -> None:
+    """Serve the console with the REAL Telegram poller attached."""
+    import apagent.chat.harvest as harvest
+
+    harvest.extract_delivery_claim = _keyword_extractor
+    print("\n  Live Telegram mode.")
+    print("  Real: messages, roster, PO matching, guardrails, the invoice flip.")
+    print("  Faked: only the extraction model (no LLM key set) — see _keyword_extractor.\n")
+    print("  Message the bot, then watch http://127.0.0.1:8000 -> INV-V006-3019\n")
+    uvicorn.run("apagent.api.app:app", host="127.0.0.1", port=8000, log_level="warning")
+
+
 def main() -> None:
     load_dotenv()
     _stub_model()
+    if "--telegram" in sys.argv:
+        live_telegram()
+        return
     seed(authorised="--authorised" in sys.argv)
     uvicorn.run("apagent.api.app:app", host="127.0.0.1", port=8000, log_level="warning")
 

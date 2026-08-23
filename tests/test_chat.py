@@ -490,3 +490,18 @@ def test_completeness_falls_back_to_the_whole_delivery(store):
     receipt, reason = _resolve(store, [{"description": "detergent", "qty": None}], everything=True)
     assert reason is None
     assert receipt.lines[0].qty == 10
+
+
+def test_a_blank_roster_env_var_falls_back_to_the_default(monkeypatch, tmp_path):
+    """.env.example ships APAGENT_CHAT_ROSTER= with an empty value, and an
+    empty string is SET as far as os.getenv is concerned. Passing it as
+    getenv's default meant Path("") -> Path(".") -> PermissionError on
+    opening a directory, at app startup, for anyone who copied the example."""
+    monkeypatch.setenv("APAGENT_CHAT_ROSTER", "")
+    roster = Roster.from_file()  # must not raise
+    assert isinstance(roster, Roster)
+
+
+def test_a_roster_path_that_is_a_directory_authorises_nobody(monkeypatch, tmp_path):
+    monkeypatch.setenv("APAGENT_CHAT_ROSTER", str(tmp_path))
+    assert Roster.from_file().is_bound(CHAT) is False

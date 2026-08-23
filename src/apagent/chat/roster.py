@@ -61,8 +61,13 @@ class Roster:
         granting permission -- an install that forgot to configure it gets no
         automation rather than open automation.
         """
-        path = path or Path(os.getenv("APAGENT_CHAT_ROSTER", DEFAULT_ROSTER))
-        if not path.exists():
+        # `or`, not getenv's default argument: .env.example ships
+        # APAGENT_CHAT_ROSTER= with an empty value, and an empty string IS
+        # set as far as getenv is concerned. That turned into Path("") ->
+        # Path(".") -> PermissionError on opening a directory, at app
+        # startup, for anyone who copied the example file.
+        path = path or Path(os.getenv("APAGENT_CHAT_ROSTER") or DEFAULT_ROSTER)
+        if not path.is_file():
             return cls({}, {})
         raw = json.loads(path.read_text(encoding="utf-8"))
         bound = {str(k): str(v.get("label", k)) for k, v in raw.get("bound_chats", {}).items()}

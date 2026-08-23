@@ -26,9 +26,14 @@
     "automation."
   ],
   "bound_chats": {
-    "-1001234567890": { "label": "Ops / deliveries" }
+    "7404385637": {
+      "label": "direct chat with Kaiwen (demo)"
+    }
   },
   "confirmers": {
-    "telegram:88888888": { "employee_id": "EMP-003", "employee_label": "Li Wei (warehouse)" }
+    "telegram:7404385637": {
+      "employee_id": "EMP-003",
+      "employee_label": "Kaiwen Zheng (warehouse)"
+    }
   }
 }

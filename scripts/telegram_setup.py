@@ -51,15 +51,19 @@ def main() -> None:
     bot = me["result"]
     print(f"\nBot            @{bot['username']}")
 
-    # The trap, checked first because everything downstream depends on it.
+    # The trap, checked first because everything downstream depends on it --
+    # but only in groups. In a direct chat every message reaches the bot
+    # regardless, so warning about it there would be noise.
     if bot.get("can_read_all_group_messages"):
-        print("Privacy mode   OFF — the bot sees the whole conversation. Correct.")
+        print("Privacy mode   OFF — in groups the bot sees the whole conversation.")
     else:
-        print("Privacy mode   ON  — THIS WILL BREAK THE FEATURE.")
-        print("               The bot only receives messages that @-mention it, so the")
-        print("               line that says what actually arrived never reaches it.")
+        print("Privacy mode   ON  — fine for DIRECT chats, breaks GROUPS.")
+        print("               In a group the bot would receive only messages that")
+        print("               @-mention it, so the line saying what actually arrived")
+        print("               never reaches it and every confirmation is refused.")
         print("               Fix: BotFather -> /setprivacy -> this bot -> Disable,")
-        print("               then REMOVE THE BOT FROM THE GROUP AND ADD IT AGAIN.")
+        print("               then REMOVE THE BOT FROM THE GROUP AND ADD IT AGAIN")
+        print("               (the setting only takes effect when the bot joins).")
 
     updates = call(token, "getUpdates", timeout=0)
     if not updates.get("ok"):
@@ -72,8 +76,21 @@ def main() -> None:
         message = update.get("message") or update.get("channel_post") or {}
         chat = message.get("chat") or {}
         sender = message.get("from") or {}
-        if chat.get("id") is not None and chat.get("type") in ("group", "supergroup"):
-            chats[str(chat["id"])] = chat.get("title") or "group"
+        # Private chats count. A receiver messaging the bot directly is a
+        # legitimate deployment -- it is the only shape WhatsApp supports at
+        # all -- and an earlier version of this script filtered them out,
+        # which made a working setup look like a broken one.
+        if chat.get("id") is not None and chat.get("type") in (
+            "group",
+            "supergroup",
+            "private",
+        ):
+            label = chat.get("title") or (
+                f"direct chat with {chat.get('first_name', '')}".strip()
+                if chat.get("type") == "private"
+                else "group"
+            )
+            chats[str(chat["id"])] = label
         if sender.get("id") is not None:
             name = " ".join(
                 p for p in (sender.get("first_name"), sender.get("last_name")) if p
