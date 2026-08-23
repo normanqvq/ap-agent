@@ -100,6 +100,10 @@ class Service:
         # Built lazily and shared with the chat poller, so a harvested
         # receipt lands in THIS store and the console reflects it.
         self._harvester = None
+        # receipt id -> the ChatGrnEvidence behind it, so the detail page
+        # can show the conversation. Session state: the verbatim messages
+        # are never written to disk.
+        self._chat_evidence: dict = {}
 
     # --- decisions cache ---------------------------------------------------
 
@@ -235,6 +239,7 @@ class Service:
             "lines": [line.model_dump() for line in invoice.lines],
             "po": po.model_dump() if po else None,
             "grn": grn.model_dump() if grn else None,
+            "chat_grn": self._chat_grn_view(grn, po),
             "match": checked.model_dump(),
             "review_gate": review_gate,
             "duplicates": [d.doc_id for d in duplicates],
@@ -395,6 +400,41 @@ class Service:
         self._chat_confirmed.add(invoice_id)
         return self.run_case(invoice_id)
 
+    def _chat_grn_view(self, grn, po) -> dict | None:
+        """The chat confirmation behind a receipt, for the detail page.
+
+        None when the receipt is an ordinary ERP one, so the card simply does
+        not render. Everything a reviewer needs to judge the confirmation is
+        assembled HERE, in Python, because CLAUDE.md keeps business logic out
+        of the frontend — "was this person allowed to confirm" and "which
+        ordered lines went unconfirmed" are exactly that.
+
+        The verbatim messages ride in `messages`. They are the one genuinely
+        attacker-authored thing on this page, so the browser must escape them
+        like any supplier-printed string.
+        """
+        if grn is None or grn.source != EvidenceSource.CHAT:
+            return None
+        evidence = self._chat_evidence.get(grn.doc_id)
+        confirmed = {line.line_no for line in grn.lines}
+        unconfirmed = (
+            [line.description for line in po.lines if line.line_no not in confirmed] if po else []
+        )
+        return {
+            "receipt_id": grn.doc_id,
+            "confirmed_by": grn.confirmed_by,
+            "authorised": grn.confirmed_by is not None,
+            "endorsed_by": grn.endorsed_by,
+            "captured_at": grn.captured_at,
+            "policy": resolve_config(grn.vendor_id, self.config).chat_grn_policy.value,
+            "lines": [
+                {"sku": line.sku, "description": line.description, "qty": line.qty}
+                for line in grn.lines
+            ],
+            "unconfirmed": unconfirmed,
+            "messages": [m.model_dump() for m in evidence.messages] if evidence else [],
+        }
+
     def on_chat_receipt(self, result) -> None:
         """A chat-harvested receipt landed; re-decide what it affects.
 
@@ -404,6 +444,8 @@ class Service:
         re-run the invoices whose proof of delivery just changed -- that
         re-run is what makes the console flip while someone is looking at it.
         """
+        if result.receipt is not None and result.evidence is not None:
+            self._chat_evidence[result.receipt.doc_id] = result.evidence
         for invoice_id in result.invoice_ids:
             self._chat_confirmed.add(invoice_id)
             try:

@@ -367,3 +367,200 @@ def test_config_reports_the_enforced_policy():
     assert by_id["V004"] == 3.0  # also parsed from its supply agreement
     assert by_id["V001"] is None  # no clause -> default applies
     assert k["actions"] == ["APPROVE", "HOLD", "EMAIL", "ESCALATE"]
+
+
+# --- chat-confirmed deliveries on the detail page --------------------------
+
+
+def _chat_case(monkeypatch, sender_id="88888888"):
+    """A service with one chat confirmation harvested against PO-2026-1019."""
+    import json as _json
+
+    import apagent.api.service as service_module
+    import apagent.chat.harvest as harvest_module
+    from apagent.chat.roster import Roster
+    from apagent.chat.runner import ChatRunner
+    from apagent.schemas import ChatMessage
+
+    chat_id = "-1001234567890"
+    monkeypatch.setattr(
+        "apagent.agent.loop.call_model",
+        lambda messages, tools, system, provider=None: {
+            "text": _json.dumps(
+                {"action": "APPROVE", "hold_reason": None, "confidence": 0.9, "reasoning": "ok"}
+            ),
+            "tool_calls": [],
+        },
+    )
+    monkeypatch.setattr(
+        harvest_module,
+        "extract_delivery_claim",
+        lambda w, provider=None: {
+            "is_delivery_confirmation": True,
+            "po_reference": "PO-2026-1019",
+            "items": [
+                {"description": "detergent", "qty": None, "complete": True},
+                {"description": "nitrile gloves", "qty": "100", "complete": True},
+                {"description": "trash bag", "qty": None, "complete": False},
+            ],
+            "everything_arrived": False,
+        },
+    )
+    svc = service_module.Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)
+    harvester = svc.chat_harvester()
+    harvester.roster = Roster({chat_id: "Ops"}, {"telegram:88888888": "Li Wei (warehouse)"})
+
+    def message(mid, text):
+        return ChatMessage(
+            message_id=mid,
+            chat_id=chat_id,
+            sender_id=sender_id,
+            sender_name="whoever",
+            text=text,
+            sent_at="2026-08-12T14:30:00",
+        )
+
+    class _Adapter:
+        platform = "telegram"
+
+        def __init__(self):
+            self.pending = [message("1", "PO-2026-1019 delivered"), message("2", "@apbot confirm")]
+            self.sent = []
+
+        def poll(self, timeout=30):
+            out, self.pending = self.pending, []
+            return out
+
+        def mentions_bot(self, m):
+            return "@apbot" in m.text
+
+        def reply(self, chat_id, text):
+            self.sent.append(text)
+
+    ChatRunner(_Adapter(), harvester, on_receipt=svc.on_chat_receipt).tick()
+    return svc
+
+
+def test_detail_page_carries_the_conversation_and_what_code_read_from_it(monkeypatch):
+    """Everything the reviewer needs to judge a chat confirmation is assembled
+    server-side — CLAUDE.md keeps business logic out of the frontend, and
+    "was this person allowed to confirm" is exactly that."""
+    svc = _chat_case(monkeypatch)
+    evidence = svc.get_case("INV-V006-3019")["chat_grn"]
+    assert evidence["authorised"] is True
+    assert evidence["confirmed_by"] == "Li Wei (warehouse)"
+    assert [line["qty"] for line in evidence["lines"]] == [10, 100]
+    # The item nobody gave a number for is listed as outstanding rather than
+    # silently recorded as received.
+    assert evidence["unconfirmed"] == ["Trash bag 120L, roll of 20"]
+    assert [m["text"] for m in evidence["messages"]]  # verbatim, for the reviewer
+    assert evidence["policy"] == "TIERED"
+
+
+def test_an_ordinary_receipt_shows_no_chat_card(monkeypatch):
+    import apagent.api.service as service_module
+
+    svc = service_module.Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)
+    assert svc.get_case("INV-V001-3001")["chat_grn"] is None
+
+
+def test_the_supplier_confirming_their_own_delivery_is_flagged(monkeypatch):
+    """The case worth demoing. An SME delivery group usually contains the
+    vendor; their confirmation is shown, marked unauthorised, and does not
+    release payment."""
+    svc = _chat_case(monkeypatch, sender_id="55555555")
+    case = svc.get_case("INV-V006-3019")
+    assert case["chat_grn"]["authorised"] is False
+    assert case["decision"]["action"] == "HOLD"
+    gate = next(g for g in case["guardrails"] if g["key"] == "grn")
+    assert gate["passed"] is False
+    assert "chat-confirmed" in gate["label"]
+
+
+def test_a_reviewer_accepting_does_not_also_accept_the_bill(monkeypatch):
+    """Accepting is recorded, and the invoice still holds — correctly.
+
+    The confirmation covered the detergent and the gloves; nobody said the
+    trash bags arrived, and the invoice bills for all three. So the reviewer
+    vouched for a DELIVERY, and the facts gate keeps refusing the BILL. This
+    is the line that keeps the escape hatch from being a rubber stamp."""
+    svc = _chat_case(monkeypatch, sender_id="55555555")
+    case = svc.accept_chat_grn("INV-V006-3019", actor="123")
+    assert case["chat_grn"]["endorsed_by"] == "123"
+    assert case["decision"]["action"] == "HOLD"
+
+
+def test_a_reviewer_can_release_a_fully_confirmed_delivery(monkeypatch):
+    """The escape hatch working: one click, not "go record a formal goods
+    receipt" — which the businesses this serves do not do, which is why the
+    delivery was confirmed in a chat group in the first place."""
+    import apagent.chat.harvest as harvest_module
+
+    svc = _chat_case(monkeypatch, sender_id="55555555")
+    # Same unauthorised sender, but this time the whole delivery is confirmed.
+    monkeypatch.setattr(
+        harvest_module,
+        "extract_delivery_claim",
+        lambda w, provider=None: {
+            "is_delivery_confirmation": True,
+            "po_reference": "PO-2026-1019",
+            "items": [],
+            "everything_arrived": True,
+        },
+    )
+    from apagent.chat.runner import ChatRunner
+    from apagent.schemas import ChatMessage
+
+    class _Adapter:
+        platform = "telegram"
+
+        def __init__(self):
+            self.pending = [
+                ChatMessage(
+                    message_id="9",
+                    chat_id="-1001234567890",
+                    sender_id="55555555",
+                    sender_name="whoever",
+                    text="@apbot everything arrived",
+                    sent_at="2026-08-12T15:00:00",
+                )
+            ]
+
+        def poll(self, timeout=30):
+            out, self.pending = self.pending, []
+            return out
+
+        def mentions_bot(self, m):
+            return True
+
+        def reply(self, chat_id, text):
+            pass
+
+    ChatRunner(_Adapter(), svc.chat_harvester(), on_receipt=svc.on_chat_receipt).tick()
+    assert svc.get_case("INV-V006-3019")["decision"]["action"] == "HOLD"  # unauthorised sender
+
+    case = svc.accept_chat_grn("INV-V006-3019", actor="123")
+    assert case["decision"]["action"] == "APPROVE"
+    assert case["chat_grn"]["endorsed_by"] == "123"
+
+
+def test_accepting_is_refused_when_there_is_nothing_to_accept(monkeypatch):
+    import apagent.api.service as service_module
+
+    svc = service_module.Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)
+    with pytest.raises(ValueError, match="chat-confirmed"):
+        svc.accept_chat_grn("INV-V001-3001")
+
+
+def test_settings_reports_the_chat_policy_and_ceiling(monkeypatch):
+    """Both decide whether money moves, so both belong on the read-only
+    policy page rather than buried in code nobody reads."""
+    import apagent.api.service as service_module
+
+    info = service_module.Service().config_info()
+    assert info["chat_grn"]["policy"] == "TIERED"
+    assert "TRUSTED" in info["chat_grn"]["options"]
+    assert info["tolerances"]["informal_grn_ceiling_cents"] == 200_000

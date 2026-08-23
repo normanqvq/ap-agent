@@ -321,6 +321,15 @@ async function dashboard() {
 }
 
 // --- payments --------------------------------------------------------------
+// Plain-English gloss for each chat policy. Wording only — which one is in
+// force, and what it does, is decided server-side.
+const POLICY_EN = {
+  OFF: "chat confirmations are not proof of delivery at all",
+  EVIDENCE_ONLY: "always shown to a reviewer; never releases payment on its own",
+  TIERED: "releases payment when an authorised receiver confirms it, under the ceiling",
+  TRUSTED: "an authorised receiver's word releases payment at any amount",
+};
+
 const HOLD_EN = {
   AWAITING_GRN: "No goods receipt",
   AWAITING_DELIVERY: "Short delivery",
@@ -505,6 +514,20 @@ async function settings() {
       ${setting("Invoice-total tolerance", `${(t.total_abs_cents / 100).toFixed(2)} and ${t.total_pct}%`, "in the invoice's own currency; a total must sit inside both bounds")}
       ${setting("Quantity", t.qty_exact ? "exact match" : "tolerance", "quantity gaps are never noise — they mean goods did not arrive")}
       ${setting("Manual-review threshold", (t.manual_review_threshold_cents / 100).toLocaleString("en", { minimumFractionDigits: 2 }), "in the invoice's own currency; at or above it a human signs off, even on a clean match")}
+      ${setting("Informal-receipt ceiling", (t.informal_grn_ceiling_cents / 100).toLocaleString("en", { minimumFractionDigits: 2 }), "the most we pay on a delivery confirmed in chat rather than recorded in the system")}
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Chat-confirmed deliveries</h3><span class="runtotal">how much a colleague's word is worth here</span></div>
+      <div class="policy">
+        ${c.chat_grn.options.map((o) => `
+          <div class="opt ${o === c.chat_grn.policy ? "on" : ""}">
+            <b>${esc(o)}</b><span>${esc(POLICY_EN[o] || "")}</span>
+          </div>`).join("")}
+      </div>
+      <div class="policy-note">Set in code and overridable per vendor, like every limit on this page.
+        Two things no setting touches: whether the confirmed quantities cover what is billed
+        (that is arithmetic, not policy), and the manual-review threshold above
+        (a promise about large payments, not about proof of delivery).</div>
     </div>
     <div class="card">
       <div class="card-h"><h3>Contract allowances</h3><span class="runtotal">parsed from the contract text by code — the % never passes through the model</span></div>
@@ -538,6 +561,52 @@ async function detail(id) {
   view.innerHTML = `<div class="placeholder">Loading ${esc(id)}…</div>`;
   const c = await api(`/api/invoices/${id}`);
   renderDetail(c);
+}
+
+// The conversation behind a chat-confirmed delivery.
+//
+// Every judgement shown here was made server-side (service._chat_grn_view):
+// whether the speaker was allowed to confirm, which ordered lines went
+// unconfirmed, which policy applied. This function only lays it out —
+// CLAUDE.md keeps business logic out of the frontend, and "may this person
+// release money" is the most business-logic question in the app.
+//
+// The messages are the one genuinely attacker-authored thing on the page,
+// written by whoever is in that group. Every one goes through esc().
+function chatEvidenceCard(c) {
+  const ev = c.chat_grn;
+  if (!ev) return "";
+  const who = ev.authorised
+    ? `<span class="chip ok">✓ ${esc(ev.confirmed_by)} · authorised receiver</span>`
+    : `<span class="chip warn">⚠ not on the receiver list</span>`;
+  const endorsed = ev.endorsed_by
+    ? `<span class="chip ok">✓ accepted by ${esc(ev.endorsed_by)}</span>`
+    : "";
+  const said = ev.messages.length
+    ? ev.messages.map((m) =>
+        `<div class="said"><div class="said-h"><b>${esc(m.sender_name)}</b>
+          <span class="num">${esc(m.sent_at.replace("T", " "))}</span></div>
+          <div class="said-t">${esc(m.text)}</div></div>`).join("")
+    : `<div class="said-none">The conversation is not in this session's buffer.</div>`;
+  const read = ev.lines.map((l) =>
+    `<li><span class="num">${l.qty}</span> × ${esc(l.sku || l.description)}</li>`).join("");
+  const pending = ev.unconfirmed.length
+    ? `<div class="pending"><b>Not confirmed:</b> ${ev.unconfirmed.map(esc).join(", ")}
+        <div class="pending-n">Ordered but not mentioned as received, so the invoice
+        still holds on those lines.</div></div>`
+    : "";
+  return `<div class="card chatev ${ev.authorised ? "" : "unauth"}">
+      <h3>Delivery confirmed in chat</h3>
+      <div class="chips">${who}${endorsed}
+        <span class="chip">${esc(ev.receipt_id)}</span>
+        <span class="chip">policy: ${esc(ev.policy)}</span></div>
+      <div class="saidwrap">${said}</div>
+      <div class="readas"><b>Recorded as received</b><ul>${read}</ul></div>
+      ${pending}
+      <p class="evnote">Chat text is third-party data. It is evidence for you to
+      judge — the quantities above were matched to the purchase order in code,
+      and no message can approve an invoice by itself.</p>
+    </div>`;
 }
 
 function renderDetail(c) {
@@ -584,6 +653,9 @@ function renderDetail(c) {
             ? `<button class="btn primary" disabled>✓ Payment confirmed</button>`
             : `<button class="btn primary" id="confirm">Confirm payment</button>`)
           : ""}
+        ${c.chat_grn && !c.chat_grn.endorsed_by && !(dec && dec.action === "APPROVE")
+          ? `<button class="btn primary" id="accept-chat">Accept the chat confirmation</button>`
+          : ""}
         ${c.human_review === "sent_to_human"
           ? `<button class="btn" disabled>✓ Sent to human</button>`
           : `<button class="btn" id="send">Send to human</button>`}
@@ -620,11 +692,27 @@ function renderDetail(c) {
         ${dec ? `<div class="card reason-card"><h3>Decision rationale</h3>
           <ol class="points">${reasonPoints(c).map((p) => `<li>${esc(p)}</li>`).join("")}</ol>
           <details class="rawreason"><summary>Model's raw rationale (audit)</summary><p>${esc(dec.reasoning)}</p></details></div>` : ""}
+        ${chatEvidenceCard(c)}
         ${dec && dec.outbound_message ? `<div class="card outbound"><h3>System-generated outbound message (template)</h3><p>${esc(dec.outbound_message)}</p><button class="btn" id="email-vendor">Open in email composer</button></div>` : ""}
       </div>
     </div>`;
   document.getElementById("back").addEventListener("click", () => { cancelPendingNav(); setActiveNav(); dashboard(); });
   document.getElementById("rerun").addEventListener("click", (e) => rerun(c.invoice_id, e.target));
+  // Accepting the confirmation re-runs the agent, so the answer comes back
+  // from the pipeline rather than from this click. If code still refuses —
+  // a short delivery, say — the invoice stays held and the button says so.
+  const acceptBtn = document.getElementById("accept-chat");
+  if (acceptBtn) acceptBtn.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = "Accepting…";
+    try {
+      const fresh = await api(`/api/invoices/${c.invoice_id}/accept-chat-grn`, { method: "POST" });
+      renderDetail(fresh);
+      toast(fresh.decision && fresh.decision.action === "APPROVE"
+        ? `Confirmation accepted — ${c.invoice_id} released`
+        : `Confirmation accepted — still held by code`);
+    } catch { e.target.disabled = false; e.target.textContent = "Could not accept (retry)"; }
+  });
   const confirmBtn = document.getElementById("confirm");
   if (confirmBtn) confirmBtn.addEventListener("click", async (e) => {
     e.target.disabled = true;
