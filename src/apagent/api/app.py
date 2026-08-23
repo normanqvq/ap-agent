@@ -146,6 +146,23 @@ def confirm_payment(invoice_id: str, request: Request) -> dict:
         raise HTTPException(status_code=409, detail=str(e)) from None
 
 
+@app.post("/api/invoices/{invoice_id}/accept-chat-grn")
+def accept_chat_grn(invoice_id: str, request: Request) -> dict:
+    """A reviewer vouches for a delivery that was confirmed in a chat group.
+
+    The manual counterpart to the automatic chat tier, and the reason it can
+    afford to be strict. 409 when there is no chat confirmation to accept —
+    code checks that, not the frontend. Re-runs the agent, so the answer is
+    the pipeline's, not this endpoint's.
+    """
+    try:
+        return get_service().accept_chat_grn(invoice_id, _actor(request))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+
+
 @app.post("/api/invoices/{invoice_id}/send-to-human")
 def send_to_human(invoice_id: str, request: Request) -> dict:
     try:
