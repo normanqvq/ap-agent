@@ -24,11 +24,11 @@ MARKS = {"pass": "ok", "friction": "FRICTION", "false_approve": "FALSE APPROVE",
 
 
 def main() -> None:
-    manifest = json.loads((DATA / "manifest.json").read_text())
+    manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
     decisions_path = DATA / "decisions.json"
     if not decisions_path.exists():
         sys.exit("No decisions cache. Run scripts/precompute_decisions.py first.")
-    decisions = json.loads(decisions_path.read_text())
+    decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
 
     report = evaluate(manifest, decisions)
 
@@ -55,7 +55,7 @@ def main() -> None:
             + ", ".join(report["unexpected"])
         )
 
-    REPORT.write_text(json.dumps(report, indent=2) + "\n")
+    REPORT.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"\nReport written -> {REPORT}")
 
     if report["false_approves"]:

@@ -21,7 +21,7 @@ def _decision(action, hold_reason=None):
 def test_every_manifest_defect_has_an_expectation():
     """A new defect type added to the generator must be classified here,
     or the harness would silently treat it as payable."""
-    manifest = json.loads((DATA / "manifest.json").read_text())
+    manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
     defects = {e["defect"] for e in manifest}
     known = MUST_NOT_APPROVE | SHOULD_APPROVE
     assert defects <= known, defects - known
@@ -108,8 +108,8 @@ def test_metrics_math():
 def test_committed_decisions_have_zero_false_approves():
     """The headline claim, measured over the committed cache: every planted
     defect was blocked, and the demo metrics are what the README says."""
-    manifest = json.loads((DATA / "manifest.json").read_text())
-    decisions = json.loads((DATA / "decisions.json").read_text())
+    manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
+    decisions = json.loads((DATA / "decisions.json").read_text(encoding="utf-8"))
     report = evaluate(manifest, decisions)
     assert report["false_approves"] == []
     assert report["missing"] == []

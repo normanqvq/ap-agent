@@ -32,7 +32,7 @@ WITH_V005_OVERRIDE = ToleranceConfig(
 
 def _match(invoice_id):
     def load(name):
-        return [Document(**d) for d in json.loads((DATA / name).read_text())]
+        return [Document(**d) for d in json.loads((DATA / name).read_text(encoding="utf-8"))]
 
     pos, grns, invoices = load("pos.json"), load("grns.json"), load("invoices.json")
     invoice = next(i for i in invoices if i.doc_id == invoice_id)

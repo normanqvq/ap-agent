@@ -34,7 +34,9 @@ class DocumentStore:
         """Load the synthetic dataset directory (pos/grns/invoices .json)."""
 
         def load(name: str) -> list[Document]:
-            return [Document(**d) for d in json.loads((data_dir / name).read_text())]
+            return [
+                Document(**d) for d in json.loads((data_dir / name).read_text(encoding="utf-8"))
+            ]
 
         return cls(load("pos.json"), load("grns.json"), load("invoices.json"))
 

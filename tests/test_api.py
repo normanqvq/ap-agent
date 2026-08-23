@@ -334,7 +334,7 @@ def test_upload_stays_out_of_the_committed_cache(monkeypatch, tmp_path):
     assert case["invoice_id"] == "INV-V001-9999"
     assert case["decision"]["action"] == "HOLD"
     assert any(c["invoice_id"] == "INV-V001-9999" for c in svc.list_cases())
-    saved = json.loads((tmp_path / "decisions.json").read_text())
+    saved = json.loads((tmp_path / "decisions.json").read_text(encoding="utf-8"))
     assert "INV-V001-9999" not in saved  # session state, not committed
     with pytest.raises(ValueError):  # same invoice number again -> refused
         svc.upload_invoice("sample.pdf", b"%PDF-fake")
