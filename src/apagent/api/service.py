@@ -96,6 +96,9 @@ class Service:
         # Confirmed payments, newest last: who signed off which invoice,
         # when, for how much. The "where did my click go" record.
         self._payment_record: list[dict] = []
+        # Built lazily and shared with the chat poller, so a harvested
+        # receipt lands in THIS store and the console reflects it.
+        self._harvester = None
 
     # --- decisions cache ---------------------------------------------------
 
@@ -390,6 +393,32 @@ class Service:
         # receipt lives in memory and never reaches data/synthetic/.
         self._chat_confirmed.add(invoice_id)
         return self.run_case(invoice_id)
+
+    def on_chat_receipt(self, result) -> None:
+        """A chat-harvested receipt landed; re-decide what it affects.
+
+        Called from the chat poller's thread. The receipt is already in the
+        store (the harvester shares this service's DocumentStore, which is
+        the reason the poller runs in-process), so all that is left is to
+        re-run the invoices whose proof of delivery just changed -- that
+        re-run is what makes the console flip while someone is looking at it.
+        """
+        for invoice_id in result.invoice_ids:
+            self._chat_confirmed.add(invoice_id)
+            try:
+                self.run_case(invoice_id)
+            except Exception:
+                # One bad invoice must not stop the others, and must not
+                # propagate into the poller loop.
+                continue
+
+    def chat_harvester(self):
+        """The harvester bound to THIS service's store, built once."""
+        from apagent.chat.harvest import ChatHarvester
+
+        if self._harvester is None:
+            self._harvester = ChatHarvester(self.store)
+        return self._harvester
 
     def send_to_human(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """Route an invoice to a human reviewer and record the hand-off

@@ -285,3 +285,127 @@ def test_strip_fences_handles_a_json_code_block():
 def test_rendered_window_labels_each_speaker():
     rendered = render_window([msg("1", "the goods arrived")])
     assert "Ah Seng" in rendered and "the goods arrived" in rendered
+
+
+# --- the poller, joined to the running service ----------------------------
+
+
+class _FakeAdapter:
+    """A platform that yields one conversation, then nothing."""
+
+    platform = "telegram"
+
+    def __init__(self, messages):
+        self._messages = messages
+        self.sent = []
+
+    def poll(self, timeout=30):
+        out, self._messages = self._messages, []
+        return out
+
+    def mentions_bot(self, message):
+        return "@apbot" in message.text
+
+    def reply(self, chat_id, text):
+        self.sent.append(text)
+
+
+def test_a_mention_flips_the_invoice_in_the_running_service(monkeypatch, roster):
+    """The whole feature end to end, and the reason the poller runs inside
+    the web app's process: the harvester shares the service's in-memory
+    store, so a receipt recorded from chat is visible to the console
+    immediately. A separate process would record into a different store and
+    the page would keep showing the hold."""
+    import json
+
+    import apagent.api.service as service_module
+    from apagent.chat.runner import ChatRunner
+
+    monkeypatch.setattr(
+        "apagent.agent.loop.call_model",
+        lambda messages, tools, system, provider=None: {
+            "text": json.dumps(
+                {"action": "APPROVE", "hold_reason": None, "confidence": 0.9, "reasoning": "ok"}
+            ),
+            "tool_calls": [],
+        },
+    )
+    monkeypatch.setattr(
+        harvest_module, "extract_delivery_claim", lambda w, provider=None: ALL_ARRIVED
+    )
+
+    svc = service_module.Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)  # never touch the committed file
+    harvester = svc.chat_harvester()
+    harvester.roster = roster
+
+    assert svc.get_case("INV-V006-3019")["decision"]["action"] == "HOLD"
+
+    adapter = _FakeAdapter([msg("1", "PO-2026-1019 all arrived"), msg("2", "@apbot confirm")])
+    ChatRunner(adapter, harvester, on_receipt=svc.on_chat_receipt).tick()
+
+    case = svc.get_case("INV-V006-3019")
+    assert case["decision"]["action"] == "APPROVE"
+    gate = next(g for g in case["guardrails"] if g["key"] == "grn")
+    assert gate["passed"] and "chat-confirmed" in gate["label"]
+    assert adapter.sent  # the group was told what was recorded
+
+
+def test_a_flipped_invoice_never_moves_the_measured_benchmark(monkeypatch, roster):
+    """The headline metric is measured over the committed ERP dataset. A
+    session's chat evidence sits outside that ground truth, so it must not
+    show up as a false approve on the analytics page mid-demo — nor rewrite
+    the committed cache."""
+    import json
+
+    import apagent.api.service as service_module
+    from apagent.chat.runner import ChatRunner
+
+    monkeypatch.setattr(
+        "apagent.agent.loop.call_model",
+        lambda messages, tools, system, provider=None: {
+            "text": json.dumps(
+                {"action": "APPROVE", "hold_reason": None, "confidence": 0.9, "reasoning": "ok"}
+            ),
+            "tool_calls": [],
+        },
+    )
+    monkeypatch.setattr(
+        harvest_module, "extract_delivery_claim", lambda w, provider=None: ALL_ARRIVED
+    )
+
+    svc = service_module.Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)
+    svc.chat_harvester().roster = roster
+    adapter = _FakeAdapter([msg("1", "PO-2026-1019 all arrived"), msg("2", "@apbot confirm")])
+    ChatRunner(adapter, svc.chat_harvester(), on_receipt=svc.on_chat_receipt).tick()
+
+    assert svc.metrics()["false_approve"] == 0
+    assert svc.analytics()["metrics"]["false_approve_count"] == 0
+    # Present with its committed value, NOT dropped: it has a manifest entry,
+    # and a missing key would make the harness report it under `missing`.
+    assert svc._eval_view()["INV-V006-3019"]["action"] == "HOLD"
+
+
+def test_the_poller_survives_a_platform_outage(roster, store):
+    """A daemon thread that dies takes the feature down for the life of the
+    process, so tick must not propagate."""
+    from apagent.chat.runner import ChatRunner
+
+    class Broken:
+        platform = "telegram"
+
+        def poll(self, timeout=30):
+            raise ConnectionError("network down")
+
+        def mentions_bot(self, m):
+            return False
+
+        def reply(self, c, t):
+            pass
+
+    runner = ChatRunner(Broken(), ChatHarvester(store, roster=roster))
+    with pytest.raises(ConnectionError):
+        runner.tick()  # tick itself is honest about failing...
+    runner._stop.set()
+    runner.run_forever()  # ...and run_forever is what swallows it
