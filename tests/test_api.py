@@ -564,3 +564,20 @@ def test_settings_reports_the_chat_policy_and_ceiling(monkeypatch):
     assert info["chat_grn"]["policy"] == "TIERED"
     assert "TRUSTED" in info["chat_grn"]["options"]
     assert info["tolerances"]["informal_grn_ceiling_cents"] == 200_000
+
+
+def test_the_headline_numbers_are_all_measured_over_the_same_set(monkeypatch):
+    """STP used to count this session's decisions while false approvals were
+    scored against the committed benchmark — three tiles over one population
+    and a fourth over another, presented as one scorecard. A chat
+    confirmation pushed STP up without the defect it cleared being
+    re-scored."""
+    svc = _chat_case(monkeypatch)
+    before = Service().metrics()
+    after = svc.metrics()
+    assert after["stp_pct"] == before["stp_pct"]
+    assert after["touchless_pct"] == before["touchless_pct"]
+    assert after["false_approve"] == 0
+    # The flip is real and still visible — on the invoice's own page, next to
+    # the conversation that caused it.
+    assert svc.get_case("INV-V006-3019")["chat_grn"] is not None

@@ -254,7 +254,23 @@ class Service:
         }
 
     def metrics(self) -> dict:
-        decided = [d for d in self._cache.values()]
+        """The dashboard's headline numbers, all measured over the same set.
+
+        Every number here reads _eval_view, not the live cache. They used to
+        disagree: STP counted this session's decisions while false approvals
+        were scored against the committed benchmark, so a chat confirmation
+        flipping an invoice pushed STP up without the defect it cleared ever
+        being re-scored. Three tiles measured over one population and a
+        fourth over another, side by side, presented as one scorecard.
+
+        Which one wins is not arbitrary. The benchmark's ground truth knows
+        nothing about a message someone sent this morning, so counting that
+        invoice as straight-through inflates a headline number with evidence
+        the manifest cannot check. The chat flip is real and worth showing —
+        it is shown on the invoice's own page, where the conversation behind
+        it is visible too, rather than folded into a rate.
+        """
+        decided = list(self._eval_view().values())
         total = len(self._ordered_invoices())
         counts = {a.value: 0 for a in Action}
         for d in decided:
