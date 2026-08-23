@@ -34,6 +34,7 @@ from apagent.rules.tolerance import apply_tolerances, requires_manual_review, re
 from apagent.schemas import (
     Action,
     AgentDecision,
+    ChatGrnPolicy,
     Discrepancy,
     DiscrepancyField,
     Document,
@@ -200,6 +201,11 @@ def grn_gate(
     automation only for small money, only from someone we authorised in
     advance, and only when the quantities actually add up.
 
+    Which of those apply is set by config.chat_grn_policy: OFF refuses chat
+    proof outright, EVIDENCE_ONLY always defers to a reviewer, TIERED is the
+    roster-plus-ceiling rule above, TRUSTED drops the ceiling. No setting
+    waives the quantity check -- that is arithmetic, not policy.
+
     A chat receipt a reviewer has endorsed clears the first two of those --
     a signed-in human vouching for the evidence is exactly what the roster
     and the ceiling exist to demand, so satisfying it directly is the
@@ -216,24 +222,49 @@ def grn_gate(
     if grn.source != EvidenceSource.CHAT:
         return True, None
 
-    # From here down: a chat-sourced receipt, held to a higher bar.
+    # From here down: a chat-sourced receipt, judged under the company's
+    # chosen policy. How much a colleague's word is worth genuinely differs
+    # between businesses, so it is configured rather than decided here.
+    policy = config.chat_grn_policy
+    if policy == ChatGrnPolicy.OFF:
+        return False, (
+            f"Goods receipt {grn.doc_id} was confirmed in chat, and this company does "
+            "not accept chat confirmations as proof of delivery, so code overrides "
+            "APPROVE to HOLD."
+        )
+
     if grn.endorsed_by is None:
+        if policy == ChatGrnPolicy.EVIDENCE_ONLY:
+            return False, (
+                f"Goods receipt {grn.doc_id} was confirmed in chat, and this company "
+                "treats chat confirmations as evidence for a reviewer rather than "
+                "grounds to pay, so code overrides APPROVE to HOLD."
+            )
         if grn.confirmed_by is None:
             return False, (
                 f"Goods receipt {grn.doc_id} came from a chat message whose sender is "
                 "not an authorised receiver, so it is evidence for a reviewer but not "
                 "grounds to pay; code overrides APPROVE to HOLD."
             )
-        # None fails closed. It cannot reach here today (gate 1 escalates a
-        # None total first) but this function is also called by the UI, which
-        # evaluates every gate unconditionally — and None < int is a TypeError.
-        if invoice.total_cents is None or invoice.total_cents >= config.informal_grn_ceiling_cents:
-            return False, (
-                f"Goods receipt {grn.doc_id} was confirmed in chat, and this invoice is "
-                f"at or above the {config.informal_grn_ceiling_cents / 100:,.2f} ceiling "
-                "for paying on an informal receipt alone, so code overrides APPROVE to "
-                "HOLD for a reviewer to accept the confirmation."
-            )
+        # TRUSTED takes the roster's word whatever the amount. The
+        # manual-review threshold still applies above it — that gate is a
+        # promise about large payments, not about proof of delivery, and one
+        # setting must not quietly relax the other.
+        if policy == ChatGrnPolicy.TIERED:
+            # None fails closed. It cannot reach here today (gate 1 escalates
+            # a None total first) but this function is also called by the UI,
+            # which evaluates every gate unconditionally — and None < int is
+            # a TypeError.
+            if (
+                invoice.total_cents is None
+                or invoice.total_cents >= config.informal_grn_ceiling_cents
+            ):
+                return False, (
+                    f"Goods receipt {grn.doc_id} was confirmed in chat, and this invoice "
+                    f"is at or above the {config.informal_grn_ceiling_cents / 100:,.2f} "
+                    "ceiling for paying on an informal receipt alone, so code overrides "
+                    "APPROVE to HOLD for a reviewer to accept the confirmation."
+                )
     if po is None or not _chat_grn_reconciles(po, grn, invoice, checked):
         return False, (
             f"Goods receipt {grn.doc_id} was confirmed in chat but does not record a "

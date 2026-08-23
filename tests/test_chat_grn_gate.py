@@ -25,6 +25,7 @@ from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate
 from apagent.rules.tolerance import apply_tolerances
 from apagent.schemas import (
     Action,
+    ChatGrnPolicy,
     DocType,
     Document,
     EvidenceSource,
@@ -400,3 +401,106 @@ def test_gate_survives_an_invoice_with_no_printed_total(demo):
     passed, why = grn_gate(checked, grn, po, no_total, ToleranceConfig())
     assert passed is False
     assert why
+
+
+# --- the company's policy setting ------------------------------------------
+#
+# How much a colleague's word is worth is a judgement that differs between
+# businesses, so it is configured rather than decided in the gate. It is
+# configured in CODE, though: the console's policy page shows it read-only,
+# the same rule manual_review_threshold_cents follows.
+
+
+def _with_policy(store, invoice, policy, **kw):
+    return decide_invoice(
+        invoice,
+        store,
+        build_registry(store, CONTRACTS),
+        base_config=ToleranceConfig(chat_grn_policy=policy, **kw),
+        contracts_dir=CONTRACTS,
+    )
+
+
+def test_policy_off_refuses_chat_proof_entirely(monkeypatch, demo):
+    """A company that has turned the mechanism off gets the behaviour it had
+    before the feature existed — endorsement included, because a half-off
+    switch is worse than either position."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003").model_copy(update={"endorsed_by": "123"}))
+    decision = _with_policy(store, invoice, ChatGrnPolicy.OFF)
+    assert decision.action == Action.HOLD
+    assert decision.hold_reason == HoldReason.AWAITING_GRN
+
+
+def test_policy_evidence_only_always_defers_to_a_reviewer(monkeypatch, demo):
+    """The safest setting that still saves the chasing: a perfect
+    confirmation from a roster member for a small invoice still waits."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003"))
+    assert _with_policy(store, invoice, ChatGrnPolicy.EVIDENCE_ONLY).action == Action.HOLD
+
+
+def test_policy_evidence_only_still_honours_an_endorsement(monkeypatch, demo):
+    """EVIDENCE_ONLY means "a human decides", not "nothing works"."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003").model_copy(update={"endorsed_by": "123"}))
+    assert _with_policy(store, invoice, ChatGrnPolicy.EVIDENCE_ONLY).action == Action.APPROVE
+
+
+def test_policy_trusted_ignores_the_informal_ceiling(monkeypatch, demo):
+    """For a company that treats its receivers' word as final regardless of
+    amount. The ceiling is the thing TRUSTED drops."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003"))
+    decision = _with_policy(store, invoice, ChatGrnPolicy.TRUSTED, informal_grn_ceiling_cents=1)
+    assert decision.action == Action.APPROVE
+
+
+def test_policy_trusted_still_requires_an_authorised_confirmer(monkeypatch, demo):
+    """TRUSTED trusts the ROSTER, not the group. The supplier sitting in the
+    chat is still not a receiver."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by=None))
+    assert _with_policy(store, invoice, ChatGrnPolicy.TRUSTED).action == Action.HOLD
+
+
+def test_policy_trusted_does_not_relax_the_manual_review_threshold(monkeypatch, demo):
+    """Two different promises. One is about proof of delivery, the other
+    about large payments, and neither setting may quietly relax the other."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003"))
+    decision = _with_policy(store, invoice, ChatGrnPolicy.TRUSTED, manual_review_threshold_cents=1)
+    assert decision.action == Action.ESCALATE
+
+
+def test_no_policy_waives_the_quantity_check(monkeypatch, demo):
+    """Whether a receipt covers what is billed is arithmetic, not policy."""
+    _defiant_approve(monkeypatch)
+    store, invoice, po = demo
+    store.add_grn(_chat_grn(po, confirmed_by="EMP-003", qty_scale=0.8))
+    for policy in (ChatGrnPolicy.TIERED, ChatGrnPolicy.TRUSTED):
+        assert _with_policy(store, invoice, policy).action == Action.HOLD, policy
+
+
+def test_the_default_policy_is_the_tiered_one():
+    """An install that never thought about this gets the middle setting, not
+    the permissive one."""
+    assert ToleranceConfig().chat_grn_policy == ChatGrnPolicy.TIERED
+
+
+def test_policy_can_be_set_per_vendor():
+    """resolve_config already swaps the whole object per vendor, so a company
+    can trust one supplier's deliveries and not another's."""
+    from apagent.rules.tolerance import resolve_config
+
+    base = ToleranceConfig(
+        per_vendor_overrides={"V006": ToleranceConfig(chat_grn_policy=ChatGrnPolicy.OFF)}
+    )
+    assert resolve_config("V006", base).chat_grn_policy == ChatGrnPolicy.OFF
+    assert resolve_config("V001", base).chat_grn_policy == ChatGrnPolicy.TIERED

@@ -409,3 +409,84 @@ def test_the_poller_survives_a_platform_outage(roster, store):
         runner.tick()  # tick itself is honest about failing...
     runner._stop.set()
     runner.run_forever()  # ...and run_forever is what swallows it
+
+
+# --- real confirmations mix states ----------------------------------------
+
+
+def _resolve(store, items, everything=False):
+    return resolve_grn(
+        {
+            "is_delivery_confirmation": True,
+            "po_reference": PO_ID,
+            "items": items,
+            "everything_arrived": everything,
+        },
+        store,
+        [],
+        "Li Wei",
+        "2026-08-12T14:30:00",
+        "CHAT-EV-0001",
+    )
+
+
+def test_one_message_can_confirm_some_items_and_not_others(store):
+    """How people actually write: "the detergent all came, gloves only 60,
+    still waiting on the bags". Three items, three different answers.
+
+    An earlier version resolved completeness for the whole message, so an
+    item mentioned without a number failed the lot — throwing away the two
+    lines the sender had been perfectly clear about."""
+    receipt, reason = _resolve(
+        store,
+        [
+            {"description": "detergent", "qty": None, "complete": True},
+            {"description": "nitrile gloves", "qty": "60", "complete": False},
+            {"description": "trash bag", "qty": None, "complete": False},
+        ],
+    )
+    assert reason is None
+    assert {line.sku: line.qty for line in receipt.lines} == {"CP-DET-5L": 10, "CP-GLOVE-L": 60}
+    # The pending item is ABSENT rather than recorded as zero. Absent is what
+    # build_discrepancies reads as nothing received, so the invoice holds on
+    # that line — the safe direction, and what "still waiting" means.
+    assert "CP-BAG-120" not in {line.sku for line in receipt.lines}
+
+
+def test_an_item_named_with_no_quantity_and_no_completeness_is_skipped(store):
+    """ "Still short on the gloves" states a shortfall, not a quantity."""
+    receipt, reason = _resolve(store, [{"description": "gloves", "qty": None, "complete": False}])
+    assert receipt is None
+    assert reason == "no_quantity"
+
+
+def test_a_partial_word_still_identifies_the_line(store):
+    """People type a fragment of what the order calls something. Against
+    "Nitrile gloves size L, box of 100", the phrase "nitrile gloves" scores
+    only 0.60 on whole-string similarity and "trash bag" 0.51 — both would
+    have been rejected as unrecognisable before containment was added."""
+    receipt, reason = _resolve(
+        store,
+        [
+            {"description": "gloves", "qty": "100", "complete": True},
+            {"description": "trash bag", "qty": "24", "complete": True},
+        ],
+    )
+    assert reason is None
+    assert {line.sku for line in receipt.lines} == {"CP-GLOVE-L", "CP-BAG-120"}
+
+
+def test_a_word_common_to_two_lines_is_refused_not_guessed(store):
+    """Containment alone would let a bare "box" match anything with a box in
+    it. The ambiguity margin is what stops that becoming a coin flip."""
+    receipt, reason = _resolve(store, [{"description": "of", "qty": "5", "complete": True}])
+    assert receipt is None
+    assert reason == "unmatched_item"
+
+
+def test_completeness_falls_back_to_the_whole_delivery(store):
+    """An item with no per-item verdict inherits "everything arrived", which
+    is how a plain "all received, 3 items" reads."""
+    receipt, reason = _resolve(store, [{"description": "detergent", "qty": None}], everything=True)
+    assert reason is None
+    assert receipt.lines[0].qty == 10

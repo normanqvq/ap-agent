@@ -28,10 +28,21 @@ WeChat personal has no official API at all and is not stubbed. Every route to
 it is a reverse-engineered client that risks the user's account. Recorded here
 so the next person does not go looking.
 
-WhatsApp is the one an SME in Singapore actually lives in, and it cannot be
-done: the WhatsApp Business Cloud API covers business-to-customer threads and
-does not support group chats. There is no compliant way for a bot to read a
-WhatsApp group. Also recorded so nobody spends a day discovering it.
+WhatsApp is the one an SME in Singapore actually lives in, and the honest
+answer is narrower than "impossible": GROUPS cannot be done, one-to-one can.
+The Business Cloud API is built around a business number exchanging messages
+with individuals, and group chats are simply not part of it -- so a bot cannot
+sit in the delivery group and read it. But a receiver messaging the company's
+own WhatsApp Business number to say the goods arrived is exactly the supported
+shape, and the rest of this package works on it unchanged: buffer.py keeps the
+thread, roster.py keys on the sender's WhatsApp id, nothing else cares.
+
+What you give up is the surrounding group conversation, which is usually where
+the useful sentence is. What you must also handle is the 24-hour rule: a
+business may reply freely only within 24 hours of the person's last message,
+and outside that window only with a pre-approved template. Since every reply
+this package sends is already rendered by code from a fixed template
+(templates.py), that is a registration exercise rather than a redesign.
 """
 
 import os
@@ -178,6 +189,38 @@ class WeComAdapter:
         raise NotImplementedError(
             "WeCom pushes to a callback URL and cannot be polled; it needs a "
             "public HTTPS endpoint and message decryption"
+        )
+
+    def mentions_bot(self, message: ChatMessage) -> bool:
+        raise NotImplementedError
+
+    def reply(self, chat_id: str, text: str) -> None:
+        raise NotImplementedError
+
+
+class WhatsAppAdapter:
+    """WhatsApp Business Cloud API — one-to-one only. Not implemented.
+
+    Viable for the platform an SME actually uses, with two caveats that shape
+    any build: there are no group chats in the Cloud API, so the confirmation
+    has to arrive in a direct thread with the company's business number rather
+    than in the delivery group; and replies are restricted to a 24-hour window
+    after the person's last message, outside which only pre-approved templates
+    may be sent.
+
+    Also push-based, like WeCom: Meta delivers messages to a webhook, so this
+    needs a public HTTPS endpoint plus a verified business number. That is why
+    it is a stub -- infrastructure, not logic. The rest of the package would
+    work as-is, since roster.py keys on whatever numeric id the platform gives
+    and templates.py already renders every outbound word from code.
+    """
+
+    platform = "whatsapp"
+
+    def poll(self, timeout: int = 30) -> list[ChatMessage]:
+        raise NotImplementedError(
+            "WhatsApp Cloud API pushes to a webhook and cannot be polled; it also "
+            "has no group chats, so confirmations must arrive in a direct thread"
         )
 
     def mentions_bot(self, message: ChatMessage) -> bool:

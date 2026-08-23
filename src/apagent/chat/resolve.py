@@ -46,6 +46,38 @@ def _normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower()).strip()
 
 
+def _score(probe: str, description: str) -> float:
+    """How well a chat phrase identifies a PO line.
+
+    Whole-string similarity alone is the wrong metric here, and measurably
+    so: people type a FRAGMENT of what the order calls something. Against
+    "Nitrile gloves size L, box of 100", the phrase "nitrile gloves" scores
+    0.60 and "trash bag" scores 0.51 on SequenceMatcher.ratio(), because the
+    ratio is penalised for every word the speaker did not bother to repeat.
+    Both would have been rejected as unrecognisable.
+
+    So the score is the better of two readings:
+
+    - containment: what fraction of the speaker's words appear in the line.
+      "gloves" inside "nitrile gloves size l box of 100" is a complete hit,
+      which is what a human reading the message would say too.
+    - sequence ratio: still useful for typos and for phrases that are not a
+      clean subset ("glove" vs "gloves").
+
+    Containment alone would make a bare "box" match anything with a box in
+    it. That is handled by ITEM_AMBIGUITY_MARGIN rather than here: a word
+    common to two lines scores identically for both, the margin collapses,
+    and the item is refused instead of being guessed at.
+    """
+    target, candidate = _normalize(probe), _normalize(description)
+    if not target or not candidate:
+        return 0.0
+    probe_words = set(target.split())
+    line_words = set(candidate.split())
+    containment = len(probe_words & line_words) / len(probe_words) if probe_words else 0.0
+    return max(containment, difflib.SequenceMatcher(None, target, candidate).ratio())
+
+
 def _parse_qty(printed: object) -> int | None:
     """The first integer in whatever the model copied out of the message.
 
@@ -71,10 +103,7 @@ def _match_line(description: str, po: Document) -> LineItem | None:
     if not target:
         return None
     scored = sorted(
-        (
-            (difflib.SequenceMatcher(None, target, _normalize(line.description)).ratio(), line)
-            for line in po.lines
-        ),
+        ((_score(description, line.description), line) for line in po.lines),
         key=lambda pair: pair[0],
         reverse=True,
     )
@@ -127,21 +156,40 @@ def resolve_grn(
 
     items = claim.get("items") or []
     stated: dict[int, int] = {}
+    skipped = False
     for item in items:
         if not isinstance(item, dict):
             return None, "unreadable_item"
-        qty = _parse_qty(item.get("qty"))
         line = _match_line(str(item.get("description") or ""), po)
         if line is None:
+            # An item we cannot tie to the order is the one thing we refuse
+            # outright: it may be a different delivery entirely, and guessing
+            # which line it meant is how a receipt confirms the wrong goods.
             return None, "unmatched_item"
+
+        qty = _parse_qty(item.get("qty"))
         if qty is None:
-            # An item named without a number is only usable when the message
-            # also says the delivery was complete, in which case the PO's own
-            # quantity is the stated one.
-            if not claim.get("everything_arrived"):
-                return None, "no_quantity"
+            # No number given. Real confirmations mix states -- "the detergent
+            # all came, gloves only 60, still waiting on the bags" -- so this
+            # is resolved PER ITEM rather than failing the whole message.
+            # An earlier version refused the lot, which threw away the two
+            # lines the sender was perfectly clear about.
+            complete = item.get("complete")
+            if complete is None:
+                complete = claim.get("everything_arrived")
+            if not complete:
+                # Say nothing about this line rather than guess. It ends up
+                # absent from the receipt, which build_discrepancies reads as
+                # zero received -- so the invoice holds on it, which is the
+                # safe direction and exactly what "still waiting" means.
+                skipped = True
+                continue
             qty = line.qty
         stated[line.line_no] = stated.get(line.line_no, 0) + qty
+
+    if not stated and skipped:
+        # Every named item was too vague to record. Nothing was confirmed.
+        return None, "no_quantity"
 
     if not stated:
         if not claim.get("everything_arrived"):

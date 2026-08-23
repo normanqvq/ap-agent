@@ -29,6 +29,7 @@ from apagent.rules.tolerance import apply_tolerances, requires_manual_review, re
 from apagent.scheduling import schedule_payments
 from apagent.schemas import (
     Action,
+    ChatGrnPolicy,
     DiscrepancyField,
     Document,
     EvidenceSource,
@@ -583,6 +584,14 @@ class Service:
                 "total_pct": c.total_pct,
                 "qty_exact": c.qty_exact,
                 "manual_review_threshold_cents": c.manual_review_threshold_cents,
+                # Shown here because it decides whether money moves, and every
+                # such limit belongs on this page rather than buried in code
+                # nobody reads. Read-only like the rest of it.
+                "informal_grn_ceiling_cents": c.informal_grn_ceiling_cents,
+            },
+            "chat_grn": {
+                "policy": c.chat_grn_policy.value,
+                "options": [p.value for p in ChatGrnPolicy],
             },
             "contract_allowances": allowances,
             "schedule": {"as_of": DEMO_AS_OF, "run_day": "Friday"},

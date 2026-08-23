@@ -47,6 +47,46 @@ class EvidenceSource(StrEnum):
     CHAT = "CHAT"
 
 
+class ChatGrnPolicy(StrEnum):
+    """How much a delivery confirmed in a chat group is worth to this company.
+
+    A judgement call that genuinely differs between businesses, so it is a
+    setting rather than a hard-coded rule. A firm whose warehouse staff are
+    the only people in the group will want TIERED or TRUSTED; one whose
+    supplier sits in the same group may want EVIDENCE_ONLY.
+
+    It is a setting in CODE, not in the web console. The console's policy
+    page is deliberately read-only -- every limit that decides whether money
+    moves lives in a version-controlled file, so changing one is a reviewed
+    commit rather than a click. This field follows the same rule as
+    manual_review_threshold_cents, and like it can be overridden per vendor.
+
+    OFF            chat confirmations are not proof of delivery at all. The
+                   invoice holds exactly as it did before this feature, even
+                   if a reviewer endorses the confirmation -- the company has
+                   turned the mechanism off, so it should be off end to end.
+    EVIDENCE_ONLY  never releases payment on its own. The confirmation is
+                   recorded and shown to the reviewer, who accepts it or does
+                   not. The safest setting that still saves the chasing.
+    TIERED         releases payment when someone on the roster confirmed it
+                   AND the invoice is under informal_grn_ceiling_cents.
+                   Anything else waits for a reviewer. The default.
+    TRUSTED        releases payment whenever someone on the roster confirmed
+                   it, ignoring the ceiling. For a company that treats its
+                   receivers' word as final regardless of amount. Note the
+                   manual-review threshold still applies above it -- that is
+                   a separate promise about large amounts, not about proof.
+
+    No setting ever waives the quantity check. Whether a receipt covers what
+    is being billed is arithmetic, not policy.
+    """
+
+    OFF = "OFF"
+    EVIDENCE_ONLY = "EVIDENCE_ONLY"
+    TIERED = "TIERED"
+    TRUSTED = "TRUSTED"
+
+
 class LineItem(BaseModel):
     """One line of goods on a document.
 
@@ -448,4 +488,5 @@ class ToleranceConfig(BaseModel):
     qty_exact: bool = True
     manual_review_threshold_cents: int = 500_000
     informal_grn_ceiling_cents: int = 200_000
+    chat_grn_policy: ChatGrnPolicy = ChatGrnPolicy.TIERED
     per_vendor_overrides: dict[str, "ToleranceConfig"] | None = None
