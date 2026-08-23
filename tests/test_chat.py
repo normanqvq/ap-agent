@@ -505,3 +505,17 @@ def test_a_blank_roster_env_var_falls_back_to_the_default(monkeypatch, tmp_path)
 def test_a_roster_path_that_is_a_directory_authorises_nobody(monkeypatch, tmp_path):
     monkeypatch.setenv("APAGENT_CHAT_ROSTER", str(tmp_path))
     assert Roster.from_file().is_bound(CHAT) is False
+
+
+def test_buffer_handles_timezone_aware_and_naive_stamps_together():
+    """Telegram stamps messages with an offset ("...+00:00"); fixtures and
+    other platforms may not. Mixing the two is a TypeError, and it killed
+    the poller before it fetched anything — prune() raised on every tick, so
+    it retried forever, silently, doing nothing. Only running against real
+    Telegram surfaced it, because every test stamp here was naive."""
+    buffer = MessageBuffer()
+    buffer.add(msg("1", "naive stamp", at="2026-08-12T14:30:00"))
+    buffer.add(msg("2", "aware stamp", at="2026-08-12T14:31:00+00:00"))
+    buffer.add(msg("3", "@apbot confirm", at="2026-08-12T14:32:00+00:00"))
+    assert len(buffer.window(CHAT, "3")) == 3  # must not raise
+    buffer.prune()  # must not raise

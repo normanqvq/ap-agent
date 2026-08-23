@@ -25,7 +25,7 @@ a model.
 """
 
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from apagent.schemas import ChatMessage
 
@@ -43,15 +43,33 @@ DEFAULT_WITHIN_SECONDS = 6 * 60 * 60
 
 
 def _parsed(stamp: str) -> datetime | None:
-    """ISO string -> datetime, or None if the platform sent something odd.
+    """ISO string -> an aware UTC datetime, or None if it is unreadable.
 
-    Never raises: a message with an unreadable timestamp should drop out of
-    time-based filtering, not crash the bot mid-conversation.
+    Always aware, because mixing the two kinds is a TypeError and the two
+    kinds genuinely turn up here: Telegram stamps its messages with an
+    offset ("...+00:00"), while hand-written fixtures and any platform that
+    reports local time do not. Comparing a Telegram message against
+    datetime.now() raised "can't subtract offset-naive and offset-aware
+    datetimes" on every poll, which killed the poller before it ever
+    fetched anything -- it retried forever, silently, doing nothing.
+
+    A naive stamp is read as UTC. That is a guess, but it is the only one
+    available and it is wrong by hours at worst, on a comparison whose
+    window is measured in hours.
+
+    Never raises: an unreadable timestamp should drop out of time filtering,
+    not crash the bot mid-conversation.
     """
     try:
-        return datetime.fromisoformat(stamp)
+        parsed = datetime.fromisoformat(stamp)
     except (TypeError, ValueError):
         return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _now() -> datetime:
+    """Aware, to match _parsed. See its docstring for why that matters."""
+    return datetime.now(UTC)
 
 
 class MessageBuffer:
@@ -79,7 +97,10 @@ class MessageBuffer:
     def prune(self, now: datetime | None = None) -> None:
         """Drop messages past the TTL. Called on each poll, so a quiet group
         does not sit on yesterday's conversation indefinitely."""
-        now = now or datetime.now()
+        # Normalise a caller-supplied `now` too, rather than requiring callers
+        # to remember. Getting this wrong is silent until it is a TypeError in
+        # a background thread.
+        now = _now() if now is None else (now if now.tzinfo else now.replace(tzinfo=UTC))
         for chat_id, messages in list(self._chats.items()):
             kept = [m for m in messages if (p := _parsed(m.sent_at)) and now - p <= self._ttl]
             if kept:
