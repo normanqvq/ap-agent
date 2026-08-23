@@ -32,6 +32,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DEFAULT_ROSTER = ROOT / "data" / "chat" / "roster.json"
+# Committed alongside it as roster.example.json. The live file holds real
+# chat and user ids, so it is gitignored for the same reason .env is:
+# it is per-deployment configuration, and those ids identify real people.
 
 
 class Roster:
