@@ -7,8 +7,8 @@ Nothing here trusts either. The PO is looked up in OUR records, the items are
 matched against OUR order lines, and the quantities are integers WE parsed.
 If any of that fails, no receipt is created at all.
 
-Refusing is the normal outcome, not an error path. "东西到了" with no
-reference is a perfectly reasonable thing for a colleague to type and an
+Refusing is the normal outcome, not an error path. "the stuff arrived" with
+no reference is a perfectly reasonable thing for a colleague to type and an
 impossible thing to act on, and the honest answer is to ask rather than to
 guess which order it meant.
 

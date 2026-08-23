@@ -1,9 +1,9 @@
 """A window of chat messages -> a structured delivery claim.
 
 Same division of labour as extraction/invoice.py, for the same reason: the
-model is good at reading how people actually write ("那批货到了", "all 200
-came in this morning, 2 boxes damaged"), and bad at anything that must be
-exact. So it reports what it read, as printed, and code does every conversion,
+model is good at reading how people actually write ("that lot came in",
+"all 200 arrived this morning, 2 boxes damaged"), and bad at anything that
+must be exact. So it reports what it read, as printed, and code does every conversion,
 every lookup, and every decision that follows.
 
 The output schema is the security boundary. There is no action field, no

@@ -161,8 +161,8 @@ def test_authorised_sender_is_recorded_as_proof(monkeypatch, store, roster):
     ],
 )
 def test_ambiguous_claims_record_nothing(monkeypatch, store, roster, label, claim):
-    """Refusing is the normal outcome. Guessing which order a bare "货到了"
-    meant is how a receipt confirms a delivery that never happened."""
+    """Refusing is the normal outcome. Guessing which order a bare
+    "the stuff arrived" meant is how a receipt confirms a delivery that never happened."""
     h = harvester_with(monkeypatch, store, roster, claim)
     result = h.on_mention(msg("1", "@apbot confirm"))
     assert result.receipt is None, label

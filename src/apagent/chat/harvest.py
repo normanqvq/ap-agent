@@ -84,7 +84,14 @@ class ChatHarvester:
         if not self.roster.is_bound(message.chat_id):
             return HarvestResult(templates.refusal("not_bound"))
 
-        self.buffer.add(message)
+        # Buffer it only if the caller has not already. The poller observes
+        # every message and THEN dispatches mentions, so adding unconditionally
+        # here stored the mention twice and showed it twice in the evidence
+        # card. Callers that hand us a mention directly still get it buffered.
+        if not any(
+            m.message_id == message.message_id for m in self.buffer.messages(message.chat_id)
+        ):
+            self.buffer.add(message)
         window = self.buffer.window(message.chat_id, message.message_id)
         if not window:
             window = [message]

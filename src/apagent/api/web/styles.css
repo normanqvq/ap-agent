@@ -302,11 +302,21 @@ body {
    receiver's confirmation is ordinary evidence, an unauthorised one is the
    case where the supplier may be confirming their own delivery. The amber
    edge is the whole point of the card. */
-.card.chatev { border-left: 3px solid var(--green-border); }
+/* .card carries no padding of its own — each variant sets it (see .recon,
+   .reason-card), so this one must too. */
+.card.chatev { padding: 15px 16px; margin-bottom: 18px;
+  border-left: 3px solid var(--green-border); }
 .card.chatev.unauth { border-left-color: var(--amber); background: #fffdf7; }
-.chatev .chips { margin: 2px 0 12px; }
+.chatev h3 { font-size: 15px; margin-bottom: 10px; }
+/* The filter chips these reuse are sized for one short word. These carry a
+   phrase, so they wrap as a row of small labels rather than stretching into
+   slabs the height of a button. */
+.chatev .chips { margin: 0 0 12px; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chatev .chip { padding: 3px 9px; font-size: 11.5px; font-weight: 600;
+  border-radius: 999px; cursor: default; }
+.chatev .chip:hover { border-color: var(--border); }
 .chatev .chip.ok { background: var(--green-bg); color: var(--green); border-color: var(--green-border); }
-.chatev .chip.warn { background: var(--amber-bg); color: var(--amber); border-color: #f0d9a8; font-weight: 600; }
+.chatev .chip.warn { background: var(--amber-bg); color: var(--amber); border-color: #f0d9a8; }
 .chatev .saidwrap { border: 1px solid var(--divider); border-radius: 10px; overflow: hidden; }
 .chatev .said { padding: 8px 11px; border-bottom: 1px solid var(--divider); }
 .chatev .said:last-child { border-bottom: 0; }

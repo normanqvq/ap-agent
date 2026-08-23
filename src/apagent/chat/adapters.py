@@ -14,7 +14,7 @@ must be turned OFF via BotFather or the bot only sees messages that mention
 it (losing the surrounding conversation, which is the useful part), and there
 is no way to fetch history, which is why buffer.py exists.
 
-WeCom (企业微信) is the right answer for a Chinese SME and has a real API, but
+WeCom is the right answer for a Chinese SME and has a real API, but
 it pushes messages to a callback URL rather than letting a bot poll. That
 needs a publicly reachable endpoint, an enterprise account, and message
 encryption -- infrastructure, not code, so it is a stub rather than a
@@ -174,7 +174,7 @@ class TelegramAdapter:
 
 
 class WeComAdapter:
-    """企业微信 — an official API, but push-only. Not implemented.
+    """WeCom — an official API, but push-only. Not implemented.
 
     WeCom delivers group messages to a callback URL; there is no polling
     equivalent. Standing this up needs a verified enterprise account, a
