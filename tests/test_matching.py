@@ -49,7 +49,7 @@ def doc(doc_id, doc_type, lines, vendor="V001", ref=None, total=None, tax=None):
 @pytest.fixture(scope="module")
 def dataset():
     def load(name):
-        return [Document(**d) for d in json.loads((DATA / name).read_text())]
+        return [Document(**d) for d in json.loads((DATA / name).read_text(encoding="utf-8"))]
 
     return load("pos.json"), load("grns.json"), load("invoices.json")
 

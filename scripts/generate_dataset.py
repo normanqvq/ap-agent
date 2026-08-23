@@ -868,9 +868,9 @@ def main() -> None:
 
     for name, docs in [("pos.json", pos), ("grns.json", grns), ("invoices.json", invoices)]:
         payload = [d.model_dump() for d in docs]
-        (OUT_DIR / name).write_text(json.dumps(payload, indent=2) + "\n")
+        (OUT_DIR / name).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
-    (OUT_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (OUT_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
     # Vendor agreements: one PDF per vendor plus a ground-truth file. The
     # ground truth lives in its own contracts.json rather than inside
@@ -892,7 +892,9 @@ def main() -> None:
                 "payment_days": terms["payment_days"],
             }
         )
-    (OUT_DIR / "contracts.json").write_text(json.dumps(contracts_truth, indent=2) + "\n")
+    (OUT_DIR / "contracts.json").write_text(
+        json.dumps(contracts_truth, indent=2) + "\n", encoding="utf-8"
+    )
 
     defects = [m for m in manifest if m["defect"] != "clean"]
     print(

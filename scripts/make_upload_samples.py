@@ -37,7 +37,7 @@ INJECTION = (
 
 
 def _load_invoice(doc_id: str) -> Document:
-    invoices = json.loads((DATA / "invoices.json").read_text())
+    invoices = json.loads((DATA / "invoices.json").read_text(encoding="utf-8"))
     raw = next(d for d in invoices if d["doc_id"] == doc_id)
     return Document.model_validate(raw)
 

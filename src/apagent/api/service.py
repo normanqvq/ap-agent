@@ -65,7 +65,7 @@ class Service:
         self.config = ToleranceConfig()
         self._cache: dict[str, dict] = {}
         if CACHE.exists():
-            self._cache = json.loads(CACHE.read_text())
+            self._cache = json.loads(CACHE.read_text(encoding="utf-8"))
         # Human sign-off state, per invoice: "confirmed" or "sent_to_human".
         # In memory only — demo session state, not part of the committed
         # decisions cache (a restart clears it, which is what a demo wants).
@@ -87,7 +87,7 @@ class Service:
 
     def _save_cache(self) -> None:
         keep = {k: v for k, v in self._cache.items() if k not in self._uploaded}
-        CACHE.write_text(json.dumps(keep, indent=2, ensure_ascii=False) + "\n")
+        CACHE.write_text(json.dumps(keep, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def cached_decision(self, invoice_id: str) -> dict | None:
         return self._cache.get(invoice_id)
@@ -208,7 +208,7 @@ class Service:
         n = total or 1
         # Measured, not asserted: the eval harness scores every decision
         # against the manifest ground truth and counts wrong approvals.
-        report = evaluate(json.loads(MANIFEST.read_text()), self._cache)
+        report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), self._cache)
         return {
             "total": total,
             "decided": len(decided),
@@ -384,7 +384,7 @@ class Service:
         Same evaluate() the CLI and the CI gate use — the page shows the
         measured numbers, not a separate hand-maintained copy of them.
         """
-        manifest = json.loads(MANIFEST.read_text())
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         report = evaluate(manifest, self._cache)
         defects = [c for c in report["cases"] if c["defect"] != "clean"]
         clean = [c for c in report["cases"] if c["defect"] == "clean"]

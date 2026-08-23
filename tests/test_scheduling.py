@@ -156,7 +156,7 @@ def test_late_invoices_sort_first_within_a_payment():
 def test_demo_plan_over_committed_decisions():
     """The plan the judges see: 15 paid across Friday runs, 7 withheld,
     and no invoice paid after its due date unless flagged late."""
-    decisions = json.loads((DATA / "decisions.json").read_text())
+    decisions = json.loads((DATA / "decisions.json").read_text(encoding="utf-8"))
     plan = Service().schedule(DEMO_AS_OF)
 
     approved = {k for k, v in decisions.items() if v["action"] == "APPROVE"}
