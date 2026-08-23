@@ -47,6 +47,7 @@ this package sends is already rendered by code from a fixed template
 
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -55,6 +56,43 @@ from apagent.schemas import ChatMessage
 TELEGRAM_API = "https://api.telegram.org"
 
 log = logging.getLogger(__name__)
+
+# Telegram puts the bot token in the URL PATH, so anything that logs a request
+# URL logs the credential. httpx does exactly that at INFO level, which turned
+# an ordinary log file into a leaked bot: whoever reads it can impersonate us,
+# read every message in every bound group, and post as the company.
+#
+# Redacting at the logging layer rather than asking callers to configure log
+# levels, because the leak is the DEFAULT behaviour and a default that has to
+# be remembered is a default that will be forgotten. Applied to the root
+# logger so it covers httpx, urllib3, uvicorn access logs and our own lines
+# alike -- the token is never the thing anyone needed to read.
+_TOKEN_RE = re.compile(r"bot\d{6,}:[A-Za-z0-9_-]{30,}")
+
+
+class _RedactBotToken(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str) and "bot" in record.msg:
+            record.msg = _TOKEN_RE.sub("bot<REDACTED>", record.msg)
+        if record.args:
+            record.args = tuple(
+                _TOKEN_RE.sub("bot<REDACTED>", a) if isinstance(a, str) else a
+                for a in (record.args if isinstance(record.args, tuple) else (record.args,))
+            )
+        return True
+
+
+def redact_tokens_from_logs() -> None:
+    """Install the redaction filter. Called wherever the poller starts."""
+    root = logging.getLogger()
+    if not any(isinstance(f, _RedactBotToken) for f in root.filters):
+        root.addFilter(_RedactBotToken())
+    # A filter on the root LOGGER does not reach records made by other loggers
+    # (httpx has its own), so the handlers get it too — that is the one place
+    # every record passes through on its way out.
+    for handler in root.handlers:
+        if not any(isinstance(f, _RedactBotToken) for f in handler.filters):
+            handler.addFilter(_RedactBotToken())
 
 
 class ChatAdapter(Protocol):

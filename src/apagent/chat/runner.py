@@ -21,7 +21,7 @@ import logging
 import threading
 import time
 
-from apagent.chat.adapters import TelegramAdapter
+from apagent.chat.adapters import TelegramAdapter, redact_tokens_from_logs
 from apagent.chat.harvest import ChatHarvester
 
 # After an error, wait before trying again. Long polling already blocks for
@@ -82,6 +82,8 @@ def start_if_configured(harvester: ChatHarvester, on_receipt=None) -> ChatRunner
     Returning None rather than raising is the point: an install with no bot
     token is not broken, it just has no chat integration.
     """
+    # Before anything can log a request URL — the token lives in it.
+    redact_tokens_from_logs()
     adapter = TelegramAdapter()
     if not adapter.configured:
         return None

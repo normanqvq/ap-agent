@@ -519,3 +519,25 @@ def test_buffer_handles_timezone_aware_and_naive_stamps_together():
     buffer.add(msg("3", "@apbot confirm", at="2026-08-12T14:32:00+00:00"))
     assert len(buffer.window(CHAT, "3")) == 3  # must not raise
     buffer.prune()  # must not raise
+
+
+def test_a_bot_token_never_reaches_the_logs(caplog):
+    """Telegram puts the token in the URL PATH, so anything logging a request
+    URL logs the credential — httpx does exactly that at INFO level. An
+    ordinary log file became a leaked bot: whoever reads it can impersonate
+    us, read every bound group, and post as the company.
+
+    Found the only way these things are: by reading a log file and seeing the
+    token sitting in it."""
+    import logging
+
+    from apagent.chat.adapters import redact_tokens_from_logs
+
+    redact_tokens_from_logs()
+    url = "https://api.telegram.org/bot8874647777:AAH_EmUxAJ8XGk6ss9LADjxKTn63G7lKuOY/getUpdates"
+    with caplog.at_level(logging.INFO):
+        logging.getLogger("httpx").info("HTTP Request: GET %s", url)
+        logging.getLogger("httpx").info("plain message with %s inside", url)
+    joined = "\n".join(r.getMessage() for r in caplog.records)
+    assert "AAH_EmU" not in joined
+    assert "bot<REDACTED>" in joined
