@@ -279,6 +279,15 @@ class Service:
             "outbound_to": self.outbound_recipient(invoice.doc_id),
         }
 
+    def mcp_status(self) -> dict:
+        """How the agent is calling its tools: off, in-process MCP, or a remote
+        MCP server -- plus the transport split and breaker state when MCP is on.
+        A degraded-to-fallback run is visible here without reading logs."""
+        status = {"mode": self._mcp_mode}
+        if hasattr(self.registry, "status"):
+            status.update(self.registry.status())
+        return status
+
     def metrics(self) -> dict:
         """The dashboard's headline numbers, all measured over the same set.
 

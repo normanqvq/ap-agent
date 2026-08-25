@@ -248,6 +248,18 @@ class ResilientToolRegistry:
         self.transport_counts["fallback"] += 1
         return self._raw.execute(name, args)
 
+    def status(self) -> dict:
+        """A health snapshot: which tools MCP serves, how calls have split
+        between MCP and fallback, and whether the breaker has tripped. Lets a
+        degraded-to-fallback deployment be seen without reading logs."""
+        return {
+            "connected": self._client is not None,
+            "shares_store": self.shares_store,
+            "published_tools": sorted(self._mcp_tools),
+            "transport_counts": dict(self.transport_counts),
+            "breaker_open": self._breaker.is_open,
+        }
+
 
 def in_process_resilient_registry(raw: ToolRegistry) -> ResilientToolRegistry:
     """Wrap a registry so the agent calls its tools over in-process MCP, with

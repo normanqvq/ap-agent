@@ -105,6 +105,12 @@ def metrics() -> dict:
     return get_service().metrics()
 
 
+@app.get("/api/mcp")
+def mcp_status() -> dict:
+    """The MCP transport health: mode, tool-call split, breaker state."""
+    return get_service().mcp_status()
+
+
 @app.get("/api/schedule")
 def schedule() -> dict:
     """The planned weekly payment runs for the APPROVEd invoices."""

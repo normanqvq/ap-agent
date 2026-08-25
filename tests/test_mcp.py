@@ -107,6 +107,16 @@ def test_malformed_args_still_equal_raw(name, args, registries):
     assert resilient.execute(name, args) == raw.execute(name, args)
 
 
+def test_status_reports_the_transport_split(registries):
+    _, resilient = registries
+    resilient.execute("lookup_po", {"po_id": "PO-2026-1018"})
+    s = resilient.status()
+    assert s["connected"] is True
+    assert set(s["published_tools"]) == set(PUBLISHED_TOOLS)
+    assert s["transport_counts"]["mcp"] >= 1
+    assert s["breaker_open"] is False
+
+
 def test_no_client_means_pure_in_process(registries):
     raw, _ = registries
     only_raw = ResilientToolRegistry(raw, None)
