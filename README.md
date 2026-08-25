@@ -23,15 +23,15 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 
 ## Why This Project Exists
 
-**Starlove just took over the family business** — a 30-person parts-trading company in Singapore that their father ran for twenty years. It is Friday afternoon, Starlove is on the week's 41st supplier invoice, and this one bills 4% over the purchase order. Their father would have known in a second whether that vendor was owed the extra — he had agreed a price-variance allowance with them years ago and carried a hundred such arrangements in his head. Starlove does not have that memory. To answer honestly they would have to find the signed contract, locate the pricing clause, and read it. They have done that maybe twice. The rest of the time they pay, or they stall.
+**Starlove just took over the family business** — a 30-person parts-trading company in Singapore that his father ran for twenty years. It is Friday afternoon, Starlove is on the week's 41st supplier invoice, and this one bills 4% over the purchase order. His father would have known in a second whether that vendor was owed the extra, having agreed a price-variance allowance with them years ago and carried a hundred such arrangements in his head. Starlove does not have that memory. To answer honestly he would have to find the signed contract, locate the pricing clause, and read it. He has done that maybe twice. The rest of the time he pays, or he stalls.
 
-**Starlove needs a way to clear each invoice with the judgement their father had — so a wrong payment never goes out and a correct one never waits — without twenty years of memorising which vendor was promised what.**
+**Starlove needs a way to clear each invoice with the judgement his father had — so a wrong payment never goes out and a correct one never waits — without twenty years of memorising which vendor was promised what.**
 
 Processing an invoice by hand costs about **US$9.40** on average, and correcting a miskeyed or mis-approved one adds **25–40%** on top *(Ardent Partners, 2025)*. For a business changing hands the real risk is not the dollars — it is that the judgement lived in one person's head, and succession lost it.
 
 ### Why an agent, not a fixed workflow
 
-Three-way matching is arithmetic — a rules engine does it fine, and it would flag Starlove's 4% overage as a discrepancy every time. What a fixed workflow *cannot* do is the judgement their father supplied: **decide the overage might be contractual, go find the right clause in the right contract, read what it allows, re-decide — and explain the call so Starlove can trust it.** That plan → act → adapt loop over a single exception is the agent's job. The matching was never the hard part; the disappearing expertise was.
+Three-way matching is arithmetic — a rules engine does it fine, and it would flag Starlove's 4% overage as a discrepancy every time. What a fixed workflow *cannot* do is the judgement his father supplied: **decide the overage might be contractual, go find the right clause in the right contract, read what it allows, re-decide — and explain the call so Starlove can trust it.** That plan → act → adapt loop over a single exception is the agent's job. The matching was never the hard part; the disappearing expertise was.
 
 The core idea: **code owns the authority; the agent recovers and explains the judgement.**
 
