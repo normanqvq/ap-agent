@@ -11,7 +11,8 @@ import pytest
 
 from apagent.agent.ap_tools import hard_duplicates
 from apagent.mail.attach import MAX_ATTACHMENT_BYTES, pdf_attachments
-from apagent.schemas import DocType, Document
+from apagent.mail.revise import make_revision
+from apagent.schemas import DocType, Document, EvidenceSource
 from apagent.store import DocumentStore
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
@@ -163,3 +164,47 @@ def test_only_the_first_few_attachments_are_considered():
 
 def test_a_malformed_message_yields_nothing_instead_of_raising():
     assert pdf_attachments(b"\xff\xfe not a message at all") == []
+
+
+def test_the_revision_keeps_our_identity_not_the_vendors(store):
+    original = store.get_invoice("INV-V005-3005")
+    # Everything a hostile "correction" might try to redirect:
+    extracted = original.model_copy(
+        update={
+            "doc_id": "TOTALLY-DIFFERENT-NUMBER",
+            "vendor_id": "V001",
+            "vendor_name": "Someone Else Pte Ltd",
+            "ref_doc_id": "PO-2026-1001",
+            "total_cents": 49000,
+        }
+    )
+    revision = make_revision(original, extracted, sequence=1)
+    assert revision.doc_id == "INV-V005-3005-R1"
+    assert revision.vendor_id == "V005"
+    assert revision.vendor_name == "Pacific Circuit Components Inc."
+    assert revision.ref_doc_id == "PO-2026-1005"
+    assert revision.replaces == "INV-V005-3005"
+    # ... while the figures it IS allowed to correct come from the paper:
+    assert revision.total_cents == 49000
+
+
+def test_a_second_revision_numbers_itself(store):
+    original = store.get_invoice("INV-V005-3005")
+    assert make_revision(original, original, sequence=2).doc_id == "INV-V005-3005-R2"
+
+
+def test_the_revision_is_flagged_as_having_arrived_by_email(store):
+    original = store.get_invoice("INV-V005-3005")
+    revision = make_revision(original, original, sequence=1, evidence_id="MAIL-EV-0001")
+    assert revision.source == EvidenceSource.EMAIL
+    assert revision.source_ref == "MAIL-EV-0001"
+
+
+def test_the_corrected_line_prices_are_the_vendors(store):
+    """The point of the whole exercise: the figures really do come from the
+    corrected document, or there would be nothing to re-match."""
+    original = store.get_invoice("INV-V005-3005")
+    cheaper = [line.model_copy(update={"unit_price_cents": 100}) for line in original.lines]
+    extracted = original.model_copy(update={"lines": cheaper})
+    revision = make_revision(original, extracted, sequence=1)
+    assert [line.unit_price_cents for line in revision.lines] == [100] * len(original.lines)
