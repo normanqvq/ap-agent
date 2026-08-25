@@ -160,9 +160,17 @@ class Service:
         return view
 
     def _save_cache(self) -> None:
-        CACHE.write_text(
-            json.dumps(self._eval_view(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+        # Drop token fields when the provider did not report usage, so a live
+        # re-run that produced no counts leaves the committed cache byte-for-byte
+        # unchanged instead of adding `input_tokens: null` noise.
+        view = {}
+        for doc_id, decision in self._eval_view().items():
+            view[doc_id] = {
+                k: v
+                for k, v in decision.items()
+                if not (k in ("input_tokens", "output_tokens") and v is None)
+            }
+        CACHE.write_text(json.dumps(view, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def cached_decision(self, invoice_id: str) -> dict | None:
         return self._cache.get(invoice_id)
@@ -279,49 +287,56 @@ class Service:
             "outbound_to": self.outbound_recipient(invoice.doc_id),
         }
 
-    def performance(self) -> dict:
-        """The six agent-performance metrics from the training deck, measured
-        over the decided invoices. Each is computed, not asserted — this is
-        what "Testing/Evaluation" looks like for an agent, on screen.
+    def performance(self, report: dict | None = None) -> dict:
+        """The six agent-performance metrics from the training deck, MEASURED
+        over the decided runs — the honest version, where a cell can show a
+        failure. Scores the same _eval_view() the other scorecards use, so the
+        panel can never disagree with the defect table above it.
         """
-        decided = list(self._cache.values())
-        n = len(decided) or 1
-        report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), self._cache)
+        from apagent.agent.loop import CAP_ESCALATE_PREFIX, MAX_ROUNDS
 
-        # Loop discipline: how many rounds the agent took, and whether it ever
-        # hit the hard cap (a run that hits the cap force-escalates).
+        view = self._eval_view()
+        decided = list(view.values())
+        n = len(decided) or 1
+        if report is None:
+            report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), view)
+
+        # 1. schema-validation pass rate: a decision whose reasoning is the
+        # parse-failure message did NOT produce valid JSON — count those as
+        # misses rather than calling every cached row a pass.
+        schema_ok = sum(
+            1 for d in decided if not d.get("reasoning", "").startswith("Failed to parse agent")
+        )
+        # 2. tool-call success: registry.execute returns an "Error:" string for
+        # an unknown tool or a handler crash; everything else is a served
+        # result (a plain "not found" is a valid answer, not a failure).
+        tool_results = [tc.get("result", "") for d in decided for tc in d.get("tool_calls", [])]
+        tool_ok = sum(1 for r in tool_results if not r.startswith("Error:"))
+        # 3. task completion: reached a decision without force-escalating at the
+        # round cap (loop.py writes CAP_ESCALATE_PREFIX only on that exit).
+        completed = sum(
+            1 for d in decided if not d.get("reasoning", "").startswith(CAP_ESCALATE_PREFIX)
+        )
+        # 4. token cost per run, averaged over runs the provider reported usage for
         rounds = [d.get("rounds_used", 0) for d in decided]
-        hit_cap = sum(1 for r in rounds if r >= 5)
-        # Tool-call reliability: every recorded tool call returned a result
-        # (registry.execute never raises), so success is total calls served.
-        tool_calls = sum(len(d.get("tool_calls", [])) for d in decided)
-        # Token cost: summed where the provider reported usage.
         token_runs = [
             (d.get("input_tokens") or 0) + (d.get("output_tokens") or 0)
             for d in decided
             if d.get("input_tokens") is not None
         ]
         return {
-            # 1. schema-validation pass rate: a cached decision is a validated
-            # AgentDecision by construction, so every decided invoice parsed.
-            "schema_pass": {"ok": len(decided), "total": len(decided)},
-            # 2. tool-call success rate
-            "tool_calls": tool_calls,
-            "tool_success_pct": 100 if tool_calls else None,
-            # 3. task-completion rate: reached a decision without force-escalating
-            # at the round cap
-            "completion_pct": round((n - hit_cap) / n * 100),
-            "hit_cap": hit_cap,
-            # 4. token cost per run (average over runs that reported usage)
+            "schema_pass": {"ok": schema_ok, "total": len(decided)},
+            "tool_calls": len(tool_results),
+            "tool_success_pct": round(tool_ok / len(tool_results) * 100) if tool_results else None,
+            "completion_pct": round(completed / n * 100),
+            "hit_cap": len(decided) - completed,
             "avg_tokens_per_run": round(sum(token_runs) / len(token_runs)) if token_runs else None,
             "token_runs_measured": len(token_runs),
-            # 5. loop discipline
             "avg_rounds": round(sum(rounds) / n, 2),
-            "max_rounds": 5,
-            # 6. answer fidelity vs the reviewed ground-truth set (the eval):
-            # planted defects handled correctly, and wrong approvals.
+            "max_rounds": MAX_ROUNDS,
+            # 6. answer fidelity vs the reviewed ground-truth set (the eval)
             "false_approve": report["metrics"]["false_approve_count"],
-            "defects_blocked": sum(
+            "defects_handled": sum(
                 1 for c in report["cases"] if c["defect"] != "clean" and c["verdict"] == "pass"
             ),
             "defects_total": sum(1 for c in report["cases"] if c["defect"] != "clean"),
@@ -683,7 +698,7 @@ class Service:
             "clean_approved": sum(1 for c in clean if c["action"] == "APPROVE"),
             "clean_friction": sum(1 for c in clean if c["verdict"] == "friction"),
             "vendors": vendors,
-            "performance": self.performance(),
+            "performance": self.performance(report),  # reuse the report — no second evaluate()
         }
 
     def config_info(self) -> dict:

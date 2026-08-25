@@ -33,7 +33,28 @@ def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)  # noqa: S603
 
 
+def _protect_secrets() -> None:
+    """Never let the build ship secrets. launch containerizes the project
+    directory, so a real .env (API keys) at the repo root could land in the S3
+    bundle and every ECR image layer. The deployed agent uses IAM for Bedrock
+    and does not need those keys, so exclude them explicitly rather than trust
+    the toolkit's generated .dockerignore.
+    """
+    dockerignore = ROOT / ".dockerignore"
+    patterns = [".env", ".env.*", "*.pem", ".venv/"]
+    existing = dockerignore.read_text().splitlines() if dockerignore.exists() else []
+    missing = [p for p in patterns if p not in existing]
+    if missing:
+        with dockerignore.open("a") as fh:
+            if existing and existing[-1] != "":
+                fh.write("\n")
+            fh.write("# added by deploy/02_deploy.py — keep secrets out of the image\n")
+            fh.write("\n".join(missing) + "\n")
+        print(f"protected: added {missing} to .dockerignore")
+
+
 def main() -> None:
+    _protect_secrets()
     # The starter toolkit ships the `agentcore` CLI. configure writes
     # .bedrock_agentcore.yaml (the IAM role and S3 bucket), launch builds and
     # provisions and waits for READY.

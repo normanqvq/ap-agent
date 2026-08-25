@@ -455,7 +455,7 @@ function perfPanel(p) {
         ${cell("Task completion", p.completion_pct + "%", `${p.hit_cap} hit the round cap`)}
         ${cell("Token cost / run", tokens[0], tokens[1])}
         ${cell("Loop discipline", p.avg_rounds, `avg rounds · cap ${p.max_rounds}`)}
-        ${cell("Answer fidelity", `${p.defects_blocked}/${p.defects_total}`, `defects blocked · ${p.false_approve} false approvals`)}
+        ${cell("Answer fidelity", `${p.defects_handled}/${p.defects_total}`, `defects handled · ${p.false_approve} false approvals`)}
       </div>
     </div>`;
 }

@@ -25,7 +25,6 @@ from pathlib import Path
 from bedrock_agentcore import BedrockAgentCoreApp
 
 from apagent.agent.ap_tools import build_registry
-from apagent.matching.engine import match_invoice  # noqa: F401 — warms imports at cold start
 from apagent.pipeline import decide_invoice
 from apagent.store import DocumentStore
 
@@ -49,7 +48,9 @@ def handler(payload: dict) -> dict:
     reasoning, and the complete tool-call trail -- as a plain dict.
     """
     invoice_id = (payload or {}).get("invoice_id")
-    invoice = _store.get_invoice(invoice_id) if invoice_id else None
+    # A non-string id (list/dict) would raise unhashable in the store lookup;
+    # take the not-found branch instead of 500-ing.
+    invoice = _store.get_invoice(invoice_id) if isinstance(invoice_id, str) else None
     if invoice is None:
         return {
             "error": f"unknown invoice_id {invoice_id!r}",

@@ -33,6 +33,8 @@ def main() -> None:
         # Wait for the SDK's GET /ping to report healthy.
         base = f"http://127.0.0.1:{PORT}"
         for _ in range(50):
+            if server.poll() is not None:
+                raise RuntimeError(f"agent server exited early (code {server.returncode})")
             try:
                 if httpx.get(f"{base}/ping", timeout=1).status_code == 200:
                     break
@@ -54,7 +56,11 @@ def main() -> None:
         print(f"why       {(decision.get('reasoning') or '')[:200]}")
     finally:
         server.terminate()
-        server.wait(timeout=10)
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()  # it ignored SIGTERM (e.g. mid LLM call) — force it
+            server.wait()
 
 
 if __name__ == "__main__":

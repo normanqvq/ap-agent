@@ -21,16 +21,16 @@ def main() -> None:
     if not CONFIG.exists():
         sys.exit("No .bedrock_agentcore.yaml -- run deploy/02_deploy.py first.")
 
-    # The starter toolkit exposes a client that reads the config and calls the
-    # runtime; fall back to a clear message if the SDK layout differs.
+    # The starter toolkit's Runtime reads .bedrock_agentcore.yaml from the
+    # working directory (so run this from the repo root) and invokes the
+    # deployed runtime over SigV4 — no ARN to paste.
     try:
         from bedrock_agentcore_starter_toolkit import Runtime
     except ImportError:
         sys.exit("Install the toolkit: pip install -e '.[deploy]'")
 
-    runtime = Runtime.from_config(str(CONFIG))
-    response = runtime.invoke({"invoice_id": invoice_id})
-    print(json.dumps(response, indent=2, ensure_ascii=False))
+    response = Runtime().invoke({"invoice_id": invoice_id})
+    print(json.dumps(response, indent=2, ensure_ascii=False, default=str))
 
 
 if __name__ == "__main__":

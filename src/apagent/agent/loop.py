@@ -31,13 +31,22 @@ from apagent.schemas import Action, AgentDecision, ToolCall
 
 from .registry import ToolRegistry
 
+# The hard loop cap. One constant so the runtime and the performance panel
+# agree on what "hit the cap" means.
+MAX_ROUNDS = 5
+
+# The reasoning prefix run_agent writes when it force-escalates at the cap
+# (below). The performance panel keys on it to tell a completed round-5
+# decision from a run that ran out of rounds.
+CAP_ESCALATE_PREFIX = "Agent did not reach a decision"
+
 
 def run_agent(
     system_prompt: str,
     user_message: str,
     registry: ToolRegistry,
     invoice_id: str,
-    max_rounds: int = 5,
+    max_rounds: int = MAX_ROUNDS,
 ) -> AgentDecision:
     """Run the agent loop until it returns a final decision.
 
