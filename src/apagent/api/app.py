@@ -111,6 +111,12 @@ def mcp_status() -> dict:
     return get_service().mcp_status()
 
 
+@app.get("/api/performance")
+def performance() -> dict:
+    """The six agent-performance metrics, measured over the decided runs."""
+    return get_service().performance()
+
+
 @app.get("/api/schedule")
 def schedule() -> dict:
     """The planned weekly payment runs for the APPROVEd invoices."""

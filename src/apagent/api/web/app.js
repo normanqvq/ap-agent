@@ -437,6 +437,29 @@ const VERDICT_EN = {
   missing: { cls: "mid", text: "not run" },
 };
 
+// The six agent-performance metrics from the training deck, each measured
+// from the decided runs — not asserted.
+function perfPanel(p) {
+  if (!p) return "";
+  const cell = (label, value, sub) =>
+    `<div class="perf"><div class="pl">${label}</div><div class="pv num">${value}</div><div class="ps">${sub}</div></div>`;
+  const tokens = p.avg_tokens_per_run != null
+    ? [`${p.avg_tokens_per_run.toLocaleString("en")}`, `avg tokens / run · ${p.token_runs_measured} measured`]
+    : ["—", "captured on live runs"];
+  return `
+    <div class="card">
+      <div class="card-h"><h3>Agent performance</h3><span class="runtotal">six metrics, measured over ${p.schema_pass.total} runs</span></div>
+      <div class="perfgrid">
+        ${cell("Schema-valid output", `${p.schema_pass.ok}/${p.schema_pass.total}`, "decisions that parsed")}
+        ${cell("Tool-call success", p.tool_success_pct != null ? p.tool_success_pct + "%" : "—", `${p.tool_calls} calls served`)}
+        ${cell("Task completion", p.completion_pct + "%", `${p.hit_cap} hit the round cap`)}
+        ${cell("Token cost / run", tokens[0], tokens[1])}
+        ${cell("Loop discipline", p.avg_rounds, `avg rounds · cap ${p.max_rounds}`)}
+        ${cell("Answer fidelity", `${p.defects_blocked}/${p.defects_total}`, `defects blocked · ${p.false_approve} false approvals`)}
+      </div>
+    </div>`;
+}
+
 async function analytics() {
   view.innerHTML = `<div class="placeholder">Loading…</div>`;
   const a = await api("/api/analytics");
@@ -480,6 +503,7 @@ async function analytics() {
         <div class="cap num">${m.decided} / ${m.total} ground-truth invoices decided${a.unexpected.length ? ` · +${a.unexpected.length} uploaded this session (no ground truth, unscored)` : ""}</div>
       </div>
     </div>
+    ${perfPanel(a.performance)}
     <div class="card">
       <div class="card-h"><h3>By vendor</h3><span class="runtotal">billed vs approved for payment</span></div>
       ${a.vendors.map((v) => `

@@ -57,6 +57,18 @@ def test_metrics_shape():
     assert 0 <= m["stp_pct"] <= 100
 
 
+def test_performance_reports_the_six_metrics():
+    p = Service().performance()
+    assert p["schema_pass"]["ok"] == p["schema_pass"]["total"] == 22
+    assert p["completion_pct"] == 100  # nothing hit the round cap
+    assert p["false_approve"] == 0
+    assert p["defects_blocked"] == p["defects_total"] == 7  # all planted defects handled
+    assert p["avg_rounds"] > 0
+    # token cost is None over the committed cache (predates the field), and a
+    # real number once a live run records usage.
+    assert p["avg_tokens_per_run"] is None or p["avg_tokens_per_run"] > 0
+
+
 def test_analytics_scorecard_covers_every_planted_defect():
     a = Service().analytics()
     assert len(a["defects"]) == 7
