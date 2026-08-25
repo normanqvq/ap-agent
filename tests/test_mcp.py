@@ -79,6 +79,34 @@ def test_fallback_gives_the_same_answer_when_the_transport_dies(registries):
     assert resilient.transport_counts["fallback"] >= 1
 
 
+def test_unpublished_tool_routes_to_raw_not_an_mcp_error(registries):
+    """The model is offered recheck_against_contract, which the server does
+    not publish. It must return the real clause via raw, not the MCP
+    "Unknown tool" text — otherwise AP_MCP=inproc could flip a decision."""
+    raw, resilient = registries
+    args = {"invoice_id": "INV-V005-3018"}  # the headline contract-flip case
+    before = resilient.transport_counts["fallback"]
+    out = resilient.execute("recheck_against_contract", args)
+    assert out == raw.execute("recheck_against_contract", args)
+    assert "Unknown tool" not in out
+    assert resilient.transport_counts["fallback"] == before + 1  # went to raw
+
+
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("search_vendor_contract", {"query": "price variance"}),  # vendor_id omitted
+        ("lookup_po", {"po_id": 12345}),  # wrong type
+        ("lookup_po", {}),  # missing required arg
+    ],
+)
+def test_malformed_args_still_equal_raw(name, args, registries):
+    """A published tool called with args the MCP schema rejects must still
+    end up equal to raw — either answered directly or fallen back."""
+    raw, resilient = registries
+    assert resilient.execute(name, args) == raw.execute(name, args)
+
+
 def test_no_client_means_pure_in_process(registries):
     raw, _ = registries
     only_raw = ResilientToolRegistry(raw, None)

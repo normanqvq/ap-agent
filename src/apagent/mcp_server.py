@@ -72,10 +72,17 @@ def build_mcp_server(registry: ToolRegistry, name: str = "AP-Agent-Tools") -> Fa
         return registry.execute("check_duplicate_invoice", {"invoice_id": invoice_id})
 
     @mcp.tool()
-    def search_vendor_contract(vendor_id: str, query: str) -> str:
+    def search_vendor_contract(query: str, vendor_id: str = "") -> str:
         """Search a vendor's contract for a clause (e.g. a price-variance
-        allowance). Returns the matching sections with their source file."""
-        return registry.execute("search_vendor_contract", {"vendor_id": vendor_id, "query": query})
+        allowance). Returns the matching sections with their source file. Omit
+        vendor_id to search every contract."""
+        # Match the raw schema, where only query is required and vendor_id is
+        # optional -- so following the tool description over MCP answers
+        # directly instead of tripping a validation error and falling back.
+        args = {"query": query}
+        if vendor_id:
+            args["vendor_id"] = vendor_id
+        return registry.execute("search_vendor_contract", args)
 
     return mcp
 

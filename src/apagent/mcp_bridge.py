@@ -18,6 +18,8 @@ client serves the in-process (in-memory) and, later, the remote transports
 """
 
 import asyncio
+import atexit
+import logging
 import threading
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
@@ -25,6 +27,8 @@ from contextlib import AbstractAsyncContextManager
 from mcp.client.session import ClientSession
 
 from apagent.agent.registry import ToolRegistry
+
+_log = logging.getLogger(__name__)
 
 # A tool call that cannot answer in this long has, for our purposes, dropped
 # the packet -- fall back rather than let the agent hang on a stalled server.
@@ -145,13 +149,22 @@ class McpToolClient:
             self._ready.set()
 
     def _submit(self, coro: Awaitable) -> object:
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=self._timeout_s)
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return future.result(timeout=self._timeout_s)
+        except TimeoutError:
+            # Don't leave the coroutine running on the loop after we give up.
+            future.cancel()
+            raise
 
     def _check_open(self) -> None:
-        # Raise BEFORE the coroutine is built, so a closed client never leaves
-        # an un-awaited coroutine behind — the caller just falls back.
-        if self._loop.is_closed() or self._session is None:
-            raise ConnectionError("MCP client is closed")
+        # Raise BEFORE the coroutine is built, so a dead client never leaves an
+        # un-awaited coroutine behind — the caller just falls back. Checking the
+        # thread catches a session that died abnormally (server crash) while the
+        # loop object still looks open, which would otherwise stall every call
+        # for the full timeout.
+        if self._loop.is_closed() or self._session is None or not self._thread.is_alive():
+            raise ConnectionError("MCP client is not available")
 
     def list_tools(self) -> list[str]:
         self._check_open()
@@ -161,6 +174,13 @@ class McpToolClient:
     def call_tool(self, name: str, args: dict) -> str:
         self._check_open()
         result = self._submit(self._session.call_tool(name, args))
+        # An isError result is an MCP-layer artifact -- an unknown tool, or a
+        # schema-validation failure -- NOT a tool answer: our tools delegate to
+        # registry.execute, which never raises and always returns a plain
+        # string. So treat isError as a transport failure and fall back to the
+        # raw registry, which handles unknown names and bad args gracefully.
+        if getattr(result, "isError", False):
+            raise ConnectionError(f"MCP call errored: {name}")
         # A read-only tool always returns one text block.
         return result.content[0].text if result.content else ""
 
@@ -169,7 +189,10 @@ class McpToolClient:
             return
         self._loop.call_soon_threadsafe(self._stop.set)
         self._thread.join(timeout=self._timeout_s + 5)
-        self._loop.close()
+        # Only close the loop once the thread has really stopped, or loop.close()
+        # would raise "Cannot close a running event loop".
+        if not self._thread.is_alive():
+            self._loop.close()
 
 
 class ResilientToolRegistry:
@@ -191,6 +214,13 @@ class ResilientToolRegistry:
         self._raw = raw
         self._client = client
         self._breaker = breaker or CircuitBreaker()
+        # The model is offered raw.get_definitions() -- every registered tool --
+        # but the MCP server publishes only the read-only subset. A call to a
+        # tool the server does not publish (recheck_against_contract) would come
+        # back as an isError result, so route those straight to raw instead of
+        # bouncing off MCP. Snapshot the published names once, while the client
+        # is alive.
+        self._mcp_tools: set[str] = set(client.list_tools()) if client is not None else set()
         # True for in-process MCP (same store); False for a remote server that
         # has its own store and cannot see this session's uploaded invoices.
         self.shares_store = shares_store
@@ -200,18 +230,21 @@ class ResilientToolRegistry:
         return self._raw.get_definitions()
 
     def execute(self, name: str, args: dict) -> str:
-        # The breaker skips MCP entirely while a dead server cools down, so we
-        # do not pay a timeout on every call.
-        if self._client is not None and self._breaker.allow():
+        # The breaker skips MCP while a dead server cools down; the name check
+        # skips it for tools the server does not publish. Both go straight to
+        # the raw path, which is authoritative and always available.
+        if self._client is not None and name in self._mcp_tools and self._breaker.allow():
             try:
                 result = self._client.call_tool(name, args)
                 self._breaker.record_success()
                 self.transport_counts["mcp"] += 1
                 return result
             except Exception:  # noqa: BLE001 — any transport failure degrades gracefully
-                # Not a tool "not found": that comes back as a normal string.
-                # This is the connection / timeout / protocol path only.
+                # Connection / timeout / protocol / isError path only. A real
+                # tool "not found" is a normal string, handled by raw below.
                 self._breaker.record_failure()
+                if self.transport_counts["fallback"] == 0:
+                    _log.warning("MCP tool call failed for %r; falling back to in-process", name)
         self.transport_counts["fallback"] += 1
         return self._raw.execute(name, args)
 
@@ -225,6 +258,7 @@ def in_process_resilient_registry(raw: ToolRegistry) -> ResilientToolRegistry:
 
         server = build_mcp_server(raw)
         client = McpToolClient(in_process_session_factory(server))
+        atexit.register(client.close)  # no orphan thread/loop at process exit
         return ResilientToolRegistry(raw, client, shares_store=True)
     except Exception:  # noqa: BLE001 — no mcp, no problem: run in-process only
         return ResilientToolRegistry(raw, None)
@@ -240,6 +274,7 @@ def remote_resilient_registry(raw: ToolRegistry) -> ResilientToolRegistry:
     try:
         factory = remote_stdio_session_factory(sys.executable, ["-m", "apagent.mcp_server"])
         client = McpToolClient(factory)
+        atexit.register(client.close)  # terminate the server subprocess at exit
         # shares_store=False: the server has its own store, so the caller must
         # keep session-only invoices (uploads) on the in-process path.
         return ResilientToolRegistry(raw, client, shares_store=False)
