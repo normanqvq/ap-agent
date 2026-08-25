@@ -13,7 +13,29 @@ import json
 import pytest
 
 from apagent.mail.directory import VendorDirectory
+from apagent.mail.inbound import is_non_delivery, parse_mail
 from apagent.schemas import EvidenceSource, ToleranceConfig, VendorReplyEvidence
+
+RAW_REPLY = b"""\
+From: AR Dept <ar-dept@pacific.example>
+To: ap+INV-V005-3005.tok123456@example.test
+Subject: =?gb2312?B?u9i4tDogYXAtYWdlbnQgY29ubmVjdGl2aXR5IHRlc3Q=?=
+Message-ID: <reply-1@pacific.example>
+In-Reply-To: <sent-1@example.test>
+References: <sent-1@example.test>
+Date: Mon, 25 Aug 2026 10:00:00 +0800
+Content-Type: multipart/alternative; boundary="BOUND"
+
+--BOUND
+Content-Type: text/plain; charset="utf-8"
+
+Corrected invoice attached.
+--BOUND
+Content-Type: text/html; charset="utf-8"
+
+<html><body>Corrected invoice attached.</body></html>
+--BOUND--
+"""
 
 
 def test_email_is_an_evidence_source():
@@ -74,3 +96,39 @@ def test_a_blank_directory_env_var_falls_back_to_the_default(monkeypatch, tmp_pa
     monkeypatch.setenv("APAGENT_VENDOR_DIRECTORY", "")
     monkeypatch.setattr("apagent.mail.directory.DEFAULT_DIRECTORY", path)
     assert VendorDirectory.from_file().address_for("V005") == "a@b.example"
+
+
+def test_a_localised_subject_is_decoded_not_left_as_mojibake():
+    mail = parse_mail(RAW_REPLY)
+    assert mail.subject == "回复: ap-agent connectivity test"
+
+
+def test_the_plain_part_is_preferred_over_the_html_one():
+    mail = parse_mail(RAW_REPLY)
+    assert mail.body_text.strip() == "Corrected invoice attached."
+    assert "<html>" not in mail.body_text
+
+
+def test_threading_headers_survive_parsing():
+    mail = parse_mail(RAW_REPLY)
+    assert mail.in_reply_to == "<sent-1@example.test>"
+    assert mail.references == ["<sent-1@example.test>"]
+    assert mail.to_addrs == ["ap+INV-V005-3005.tok123456@example.test"]
+    assert mail.from_addr == "ar-dept@pacific.example"
+
+
+def test_a_human_reply_is_not_a_bounce():
+    assert is_non_delivery(parse_mail(RAW_REPLY)) is False
+
+
+def test_a_delivery_failure_is_a_bounce_not_an_answer():
+    raw = RAW_REPLY.replace(
+        b"From: AR Dept <ar-dept@pacific.example>",
+        b"From: Mail Delivery Subsystem <mailer-daemon@example.test>",
+    )
+    assert is_non_delivery(parse_mail(raw)) is True
+
+
+def test_an_out_of_office_is_a_bounce_not_an_answer():
+    raw = RAW_REPLY.replace(b"Date: Mon", b"Auto-Submitted: auto-replied\r\nDate: Mon")
+    assert is_non_delivery(parse_mail(raw)) is True
