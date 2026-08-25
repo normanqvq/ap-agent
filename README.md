@@ -95,7 +95,7 @@ flowchart LR
 1. **Extraction** turns a messy PDF into a validated `Document`. The LLM reads fields in any layout or date format; **code** does every conversion that must not be fuzzy — money to integer cents, vendor name to internal id, schema validation.
 2. **Matching** computes facts only. It pairs lines and reports each delta ("line 1 unit price is 4.0% above PO") without judging whether that is acceptable.
 3. **Rules** stamp each discrepancy `within_tolerance` against `ToleranceConfig`, using the contract allowance where one exists.
-4. **The agent** reads the tolerance-checked facts, gathers evidence with tools, and returns a JSON decision. It is hand-written rather than built on a framework so every step is inspectable — the whole selling point is being able to show *why*. This pipeline is a LangGraph state graph in everything but the import; [docs/LANGGRAPH.md](docs/LANGGRAPH.md) maps every stage to State, nodes and conditional edges.
+4. **The agent** reads the tolerance-checked facts, gathers evidence with tools, and returns a JSON decision. It is hand-written rather than built on a framework so every step is inspectable — the whole selling point is being able to show *why*. This pipeline is a LangGraph state graph in everything but the import; [docs/LANGGRAPH.md](docs/LANGGRAPH.md) maps every stage to State, nodes and conditional edges. The read-only tools are also exposed as an [MCP server](docs/MCP.md), which the agent calls over MCP with an automatic in-process fallback that provably cannot change a decision.
 5. **Guardrails** re-check the model's action against the computed facts and override an unjustified `APPROVE`. The percentage a contract allows is re-derived in code before it is enforced.
 
 ## Design Principles

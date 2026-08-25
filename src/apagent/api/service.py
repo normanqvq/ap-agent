@@ -68,16 +68,26 @@ class Service:
 
     def __init__(self) -> None:
         self.store = DocumentStore.from_dir(DATA)
-        self.registry = build_registry(self.store, CONTRACTS)
-        # AP_MCP=inproc routes the agent's tool calls over an in-process MCP
-        # server, with an automatic fallback to this same registry on any
-        # transport failure. Default off: the committed demo path is the plain
-        # in-process registry, unchanged. The results are identical either way
-        # (tests/test_mcp.py pins that), so the toggle never changes a decision.
-        if os.getenv("AP_MCP") == "inproc":
+        # The raw in-process registry is always kept: it is the fallback, and
+        # the path uploaded (session-only) invoices always take.
+        self._raw_registry = build_registry(self.store, CONTRACTS)
+        self.registry = self._raw_registry
+        # AP_MCP routes the agent's tool calls over MCP, with an automatic
+        # fallback to the raw registry on any transport failure. Default off:
+        # the committed demo path is the plain registry, unchanged. Results are
+        # identical either way (tests/test_mcp.py pins that), so the toggle
+        # never changes a decision.
+        #   inproc  -- an in-process MCP session (shares this store)
+        #   remote  -- a separate `python -m apagent.mcp_server` process
+        self._mcp_mode = os.getenv("AP_MCP", "off")
+        if self._mcp_mode == "inproc":
             from apagent.mcp_bridge import in_process_resilient_registry
 
-            self.registry = in_process_resilient_registry(self.registry)
+            self.registry = in_process_resilient_registry(self._raw_registry)
+        elif self._mcp_mode == "remote":
+            from apagent.mcp_bridge import remote_resilient_registry
+
+            self.registry = remote_resilient_registry(self._raw_registry)
         self.config = ToleranceConfig()
         self._cache: dict[str, dict] = {}
         if CACHE.exists():
@@ -163,8 +173,15 @@ class Service:
         invoice = self.store.get_invoice(invoice_id)
         if invoice is None:
             raise KeyError(invoice_id)
+        # A remote MCP server has its own store and cannot see an invoice
+        # uploaded this session, so those decisions must use the in-process
+        # registry — otherwise a duplicate check would miss the upload. An
+        # in-process MCP session shares this store, so no special case there.
+        registry = self.registry
+        if invoice_id in self._uploaded and getattr(self.registry, "shares_store", True) is False:
+            registry = self._raw_registry
         decision = decide_invoice(
-            invoice, self.store, self.registry, self.config, contracts_dir=CONTRACTS
+            invoice, self.store, registry, self.config, contracts_dir=CONTRACTS
         )
         self._cache[invoice_id] = decision.model_dump()
         # A re-run is a NEW decision: any human sign-off belonged to the old
