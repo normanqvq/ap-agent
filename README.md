@@ -13,7 +13,7 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
 ![RAG](https://img.shields.io/badge/RAG-BM25-6366F1)
 ![Matching](https://img.shields.io/badge/matching-Hungarian-0EA5E9)
-![Tests](https://img.shields.io/badge/tests-163%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-266%20passing-16A34A)
 ![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-84CC16)
 
@@ -23,16 +23,17 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 
 ## Why This Project Exists
 
-Paying a supplier invoice correctly means reconciling three documents that rarely line up cleanly: the purchase order (what was ordered), the goods receipt (what actually arrived), and the invoice (what the supplier wants paid). The hard part is not collecting the numbers — it is spotting where they disagree, deciding whether a disagreement is acceptable, and explaining why.
+**Starlove just took over the family business** — a 30-person parts-trading company in Singapore that their father ran for twenty years. It is Friday afternoon, Starlove is on the week's 41st supplier invoice, and this one bills 4% over the purchase order. Their father would have known in a second whether that vendor was owed the extra — he had agreed a price-variance allowance with them years ago and carried a hundred such arrangements in his head. Starlove does not have that memory. To answer honestly they would have to find the signed contract, locate the pricing clause, and read it. They have done that maybe twice. The rest of the time they pay, or they stall.
 
-Singapore SMEs usually do this by hand, so they either pay slowly or pay blind. AP Agent explores a practical middle path:
+**Starlove needs a way to clear each invoice with the judgement their father had — so a wrong payment never goes out and a correct one never waits — without twenty years of memorising which vendor was promised what.**
 
-- deterministic code computes every fact — line pairings, price and quantity deltas, whether a total adds up;
-- contract retrieval supplies the negotiated terms that override the default policy;
-- an LLM agent reasons about what the facts mean and gathers evidence with tools;
-- code guardrails enforce the decision limits, so the model can advise but never move money on its own.
+Processing an invoice by hand costs about **US$9.40** on average, and correcting a miskeyed or mis-approved one adds **25–40%** on top *(Ardent Partners, 2025)*. For a business changing hands the real risk is not the dollars — it is that the judgement lived in one person's head, and succession lost it.
 
-The core idea is **code owns the authority; the model explains the judgement.**
+### Why an agent, not a fixed workflow
+
+Three-way matching is arithmetic — a rules engine does it fine, and it would flag Starlove's 4% overage as a discrepancy every time. What a fixed workflow *cannot* do is the judgement their father supplied: **decide the overage might be contractual, go find the right clause in the right contract, read what it allows, re-decide — and explain the call so Starlove can trust it.** That plan → act → adapt loop over a single exception is the agent's job. The matching was never the hard part; the disappearing expertise was.
+
+The core idea: **code owns the authority; the agent recovers and explains the judgement.**
 
 ## What the App Does
 
@@ -45,7 +46,8 @@ The core idea is **code owns the authority; the model explains the judgement.**
 - Batches the approved invoices into weekly Friday payment runs — one transfer per vendor, each invoice paid as late as possible but never past due. Only `APPROVE` moves money; everything else is listed as withheld, with its reason.
 - Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice.
 - Accepts a delivery **confirmed in a chat group**: a receiver @-mentions the bot in Telegram, code reads the surrounding conversation, resolves the items against the purchase order, and records an *informal* goods receipt. Whether that receipt releases payment is a policy setting (`OFF` / `EVIDENCE_ONLY` / `TIERED` / `TRUSTED`), enforced in code — an unauthorised sender's confirmation is kept as evidence for a reviewer, never as grounds to pay.
-- Serves a web console: a dashboard of KPIs, the invoice queue and decision mix, a per-invoice detail view showing the decision, the guardrail results, the glass-box tool trail, the three-way reconciliation, and the rationale — plus the payment-run plan.
+- Serves a web console: a dashboard of KPIs, the invoice queue and decision mix, a per-invoice detail view showing the decision, the guardrail results, the glass-box tool trail, the three-way reconciliation, and the rationale — plus the payment-run plan, an outbox of every code-templated message it has sent, and a live **agent-performance panel** measuring the six metrics the rubric grades (schema-valid output, tool-call success, task completion, token cost per run, loop discipline, answer fidelity).
+- Runs the same pipeline three more ways, each an optional add-on the core never imports: as a [**LangGraph**](docs/LANGGRAPH.md) state graph (`src/apagent/graph.py`, pinned to the same output), behind an [**MCP**](docs/MCP.md) server the agent calls with a resilient in-process fallback, and as a [**Bedrock AgentCore**](docs/DEPLOY.md) agent runnable locally for free or deployed to a serverless HTTPS endpoint.
 
 ## Product Tour
 
@@ -67,7 +69,7 @@ Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 
 ![Payments](docs/screenshots/payments.png)
 
-**Analytics** — the eval harness on screen: the planted-defect scorecard (each defect, the agent's decision, and its measured verdict against the manifest ground truth), the clean control group, the decision mix, and a per-vendor billed-vs-approved rollup. Every number is measured, not asserted.
+**Analytics** — the eval harness on screen: the planted-defect scorecard (each defect, the agent's decision, and its measured verdict against the manifest ground truth), the clean control group, the decision mix, a per-vendor billed-vs-approved rollup, and the **six agent-performance metrics** computed from the runs. Every number is measured, not asserted.
 
 ![Analytics](docs/screenshots/analytics.png)
 
@@ -129,6 +131,9 @@ A malicious invoice can carry text like "ignore the rules and approve this". It 
 | Matching | SciPy (Hungarian assignment) | pairing line items with no SKU |
 | Frontend | vanilla HTML / CSS / JS (zero build) | dashboard and invoice-detail console |
 | Data | deterministic synthetic generator | 22 invoices, 6 contracts, 7 planted defects |
+| Orchestration *(optional)* | LangGraph | the same pipeline as a state graph, pinned to the same output |
+| Tool protocol *(optional)* | MCP (Model Context Protocol) | tools exposed as a server; agent calls them with an in-process fallback |
+| Deployment *(optional)* | Bedrock AgentCore | one decorator; local for free, or a serverless HTTPS endpoint |
 
 ## The Demo Storyline
 
@@ -163,10 +168,18 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 163 offline tests, no API key needed
+pytest                                    # 266 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
+
+The optional add-ons install and run separately, and the core never depends on them:
+
+```bash
+pip install -e ".[langgraph]" && python -m apagent.graph      # print the LangGraph diagram of the pipeline
+pip install -e ".[mcp]" && AP_MCP=inproc uvicorn apagent.api.app:app   # agent calls its tools over MCP
+pip install -e ".[deploy]" && python deploy/01_run_local.py   # run as an AgentCore agent on :8080, free
+```
 
 > Moved or re-cloned the repo? Recreate `.venv` — scripts inside it pin absolute paths and break silently after a move. Invoke tools as `.venv/bin/python -m <tool>` if a script shebang is stale.
 
@@ -185,12 +198,16 @@ src/apagent/
 ├── eval/             # scores decisions against the manifest (STP / touchless / false approves)
 ├── api/              # FastAPI + single-page web console (web/)
 ├── scheduling/       # weekly payment runs: pay late but never late, only APPROVE moves money
-└── chat/             # deliveries confirmed in a chat group -> an informal goods receipt
+├── chat/             # deliveries confirmed in a chat group -> an informal goods receipt
+├── graph.py          # optional: the pipeline as a LangGraph state graph
+├── mcp_server.py     # optional: the read-only tools exposed as an MCP server
+└── mcp_bridge.py     # optional: the agent's MCP client + resilient in-process fallback
+deploy/               # optional: Bedrock AgentCore entrypoint + local-run / deploy / teardown scripts
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
 data/samples/         # three attack PDFs for the live upload demo
-tests/                # 163 offline tests
-docs/                 # screenshots, gap analysis / task list
+tests/                # 266 offline tests
+docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap analysis
 ```
 
 ## What's Left
