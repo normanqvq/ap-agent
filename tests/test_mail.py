@@ -19,6 +19,7 @@ from apagent.mail.directory import VendorDirectory
 from apagent.mail.dispatch import MailDispatcher
 from apagent.mail.harvest import MailHarvester
 from apagent.mail.inbound import is_non_delivery, parse_mail
+from apagent.mail.runner import MailRunner, start_if_configured
 from apagent.mail.thread import ThreadRegistry
 from apagent.schemas import EvidenceSource, ToleranceConfig, VendorReplyEvidence
 
@@ -390,3 +391,66 @@ def test_an_unreadable_timestamp_delays_rather_than_escalates():
     registry.register("INV-V005-3005", "ap@example.test")
     registry.for_invoice("INV-V005-3005").sent_at = "not a date"
     assert due_for_escalation(registry, ToleranceConfig(), datetime.now()) == []
+
+
+class FlakyAdapter:
+    """Fails once, then delivers. Mirrors test_chat's outage test."""
+
+    def __init__(self, raw):
+        self.calls = 0
+        self.raw = raw
+        self.flagged = []
+
+    def poll(self):
+        self.calls += 1
+        if self.calls == 1:
+            raise ConnectionError("imap down")
+        return [(b"1", self.raw)] if self.calls == 2 else []
+
+    def mark_handled(self, uid):
+        self.flagged.append(uid)
+
+
+def test_the_poller_survives_a_mailbox_outage(harvester):
+    harvester.registry.register("INV-V005-3005", "ap@example.test")
+    adapter = FlakyAdapter(_reply_to(harvester.registry, "INV-V005-3005"))
+    seen = []
+    runner = MailRunner(adapter, harvester, dispatcher=None, on_reply=seen.append)
+
+    with pytest.raises(ConnectionError):
+        runner.tick()          # the outage propagates out of tick...
+    runner.tick()              # ...and the next one works
+    assert [e.invoice_id for e in seen] == ["INV-V005-3005"]
+    assert adapter.flagged == [b"1"]
+
+
+def test_run_forever_swallows_what_tick_raises(harvester, monkeypatch):
+    """A daemon thread that dies takes the feature down for the process."""
+    runner = MailRunner(FlakyAdapter(RAW_REPLY), harvester, dispatcher=None)
+    monkeypatch.setattr("apagent.mail.runner._BACKOFF_SECONDS", 0)
+    calls = []
+
+    def once():
+        calls.append(1)
+        runner.stop()
+        raise ConnectionError("still down")
+
+    monkeypatch.setattr(runner, "tick", once)
+    runner.run_forever()       # returns instead of raising
+    assert calls == [1]
+
+
+def test_an_uncorrelated_message_is_still_marked_handled(harvester):
+    """Otherwise every stray newsletter is re-read on every single poll."""
+    adapter = FlakyAdapter(RAW_REPLY)
+    adapter.calls = 1          # skip the outage
+    runner = MailRunner(adapter, harvester, dispatcher=None)
+    runner.tick()
+    assert adapter.flagged == [b"1"]
+
+
+def test_no_imap_configuration_means_no_thread(monkeypatch, harvester):
+    monkeypatch.delenv("IMAP_HOST", raising=False)
+    monkeypatch.delenv("IMAP_USER", raising=False)
+    monkeypatch.delenv("IMAP_PASSWORD", raising=False)
+    assert start_if_configured(harvester, dispatcher=None) is None
