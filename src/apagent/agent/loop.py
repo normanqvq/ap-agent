@@ -31,13 +31,22 @@ from apagent.schemas import Action, AgentDecision, ToolCall
 
 from .registry import ToolRegistry
 
+# The hard loop cap. One constant so the runtime and the performance panel
+# agree on what "hit the cap" means.
+MAX_ROUNDS = 5
+
+# The reasoning prefix run_agent writes when it force-escalates at the cap
+# (below). The performance panel keys on it to tell a completed round-5
+# decision from a run that ran out of rounds.
+CAP_ESCALATE_PREFIX = "Agent did not reach a decision"
+
 
 def run_agent(
     system_prompt: str,
     user_message: str,
     registry: ToolRegistry,
     invoice_id: str,
-    max_rounds: int = 5,
+    max_rounds: int = MAX_ROUNDS,
 ) -> AgentDecision:
     """Run the agent loop until it returns a final decision.
 
@@ -70,6 +79,16 @@ def run_agent(
 
     tools = registry.get_definitions()
 
+    # Summed across the run's LLM calls so token-cost-per-run is measured, not
+    # estimated. _finish stamps every exit with the running total.
+    tok_in = 0
+    tok_out = 0
+
+    def _finish(decision: AgentDecision) -> AgentDecision:
+        return decision.model_copy(
+            update={"input_tokens": tok_in or None, "output_tokens": tok_out or None}
+        )
+
     for round_num in range(1, max_rounds + 1):
         # Why we remind the model which tools it already called:
         # LLMs can forget what they did in earlier rounds, especially if the
@@ -91,6 +110,9 @@ def run_agent(
             tools=tools,
             system=system_prompt,
         )
+        usage = response.get("usage") or {}
+        tok_in += usage.get("input_tokens") or 0
+        tok_out += usage.get("output_tokens") or 0
 
         # If the model returned text with no tool calls, that's the final answer
         if not response["tool_calls"]:
@@ -98,20 +120,22 @@ def run_agent(
             if final_text is None:
                 # Model returned nothing. This should not happen, but if it does,
                 # treat it as an error and escalate.
-                return AgentDecision(
-                    invoice_id=invoice_id,
-                    action=Action.ESCALATE,
-                    hold_reason=None,
-                    confidence=0.0,
-                    reasoning="Model returned empty response with no tool calls",
-                    tool_calls=tool_calls_history,
-                    rounds_used=round_num,
+                return _finish(
+                    AgentDecision(
+                        invoice_id=invoice_id,
+                        action=Action.ESCALATE,
+                        hold_reason=None,
+                        confidence=0.0,
+                        reasoning="Model returned empty response with no tool calls",
+                        tool_calls=tool_calls_history,
+                        rounds_used=round_num,
+                    )
                 )
 
             # Parse the final answer into an AgentDecision
             decision = _parse_final_answer(final_text, invoice_id, tool_calls_history, round_num)
             if decision is not None:
-                return decision
+                return _finish(decision)
 
             # No JSON found in the answer. Live DeepSeek runs showed the model
             # sometimes writes a prose analysis and puts broken JSON (or none)
@@ -134,14 +158,16 @@ def run_agent(
                 )
                 continue
 
-            return AgentDecision(
-                invoice_id=invoice_id,
-                action=Action.ESCALATE,
-                hold_reason=None,
-                confidence=0.0,
-                reasoning=f"Failed to parse agent response as JSON. Raw text: {final_text}",
-                tool_calls=tool_calls_history,
-                rounds_used=round_num,
+            return _finish(
+                AgentDecision(
+                    invoice_id=invoice_id,
+                    action=Action.ESCALATE,
+                    hold_reason=None,
+                    confidence=0.0,
+                    reasoning=f"Failed to parse agent response as JSON. Raw text: {final_text}",
+                    tool_calls=tool_calls_history,
+                    rounds_used=round_num,
+                )
             )
 
         # Model wants to call tools.
@@ -185,14 +211,16 @@ def run_agent(
     reasoning = (
         f"Agent did not reach a decision after {max_rounds} rounds. Tool call history: {tool_names}"
     )
-    return AgentDecision(
-        invoice_id=invoice_id,
-        action=Action.ESCALATE,
-        hold_reason=None,
-        confidence=0.0,
-        reasoning=reasoning,
-        tool_calls=tool_calls_history,
-        rounds_used=max_rounds,
+    return _finish(
+        AgentDecision(
+            invoice_id=invoice_id,
+            action=Action.ESCALATE,
+            hold_reason=None,
+            confidence=0.0,
+            reasoning=reasoning,
+            tool_calls=tool_calls_history,
+            rounds_used=max_rounds,
+        )
     )
 
 

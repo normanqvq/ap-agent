@@ -57,6 +57,56 @@ def test_metrics_shape():
     assert 0 <= m["stp_pct"] <= 100
 
 
+def test_performance_reports_the_six_metrics():
+    p = Service().performance()
+    assert p["schema_pass"]["ok"] == p["schema_pass"]["total"] == 22
+    assert p["completion_pct"] == 100  # nothing hit the round cap
+    assert p["false_approve"] == 0
+    assert p["defects_handled"] == p["defects_total"] == 7  # all planted defects handled
+    assert p["avg_rounds"] > 0
+    # token cost is None over the committed cache (predates the field), and a
+    # real number once a live run records usage.
+    assert p["avg_tokens_per_run"] is None or p["avg_tokens_per_run"] > 0
+
+
+def test_performance_metrics_can_show_a_failure():
+    """schema_pass and tool_success are measured, not asserted: a parse-failure
+    decision and an Error: tool result count as misses."""
+    svc = Service()
+    svc._cache["INV-V001-3001"] = {
+        "invoice_id": "INV-V001-3001",
+        "action": "ESCALATE",
+        "hold_reason": None,
+        "confidence": 0.0,
+        "reasoning": "Failed to parse agent response as JSON. Raw text: ...",
+        "tool_calls": [
+            {"round": 1, "tool_name": "nope", "args": {}, "result": "Error: Tool 'nope'"}
+        ],
+        "rounds_used": 1,
+    }
+    p = svc.performance()
+    assert p["schema_pass"]["ok"] < p["schema_pass"]["total"]  # the parse failure counts
+    assert p["tool_success_pct"] < 100  # the Error: result counts
+
+
+def test_performance_scores_the_eval_view_not_the_raw_cache():
+    """An uploaded (session) invoice must not inflate the panel's population —
+    performance() scores _eval_view(), same as the other scorecards."""
+    svc = Service()
+    base_total = svc.performance()["schema_pass"]["total"]
+    svc._cache["INV-UPLOAD-1"] = {
+        "invoice_id": "INV-UPLOAD-1",
+        "action": "APPROVE",
+        "hold_reason": None,
+        "confidence": 0.9,
+        "reasoning": "ok",
+        "tool_calls": [],
+        "rounds_used": 1,
+    }
+    svc._uploaded.add("INV-UPLOAD-1")
+    assert svc.performance()["schema_pass"]["total"] == base_total  # upload excluded
+
+
 def test_analytics_scorecard_covers_every_planted_defect():
     a = Service().analytics()
     assert len(a["defects"]) == 7

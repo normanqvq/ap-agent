@@ -105,6 +105,18 @@ def metrics() -> dict:
     return get_service().metrics()
 
 
+@app.get("/api/mcp")
+def mcp_status() -> dict:
+    """The MCP transport health: mode, tool-call split, breaker state."""
+    return get_service().mcp_status()
+
+
+@app.get("/api/performance")
+def performance() -> dict:
+    """The six agent-performance metrics, measured over the decided runs."""
+    return get_service().performance()
+
+
 @app.get("/api/schedule")
 def schedule() -> dict:
     """The planned weekly payment runs for the APPROVEd invoices."""

@@ -31,6 +31,21 @@ dev = [
     "ruff",
     "pre-commit",
 ]
+# Optional: the same pipeline expressed as a LangGraph state graph
+# (src/apagent/graph.py). The core system does not import it.
+langgraph = [
+    "langgraph",
+]
+# Optional: expose the read-only tools as an MCP server, and let the agent
+# call them over MCP with an in-process fallback (src/apagent/mcp_*.py).
+mcp = [
+    "mcp>=1.2,<2",
+]
+# Optional: run/deploy the agent on Amazon Bedrock AgentCore (deploy/).
+deploy = [
+    "bedrock-agentcore",
+    "bedrock-agentcore-starter-toolkit",
+]
 
 [tool.ruff]
 line-length = 100

@@ -68,7 +68,26 @@ class Service:
 
     def __init__(self) -> None:
         self.store = DocumentStore.from_dir(DATA)
-        self.registry = build_registry(self.store, CONTRACTS)
+        # The raw in-process registry is always kept: it is the fallback, and
+        # the path uploaded (session-only) invoices always take.
+        self._raw_registry = build_registry(self.store, CONTRACTS)
+        self.registry = self._raw_registry
+        # AP_MCP routes the agent's tool calls over MCP, with an automatic
+        # fallback to the raw registry on any transport failure. Default off:
+        # the committed demo path is the plain registry, unchanged. Results are
+        # identical either way (tests/test_mcp.py pins that), so the toggle
+        # never changes a decision.
+        #   inproc  -- an in-process MCP session (shares this store)
+        #   remote  -- a separate `python -m apagent.mcp_server` process
+        self._mcp_mode = os.getenv("AP_MCP", "off")
+        if self._mcp_mode == "inproc":
+            from apagent.mcp_bridge import in_process_resilient_registry
+
+            self.registry = in_process_resilient_registry(self._raw_registry)
+        elif self._mcp_mode == "remote":
+            from apagent.mcp_bridge import remote_resilient_registry
+
+            self.registry = remote_resilient_registry(self._raw_registry)
         self.config = ToleranceConfig()
         self._cache: dict[str, dict] = {}
         if CACHE.exists():
@@ -141,9 +160,17 @@ class Service:
         return view
 
     def _save_cache(self) -> None:
-        CACHE.write_text(
-            json.dumps(self._eval_view(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+        # Drop token fields when the provider did not report usage, so a live
+        # re-run that produced no counts leaves the committed cache byte-for-byte
+        # unchanged instead of adding `input_tokens: null` noise.
+        view = {}
+        for doc_id, decision in self._eval_view().items():
+            view[doc_id] = {
+                k: v
+                for k, v in decision.items()
+                if not (k in ("input_tokens", "output_tokens") and v is None)
+            }
+        CACHE.write_text(json.dumps(view, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def cached_decision(self, invoice_id: str) -> dict | None:
         return self._cache.get(invoice_id)
@@ -154,8 +181,15 @@ class Service:
         invoice = self.store.get_invoice(invoice_id)
         if invoice is None:
             raise KeyError(invoice_id)
+        # A remote MCP server has its own store and cannot see an invoice
+        # uploaded this session, so those decisions must use the in-process
+        # registry — otherwise a duplicate check would miss the upload. An
+        # in-process MCP session shares this store, so no special case there.
+        registry = self.registry
+        if invoice_id in self._uploaded and getattr(self.registry, "shares_store", True) is False:
+            registry = self._raw_registry
         decision = decide_invoice(
-            invoice, self.store, self.registry, self.config, contracts_dir=CONTRACTS
+            invoice, self.store, registry, self.config, contracts_dir=CONTRACTS
         )
         self._cache[invoice_id] = decision.model_dump()
         # A re-run is a NEW decision: any human sign-off belonged to the old
@@ -252,6 +286,70 @@ class Service:
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
             "outbound_to": self.outbound_recipient(invoice.doc_id),
         }
+
+    def performance(self, report: dict | None = None) -> dict:
+        """The six agent-performance metrics from the training deck, MEASURED
+        over the decided runs — the honest version, where a cell can show a
+        failure. Scores the same _eval_view() the other scorecards use, so the
+        panel can never disagree with the defect table above it.
+        """
+        from apagent.agent.loop import CAP_ESCALATE_PREFIX, MAX_ROUNDS
+
+        view = self._eval_view()
+        decided = list(view.values())
+        n = len(decided) or 1
+        if report is None:
+            report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), view)
+
+        # 1. schema-validation pass rate: a decision whose reasoning is the
+        # parse-failure message did NOT produce valid JSON — count those as
+        # misses rather than calling every cached row a pass.
+        schema_ok = sum(
+            1 for d in decided if not d.get("reasoning", "").startswith("Failed to parse agent")
+        )
+        # 2. tool-call success: registry.execute returns an "Error:" string for
+        # an unknown tool or a handler crash; everything else is a served
+        # result (a plain "not found" is a valid answer, not a failure).
+        tool_results = [tc.get("result", "") for d in decided for tc in d.get("tool_calls", [])]
+        tool_ok = sum(1 for r in tool_results if not r.startswith("Error:"))
+        # 3. task completion: reached a decision without force-escalating at the
+        # round cap (loop.py writes CAP_ESCALATE_PREFIX only on that exit).
+        completed = sum(
+            1 for d in decided if not d.get("reasoning", "").startswith(CAP_ESCALATE_PREFIX)
+        )
+        # 4. token cost per run, averaged over runs the provider reported usage for
+        rounds = [d.get("rounds_used", 0) for d in decided]
+        token_runs = [
+            (d.get("input_tokens") or 0) + (d.get("output_tokens") or 0)
+            for d in decided
+            if d.get("input_tokens") is not None
+        ]
+        return {
+            "schema_pass": {"ok": schema_ok, "total": len(decided)},
+            "tool_calls": len(tool_results),
+            "tool_success_pct": round(tool_ok / len(tool_results) * 100) if tool_results else None,
+            "completion_pct": round(completed / n * 100),
+            "hit_cap": len(decided) - completed,
+            "avg_tokens_per_run": round(sum(token_runs) / len(token_runs)) if token_runs else None,
+            "token_runs_measured": len(token_runs),
+            "avg_rounds": round(sum(rounds) / n, 2),
+            "max_rounds": MAX_ROUNDS,
+            # 6. answer fidelity vs the reviewed ground-truth set (the eval)
+            "false_approve": report["metrics"]["false_approve_count"],
+            "defects_handled": sum(
+                1 for c in report["cases"] if c["defect"] != "clean" and c["verdict"] == "pass"
+            ),
+            "defects_total": sum(1 for c in report["cases"] if c["defect"] != "clean"),
+        }
+
+    def mcp_status(self) -> dict:
+        """How the agent is calling its tools: off, in-process MCP, or a remote
+        MCP server -- plus the transport split and breaker state when MCP is on.
+        A degraded-to-fallback run is visible here without reading logs."""
+        status = {"mode": self._mcp_mode}
+        if hasattr(self.registry, "status"):
+            status.update(self.registry.status())
+        return status
 
     def metrics(self) -> dict:
         """The dashboard's headline numbers, all measured over the same set.
@@ -600,6 +698,7 @@ class Service:
             "clean_approved": sum(1 for c in clean if c["action"] == "APPROVE"),
             "clean_friction": sum(1 for c in clean if c["verdict"] == "friction"),
             "vendors": vendors,
+            "performance": self.performance(report),  # reuse the report — no second evaluate()
         }
 
     def config_info(self) -> dict:

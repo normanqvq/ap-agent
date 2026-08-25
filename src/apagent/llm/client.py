@@ -330,10 +330,20 @@ def _call_openai_compat(
                 }
             )
 
+    # Mirror the anthropic path so token-cost-per-run is captured on the
+    # OpenAI-compatible providers too (DeepSeek / Groq / OpenAI), not just
+    # anthropic/bedrock. None when the provider omits usage.
+    usage = getattr(response, "usage", None)
     return {
         "text": message.content,
         "tool_calls": tool_calls,
         "stop_reason": response.choices[0].finish_reason,
+        "usage": {
+            "input_tokens": usage.prompt_tokens,
+            "output_tokens": usage.completion_tokens,
+        }
+        if usage
+        else None,
     }
 
 
