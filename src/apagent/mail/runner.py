@@ -89,7 +89,10 @@ class MailRunner:
                 evidence.matched_by,
             )
             if self.on_reply is not None:
-                self.on_reply(evidence)
+                # The raw message goes too: a corrected invoice lives in an
+                # attachment, and re-parsing it here would mean this module
+                # knowing what an attachment is worth. It does not.
+                self.on_reply(evidence, raw)
         self._run_timers()
 
     def _run_timers(self) -> None:

@@ -5,17 +5,24 @@ with a document a counterparty sent us, not about reading PDFs.
 """
 
 import base64
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
+import apagent.api.service as service_module
 from apagent.agent.ap_tools import hard_duplicates
+from apagent.api.service import Service
 from apagent.mail.attach import MAX_ATTACHMENT_BYTES, pdf_attachments
+from apagent.mail.directory import VendorDirectory
+from apagent.mail.inbound import parse_mail
 from apagent.mail.revise import make_revision
 from apagent.schemas import DocType, Document, EvidenceSource
 from apagent.store import DocumentStore
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
+DECISIONS_CACHE = DATA / "decisions.json"
 
 
 def _doc(doc_id, **kw):
@@ -208,3 +215,191 @@ def test_the_corrected_line_prices_are_the_vendors(store):
     extracted = original.model_copy(update={"lines": cheaper})
     revision = make_revision(original, extracted, sequence=1)
     assert [line.unit_price_cents for line in revision.lines] == [100] * len(original.lines)
+
+
+# --- the service joins the pieces: a reply that raises a revision ---------
+
+
+class FakeSender:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, message):
+        self.sent.append(message)
+
+
+def _reply_with_pdf(reply_to, message_id, sender="ar-dept@pacific.example"):
+    """A reply that correlates AND carries a corrected invoice."""
+    encoded = base64.b64encode(_PDF).decode()
+    return (
+        f"From: AR Dept <{sender}>\n"
+        f"To: {reply_to}\n"
+        "Subject: corrected invoice\n"
+        f"In-Reply-To: {message_id}\n"
+        f"References: {message_id}\n"
+        "Date: Mon, 25 Aug 2026 10:00:00 +0800\n"
+        'Content-Type: multipart/mixed; boundary="B"\n'
+        "\n"
+        "--B\n"
+        'Content-Type: text/plain; charset="utf-8"\n'
+        "\n"
+        "You are right, here is the corrected invoice.\n"
+        "--B\n"
+        "Content-Type: application/pdf\n"
+        "Content-Transfer-Encoding: base64\n"
+        'Content-Disposition: attachment; filename="corrected.pdf"\n'
+        "\n"
+        f"{encoded}\n"
+        "--B--\n"
+    ).encode()
+
+
+def _reply_text_only(reply_to, message_id, sender="ar-dept@pacific.example"):
+    return (
+        f"From: AR Dept <{sender}>\n"
+        f"To: {reply_to}\n"
+        "Subject: re: query\n"
+        f"In-Reply-To: {message_id}\n"
+        f"References: {message_id}\n"
+        "Date: Mon, 25 Aug 2026 10:00:00 +0800\n"
+        "Content-Type: text/plain; charset=utf-8\n"
+        "\n"
+        "We will look into it, no attachment yet.\n"
+    ).encode()
+
+
+def _bounce_with_pdf(reply_to, message_id, sender="mailer-daemon@example.test"):
+    encoded = base64.b64encode(_PDF).decode()
+    return (
+        f"From: Mail Delivery System <{sender}>\n"
+        f"To: {reply_to}\n"
+        "Subject: Undelivered Mail Returned to Sender\n"
+        f"In-Reply-To: {message_id}\n"
+        f"References: {message_id}\n"
+        "Auto-Submitted: auto-replied\n"
+        "Date: Mon, 25 Aug 2026 10:00:00 +0800\n"
+        'Content-Type: multipart/mixed; boundary="B"\n'
+        "\n"
+        "--B\n"
+        'Content-Type: text/plain; charset="utf-8"\n'
+        "\n"
+        "This is an automatically generated Delivery Status Notification.\n"
+        "--B\n"
+        "Content-Type: application/pdf\n"
+        "Content-Transfer-Encoding: base64\n"
+        'Content-Disposition: attachment; filename="original.pdf"\n'
+        "\n"
+        f"{encoded}\n"
+        "--B--\n"
+    ).encode()
+
+
+def _wired(monkeypatch, corrected_total_cents=49000, extraction_raises=False):
+    """A service with the mail side attached and extraction stubbed."""
+    # The revision runs the whole pipeline, which calls the agent. Stubbed
+    # the way test_chat stubs it: this suite is about what code does with a
+    # corrected document, not about the model. _save_cache is stubbed too --
+    # a test must never rewrite the committed benchmark.
+    monkeypatch.setattr(
+        "apagent.agent.loop.call_model",
+        lambda messages, tools, system, provider=None: {
+            "text": json.dumps(
+                {"action": "APPROVE", "hold_reason": None, "confidence": 0.9, "reasoning": "ok"}
+            ),
+            "tool_calls": [],
+        },
+    )
+    svc = Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)
+    svc.attach_mail(
+        VendorDirectory({"V005": {"email": "billing@pacific.example"}}),
+        FakeSender(),
+        "ap@example.test",
+    )
+    original = svc.store.get_invoice("INV-V005-3005")
+    corrected = original.model_copy(update={"total_cents": corrected_total_cents})
+
+    def fake_extract(path, vendors, **kw):
+        if extraction_raises:
+            raise service_module.ExtractionError("unreadable")
+        return corrected
+
+    monkeypatch.setattr(service_module, "extract_invoice", fake_extract)
+    return svc
+
+
+def _deliver(svc, raw_builder, sender="ar-dept@pacific.example"):
+    """Register a query, build the reply, and run it through the service."""
+    registry = svc.mail_harvester().registry
+    query = registry.register("INV-V005-3005", "ap@example.test")
+    raw = raw_builder(query.reply_to, query.message_id, sender)
+    evidence = svc.mail_harvester().on_mail(parse_mail(raw))
+    svc.on_vendor_reply(evidence, raw)
+    return evidence
+
+
+def test_a_reply_with_a_pdf_raises_a_revision_in_the_store(monkeypatch):
+    svc = _wired(monkeypatch)
+    evidence = _deliver(svc, _reply_with_pdf)
+    assert evidence is not None
+    assert evidence.from_registered_sender is True
+    revision = svc.store.get_invoice("INV-V005-3005-R1")
+    assert revision is not None
+    assert revision.total_cents == 49000
+    case = svc.get_case("INV-V005-3005-R1")
+    assert case["decision"] is not None
+    original_case = svc.get_case("INV-V005-3005")
+    assert "INV-V005-3005-R1" in original_case["revisions"]
+
+
+def test_an_unregistered_sender_produces_no_revision(monkeypatch):
+    svc = _wired(monkeypatch)
+    evidence = _deliver(svc, _reply_with_pdf, sender="someone@gmail.com")
+    assert evidence is not None
+    assert evidence.from_registered_sender is False
+    assert svc.store.get_invoice("INV-V005-3005-R1") is None
+
+
+def test_a_bounce_produces_no_revision(monkeypatch):
+    svc = _wired(monkeypatch)
+    evidence = _deliver(svc, _bounce_with_pdf)
+    assert evidence is not None
+    assert evidence.is_non_delivery is True
+    assert svc.store.get_invoice("INV-V005-3005-R1") is None
+
+
+def test_a_text_only_reply_produces_no_revision_and_no_error(monkeypatch):
+    svc = _wired(monkeypatch)
+    evidence = _deliver(svc, _reply_text_only)
+    assert evidence is not None
+    assert svc.store.get_invoice("INV-V005-3005-R1") is None
+
+
+def test_extraction_failure_leaves_evidence_but_no_revision_and_does_not_raise(monkeypatch):
+    svc = _wired(monkeypatch, extraction_raises=True)
+    evidence = _deliver(svc, _reply_with_pdf)  # must not raise
+    assert evidence is not None
+    assert svc.store.get_invoice("INV-V005-3005-R1") is None
+    replies = svc._vendor_replies.get("INV-V005-3005", [])
+    assert any(r["evidence_id"] == evidence.evidence_id for r in replies)
+
+
+def test_a_revision_does_not_move_the_headline_metrics(monkeypatch):
+    svc = _wired(monkeypatch)
+    before_analytics = svc.analytics()["metrics"]
+    before_metrics = svc.metrics()["false_approve"]
+    _deliver(svc, _reply_with_pdf)
+    after_analytics = svc.analytics()["metrics"]
+    after_metrics = svc.metrics()["false_approve"]
+    assert after_analytics == before_analytics
+    assert after_metrics == before_metrics
+
+
+def test_the_committed_decision_and_cache_file_are_untouched(monkeypatch):
+    before_hash = hashlib.sha256(DECISIONS_CACHE.read_bytes()).hexdigest()
+    svc = _wired(monkeypatch)
+    _deliver(svc, _reply_with_pdf)
+    on_disk = json.loads(DECISIONS_CACHE.read_text(encoding="utf-8"))
+    assert on_disk["INV-V005-3005"]["action"] == "EMAIL"
+    after_hash = hashlib.sha256(DECISIONS_CACHE.read_bytes()).hexdigest()
+    assert after_hash == before_hash

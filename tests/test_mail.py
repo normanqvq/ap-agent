@@ -531,7 +531,12 @@ def test_the_poller_survives_a_mailbox_outage(harvester):
     harvester.registry.register("INV-V005-3005", "ap@example.test")
     adapter = FlakyAdapter(_reply_to(harvester.registry, "INV-V005-3005"))
     seen = []
-    runner = MailRunner(adapter, harvester, dispatcher=None, on_reply=seen.append)
+    # on_reply takes the raw message too, since phase 2 -- a corrected
+    # invoice lives in an attachment. This test only cares about the evidence.
+    def remember(evidence, raw=None):
+        seen.append(evidence)
+
+    runner = MailRunner(adapter, harvester, dispatcher=None, on_reply=remember)
 
     with pytest.raises(ConnectionError):
         runner.tick()          # the outage propagates out of tick...

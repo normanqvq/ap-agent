@@ -13,6 +13,7 @@ moment.
 """
 
 import json
+import logging
 import os
 import re
 import tempfile
@@ -23,6 +24,8 @@ from urllib.parse import urlparse
 from apagent.agent.ap_tools import build_registry, hard_duplicates, recheck_with_contract
 from apagent.eval import evaluate
 from apagent.extraction.invoice import ExtractionError, extract_invoice
+from apagent.mail.attach import pdf_attachments
+from apagent.mail.revise import make_revision
 from apagent.matching.engine import match_invoice
 from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
@@ -36,6 +39,8 @@ from apagent.schemas import (
     ToleranceConfig,
 )
 from apagent.store import DocumentStore
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA = ROOT / "data" / "synthetic"
@@ -112,6 +117,10 @@ class Service:
         # invoice_id -> the replies received this session. Session state like
         # _chat_evidence: verbatim vendor text never reaches disk.
         self._vendor_replies: dict[str, list] = {}
+        # invoice_id -> the revisions raised from vendor replies this session.
+        # Session state like _uploaded: a corrected invoice never joins the
+        # committed dataset or the decisions cache on disk.
+        self._revisions: dict[str, list[str]] = {}
 
     # --- decisions cache ---------------------------------------------------
 
@@ -138,9 +147,15 @@ class Service:
         Used by _save_cache, metrics and analytics, so the file on disk and
         the two on-screen scorecards can never disagree.
         """
+        # A revision raised from a vendor's reply is the first case, exactly
+        # like an upload: it has no manifest entry, so the harness cannot
+        # score it either way and dropping it is invisible. The invoice it
+        # corrects keeps its own committed decision, which is what stops a
+        # correction from quietly improving the benchmark.
+        revisions = {doc_id for ids in self._revisions.values() for doc_id in ids}
         view = {}
         for invoice_id, decision in self._cache.items():
-            if invoice_id in self._uploaded:
+            if invoice_id in self._uploaded or invoice_id in revisions:
                 continue
             if invoice_id in self._chat_confirmed and invoice_id in self._committed:
                 view[invoice_id] = self._committed[invoice_id]
@@ -260,6 +275,11 @@ class Service:
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
             "outbound_to": self.outbound_recipient(invoice.doc_id),
             "vendor_replies": self._vendor_replies.get(invoice_id, []),
+            # Ids, not decided bundles. The console fetches each revision's
+            # own case when a reviewer opens it, and building them here would
+            # cost a full match per revision on every page load of the
+            # invoice they correct.
+            "revisions": self._revisions.get(invoice_id, []),
         }
 
     def metrics(self) -> dict:
@@ -555,11 +575,60 @@ class Service:
             sent.append(invoice_id)
         return sent
 
-    def on_vendor_reply(self, evidence) -> None:
-        """File a reply against its invoice. Phase 1 changes no decision."""
+    def on_vendor_reply(self, evidence, raw: bytes | None = None) -> None:
+        """File a reply, and raise a revision if it carried a corrected invoice.
+
+        The two halves are deliberately independent, and in this order: the
+        evidence is filed first and unconditionally, so a reviewer sees what
+        the vendor said even when the attachment turns out to be unreadable.
+        """
         if evidence is None:
             return
         self._vendor_replies.setdefault(evidence.invoice_id, []).append(evidence.model_dump())
+        if raw is None or evidence.is_non_delivery or not evidence.from_registered_sender:
+            # An unregistered sender's attachment is evidence, never an
+            # automatic path — the same rail the rest of the feature uses.
+            # A bounce carries our OWN attachment back, which must never be
+            # read as the vendor correcting themselves.
+            return
+        self._revise_from(evidence, raw)
+
+    def _revise_from(self, evidence, raw: bytes) -> None:
+        """A corrected invoice out of a reply, re-matched on its own merits.
+
+        Never raises: this is reached from the mail poller's daemon thread,
+        and a reply we cannot read must cost that reply and nothing else.
+
+        The revision runs the whole pipeline afterwards — our purchase order,
+        our goods receipt, our tolerances. That is what makes it safe to
+        accept a document from the counterparty at all: they supply the
+        figures, code decides whether the figures clear.
+        """
+        attachments = pdf_attachments(raw)
+        original = self.store.get_invoice(evidence.invoice_id)
+        if not attachments or original is None:
+            return
+        _, payload = attachments[0]
+        # Same temp-file dance as upload_invoice: extraction takes a Path,
+        # and nothing a vendor sent is ever written inside the repo.
+        tmp_dir = Path(tempfile.mkdtemp(prefix="apagent-revision-"))
+        pdf_path = tmp_dir / "corrected.pdf"
+        pdf_path.write_bytes(payload)
+        try:
+            extracted = extract_invoice(pdf_path, self.store.vendors())
+        except (ExtractionError, ValueError) as exc:
+            log.warning("could not read the correction on %s: %s", evidence.invoice_id, exc)
+            return
+        finally:
+            pdf_path.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+
+        sequence = len(self._revisions.get(original.doc_id, [])) + 1
+        revision = make_revision(original, extracted, sequence, evidence_id=evidence.evidence_id)
+        self.store.add_invoice(revision)
+        self._revisions.setdefault(original.doc_id, []).append(revision.doc_id)
+        log.info("raised %s from %s", revision.doc_id, evidence.evidence_id)
+        self.run_case(revision.doc_id)
 
     def send_to_human(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """Route an invoice to a human reviewer and record the hand-off
