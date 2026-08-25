@@ -7,19 +7,31 @@ in one screen without anyone having to read eight modules.
     .venv/Scripts/python.exe scripts/demo_email_intake.py
 """
 
+import base64
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
+from apagent.mail.attach import pdf_attachments
 from apagent.mail.chase import due_for_chase
 from apagent.mail.directory import VendorDirectory
 from apagent.mail.dispatch import MailDispatcher
 from apagent.mail.harvest import MailHarvester
 from apagent.mail.inbound import parse_mail
+from apagent.mail.revise import make_revision
 from apagent.mail.thread import ThreadRegistry
 from apagent.schemas import ToleranceConfig
+from apagent.store import DocumentStore
 
 INVOICE = "INV-V005-3005"
 VENDOR = "V005"
+DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
+
+# Not a real PDF. Section 7 shows what code does with a corrected document;
+# extraction itself needs a model and a real file, so these bytes only have
+# to be recognisable as a PDF -- and the demo says so out loud rather than
+# implying it read one.
+_FAKE_PDF = b"%PDF-1.4 a corrected invoice would be here %%EOF"
 
 REPLY_TEMPLATE = """\
 From: AR Dept <ar-dept@pacific.example>
@@ -97,16 +109,56 @@ def main() -> None:
     print("\n5. The same reply, sent from a lookalike domain:")
     forged = raw.replace(b"ar-dept@pacific.example", b"ar-dept@pacific.example.attacker.test")
     fake = harvester.on_mail(parse_mail(forged))
-    print(
-        f"    from vendor?   {fake.from_registered_sender}   <- evidence only, no automatic path"
-    )
+    print(f"    from vendor?   {fake.from_registered_sender}   <- evidence only, no automatic path")
 
     print("\n6. And one that only names the invoice in its subject:")
     stripped = REPLY_TEMPLATE.format(
         reply_to="ap@example.test", message_id="<unrelated@elsewhere.test>", invoice=INVOICE
     ).encode()
     correlated = harvester.on_mail(parse_mail(stripped))
-    print(f"    correlated?    {correlated}   <- nothing to attach to\n")
+    print(f"    correlated?    {correlated}   <- nothing to attach to")
+
+    print("\n7. A corrected invoice, attached, re-matched on our terms:")
+    with_pdf = (
+        "From: AR Dept <ar-dept@pacific.example>\n"
+        f"To: {query.reply_to}\n"
+        "Subject: corrected\n"
+        f"In-Reply-To: {query.message_id}\n"
+        'Content-Type: multipart/mixed; boundary="B"\n'
+        "\n--B\n"
+        'Content-Type: text/plain; charset="utf-8"\n'
+        "\nHere is the corrected invoice.\n"
+        "--B\n"
+        "Content-Type: application/pdf\n"
+        "Content-Transfer-Encoding: base64\n"
+        'Content-Disposition: attachment; filename="corrected.pdf"\n'
+        f"\n{base64.b64encode(_FAKE_PDF).decode()}\n"
+        "--B--\n"
+    ).encode()
+    found = pdf_attachments(with_pdf)
+    print(f"    attachment     {found[0][0]}, {len(found[0][1])} bytes, starts with %PDF")
+
+    original = DocumentStore.from_dir(DATA).get_invoice(INVOICE)
+    # What extraction WOULD return, written by hand: reading a real PDF needs
+    # a model, and this script runs without one. Every field below is hostile
+    # except the corrected price.
+    extracted = original.model_copy(
+        update={
+            "doc_id": "WHATEVER-THE-VENDOR-PRINTED",
+            "vendor_id": "V001",
+            "vendor_name": "Someone Else Pte Ltd",
+            "ref_doc_id": "PO-2026-1001",
+            "total_cents": 49000,
+        }
+    )
+    revision = make_revision(original, extracted, sequence=1, evidence_id=evidence.evidence_id)
+    print("    (the extracted document is hand-written here; extraction needs a model)")
+    print(f"    doc_id         {revision.doc_id}   <- ours, not the number on their paper")
+    print(f"    vendor         {revision.vendor_id}   <- ours, though the paper said V001")
+    print(f"    purchase order {revision.ref_doc_id}   <- ours, though the paper said PO-2026-1001")
+    print(f"    replaces       {revision.replaces}")
+    print(f"    total          {original.total_cents} -> {revision.total_cents} cents   <- theirs")
+    print("    the revision runs the same gates as any other invoice.\n")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Vendor email intake — design
 
 Date: 2026-08-25
-Status: approved, not yet implemented
+Status: implemented, phases 1 and 2, on `feat/mail-intake-impl`
 
 ## The problem
 
@@ -253,3 +253,37 @@ it, and whether Gmail preserves a client-supplied Message-ID has to be
 measured rather than assumed — if it rewrites it, header correlation breaks
 on the very first send. That is what the token in `Reply-To` is for, and it
 is why the design does not lean on headers alone.
+
+
+## Two departures, decided during implementation
+
+**No LLM classifier.** The architecture section above listed a `mail/extract.py`
+that would read the reply body and classify the vendor's intent. It was not
+built. What actually triggers the automatic path is whether a corrected invoice
+is attached — a fact code establishes by looking. A model call whose output
+changes nothing is cost without benefit; a model call whose output *does*
+change the decision is precisely the authority this design refuses to hand
+over. A text-only reply stays what it was: evidence a human reads.
+
+**The package is `apagent/mail/`, not `apagent/email/`.** Every module in it
+imports the stdlib `email` package, and a sibling with the same name is a trap
+for the next reader even though absolute imports resolve it correctly.
+`data/email/vendors.json` keeps its path — it is data, not an import.
+
+## What the build added that the design did not anticipate
+
+- **A charset the stdlib cannot look up wedges the intake.** A raw 8-bit header
+  is reported as the pseudo-charset `unknown-8bit`, which is not a codec, and a
+  sender may declare any charset they like on a body part. Both raised out of
+  `parse_mail`, which ran *before* the message was flagged Seen — so one
+  malformed message came back on every poll forever and took the chase timers
+  down with it. Found by review, with an executed reproduction, after the code
+  was written and its docstring already claimed the opposite.
+- **Touchless was defined in three places.** `eval.harness` computed it,
+  `Service.metrics` computed it again for the dashboard, and the console
+  printed the formula under the tile. An existing test (`test_api`) caught the
+  drift the moment `EMAIL` started counting.
+- **A revision looks exactly like a duplicate.** Same vendor, same purchase
+  order, near-identical total is the definition of both. The `replaces` link is
+  the only thing that separates them, which is why it is set by code alone and
+  checked against the store rather than trusted as a field.
