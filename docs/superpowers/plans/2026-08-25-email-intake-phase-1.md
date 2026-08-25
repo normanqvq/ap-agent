@@ -633,9 +633,18 @@ def test_a_forged_token_for_a_real_invoice_matches_nothing():
 
 def test_the_reply_address_carries_the_invoice_and_a_token():
     sent = ThreadRegistry().register("INV-V005-3005", "ap@example.test")
-    assert sent.reply_to.startswith("ap+INV-V005-3005.")
-    assert sent.reply_to.endswith("@example.test")
-    assert len(sent.reply_to.split(".")[-1].split("@")[0]) >= 8
+    local, _, domain = sent.reply_to.partition("@")
+    assert local.startswith("ap+INV-V005-3005.")
+    assert domain == "example.test"
+    assert len(local.split(".", 1)[1]) >= 8
+
+
+def test_two_queries_never_share_a_token():
+    registry = ThreadRegistry()
+    first = registry.register("INV-V005-3005", "ap@example.test")
+    second = registry.register("INV-V001-3001", "ap@example.test")
+    assert first.token != second.token
+    assert first.message_id != second.message_id
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -695,7 +704,6 @@ class SentQuery:
     chased_at: str | None = None
     escalated: bool = False
     answered: bool = False
-    fingerprint: str = ""
 
 
 class ThreadRegistry:
