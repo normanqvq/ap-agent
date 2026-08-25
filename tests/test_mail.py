@@ -12,7 +12,9 @@ import json
 
 import pytest
 
+from apagent.mail.adapters import _password
 from apagent.mail.directory import VendorDirectory
+from apagent.mail.dispatch import MailDispatcher
 from apagent.mail.inbound import is_non_delivery, parse_mail
 from apagent.mail.thread import ThreadRegistry
 from apagent.schemas import EvidenceSource, ToleranceConfig, VendorReplyEvidence
@@ -189,3 +191,67 @@ def test_two_queries_never_share_a_token():
     second = registry.register("INV-V001-3001", "ap@example.test")
     assert first.token != second.token
     assert first.message_id != second.message_id
+
+
+class FakeSender:
+    """Records what would have gone out. The only thing tests ever send to."""
+
+    def __init__(self):
+        self.sent = []
+
+    def send(self, message):
+        self.sent.append(message)
+
+
+@pytest.fixture
+def dispatcher(directory):
+    return MailDispatcher(
+        directory=directory,
+        registry=ThreadRegistry(),
+        sender=FakeSender(),
+        mail_from="ap@example.test",
+    )
+
+
+def test_a_query_goes_to_the_registered_address_with_our_headers(dispatcher):
+    sent = dispatcher.send_query("INV-V005-3005", "V005", "Please send a corrected invoice.")
+    assert sent is not None
+    message = dispatcher.sender.sent[0]
+    assert message["To"] == "billing@pacific.example"
+    assert message["Message-ID"] == dispatcher.registry.for_invoice("INV-V005-3005").message_id
+    assert message["Reply-To"].startswith("ap+INV-V005-3005.")
+    assert "corrected invoice" in message.get_content()
+
+
+def test_a_vendor_with_no_registered_address_is_never_written_to(dispatcher):
+    assert dispatcher.send_query("INV-V001-3001", "V001", "anything") is None
+    assert dispatcher.sender.sent == []
+
+
+def test_the_same_query_is_only_ever_sent_once(dispatcher):
+    dispatcher.send_query("INV-V005-3005", "V005", "Please send a corrected invoice.")
+    dispatcher.send_query("INV-V005-3005", "V005", "Please send a corrected invoice.")
+    assert len(dispatcher.sender.sent) == 1
+
+
+def test_a_chase_reuses_the_original_thread(dispatcher):
+    dispatcher.send_query("INV-V005-3005", "V005", "Please send a corrected invoice.")
+    original = dispatcher.registry.for_invoice("INV-V005-3005")
+    dispatcher.send_chase("INV-V005-3005", "V005")
+    chase = dispatcher.sender.sent[1]
+    assert chase["In-Reply-To"] == original.message_id
+    assert chase["References"] == original.message_id
+
+
+def test_a_vendor_is_only_ever_chased_once(dispatcher):
+    dispatcher.send_query("INV-V005-3005", "V005", "Please send a corrected invoice.")
+    dispatcher.send_chase("INV-V005-3005", "V005")
+    dispatcher.send_chase("INV-V005-3005", "V005")
+    assert len(dispatcher.sender.sent) == 2
+
+
+def test_an_app_password_pasted_with_its_spaces_still_works(monkeypatch):
+    """Gmail shows an app password as four groups and it is copied that way.
+    The resulting login failure says only 'invalid credentials'."""
+    monkeypatch.setenv("IMAP_PASSWORD", "abcd efgh ijkl mnop")
+    assert _password("IMAP_PASSWORD") == "abcdefghijklmnop"
