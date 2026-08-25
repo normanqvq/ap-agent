@@ -112,3 +112,24 @@ strict rule is stronger than routing: it is a deterministic gate that reverses
 the model. We express it in code so it is auditable line by line, which is the
 same reason the loop is hand-written. The graph shape is LangGraph's; the
 authority stays in code.
+
+## Not just a diagram — a runnable graph
+
+`src/apagent/graph.py` is this document as code: a real `StateGraph` whose five
+nodes call the same stage functions `decide_invoice` calls, so it is an
+orchestration view over the existing pipeline, not a second implementation that
+could drift. It is an optional dependency — the core system never imports it.
+
+```bash
+pip install -e ".[langgraph]"
+python -m apagent.graph          # prints LangGraph's own mermaid of our pipeline
+```
+
+`build_graph(store, registry, ...).invoke({"invoice": inv})` runs the whole flow
+and returns the same decision as `decide_invoice`. A test
+(`tests/test_graph.py`) pins that equivalence across five invoices — the
+headline contract-flip, an over-tolerance hold, a missing-GRN hold, the
+duplicate, and a clean approve — by stubbing the LLM identically on both paths,
+so any drift in the wiring fails the build. The `guardrails → outbound` edge is
+a genuine `add_conditional_edges` call: only `HOLD` and `EMAIL` carry a
+code-templated message, and the graph routes on that.
