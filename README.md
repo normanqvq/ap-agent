@@ -98,6 +98,8 @@ flowchart LR
 4. **The agent** reads the tolerance-checked facts, gathers evidence with tools, and returns a JSON decision. It is hand-written rather than built on a framework so every step is inspectable — the whole selling point is being able to show *why*. This pipeline is a LangGraph state graph in everything but the import; [docs/LANGGRAPH.md](docs/LANGGRAPH.md) maps every stage to State, nodes and conditional edges. The read-only tools are also exposed as an [MCP server](docs/MCP.md), which the agent calls over MCP with an automatic in-process fallback that provably cannot change a decision.
 5. **Guardrails** re-check the model's action against the computed facts and override an unjustified `APPROVE`. The percentage a contract allows is re-derived in code before it is enforced.
 
+The same pipeline runs as a Bedrock AgentCore agent behind one decorator — `python deploy/01_run_local.py` serves a decision on `localhost:8080` for free, and [docs/DEPLOY.md](docs/DEPLOY.md) takes it to a live serverless HTTPS endpoint.
+
 ## Design Principles
 
 ### Code computes facts; the model judges meaning; code owns authority

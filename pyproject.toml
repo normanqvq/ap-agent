@@ -41,6 +41,11 @@ langgraph = [
 mcp = [
     "mcp>=1.2,<2",
 ]
+# Optional: run/deploy the agent on Amazon Bedrock AgentCore (deploy/).
+deploy = [
+    "bedrock-agentcore",
+    "bedrock-agentcore-starter-toolkit",
+]
 
 [tool.ruff]
 line-length = 100
