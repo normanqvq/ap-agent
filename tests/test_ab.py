@@ -58,4 +58,7 @@ def test_roi_reports_manual_cost_and_is_honest_about_tokens():
     roi = Service().roi()
     assert roi["manual_cost_cents"] == 940
     assert roi["manual_batch_cents"] == 940 * roi["invoices"]
+    # False because the committed cache carries no token usage. If a real
+    # provider run is ever committed (_save_cache keeps non-None token fields),
+    # this flips to True — the red would mean the data got more honest, not a bug.
     assert roi["agent_cost_measured"] is False

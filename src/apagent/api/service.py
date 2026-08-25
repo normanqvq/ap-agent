@@ -294,6 +294,10 @@ class Service:
             ),
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
             "outbound_to": self.outbound_recipient(invoice.doc_id),
+            # None for the committed dataset; set only for a document that came
+            # in through intake() this session. Makes the provenance label
+            # outlive the intake response, as docs/INTAKE.md promises.
+            "intake_source": self._intake_source.get(invoice.doc_id),
         }
 
     def performance(self, report: dict | None = None) -> dict:
@@ -431,12 +435,19 @@ class Service:
         # of the judgement, same-direction only (a recovered approve, never a
         # recovered risk — a baseline approve the agent held would show as a
         # negative and is not what this panel claims).
+        # Only count a recovery the ground truth agrees with: the agent's
+        # APPROVE must be a verdict=="pass" (the invoice really was payable),
+        # never a false approve the baseline happened to hold. Without this the
+        # panel could parade an invoice the agent wrongly paid as a "recovery"
+        # (the false_approve tile and the A/B test would still catch it, but
+        # the recovered list must not present risk as a win).
+        passed_ids = {c["invoice_id"] for c in agent_report["cases"] if c["verdict"] == "pass"}
         recovered = []
         for invoice_id, agent_dec in view.items():
             base_dec = baseline_decisions.get(invoice_id)
             if base_dec is None or agent_dec["action"] != Action.APPROVE:
                 continue
-            if base_dec["action"] == Action.APPROVE:
+            if base_dec["action"] == Action.APPROVE or invoice_id not in passed_ids:
                 continue
             inv = self.store.get_invoice(invoice_id)
             recovered.append(
@@ -459,12 +470,14 @@ class Service:
         Manual processing runs about US$9.40 per invoice, and fixing a
         mis-keyed or mis-approved one adds 25-40% on top (Ardent Partners,
         2025 — the source the README already cites). The agent's own cost is
-        token cost: a few hundred tokens per run, a fraction of a cent at any
-        mainstream model price. agent_avg_tokens is the measured number when a
-        real provider reported usage, and None otherwise — left unmeasured
-        rather than guessed, the same honesty rule as the rest of the panel.
-        The headline is not the token bill (it is negligible) but the 25-40%
-        rework that never happens because false approvals are zero.
+        token cost: agent_avg_tokens is the measured tokens per run when a real
+        provider reported usage, and None otherwise — left unmeasured rather
+        than guessed, the same honesty rule as the rest of the panel, and the
+        UI shows a dash rather than a dollar figure until it is measured (a run
+        carries the system prompt, the full invoice dump and several tool
+        results, so "a fraction of a cent" is a claim, not a measurement). The
+        headline is the manual cost and the 25-40% rework a zero-false-approve
+        run never triggers, not the token bill.
         """
         perf = self.performance()
         n = perf["schema_pass"]["total"]

@@ -39,6 +39,15 @@ decision path that could quietly diverge from the one the demo exercises. If
 email starts approving things the console would hold, that is a bug in one
 place, not two.
 
+## The source label is declared, not authenticated
+
+`source` is a plain label the caller passes, and today it is write-only —
+recorded and shown, never branched on — so a fetcher naming itself `email` or
+`upload` changes nothing about the decision. If any logic ever keys on it
+(routing a notification, relaxing automation for one channel), bind the channel
+to the caller's own credential rather than trusting this field, which a session
+holder could otherwise set to anything.
+
 ## Why Telegram intake does not fight the chat bot
 
 The console already runs a Telegram integration: `chat/runner.py` polls

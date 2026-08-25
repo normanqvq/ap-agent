@@ -40,3 +40,55 @@ def test_intake_rejects_an_unknown_source():
 def test_upload_email_and_telegram_are_the_known_sources():
     assert "upload" in VALID_INTAKE_SOURCES
     assert {"email", "telegram"} <= VALID_INTAKE_SOURCES
+
+
+def test_intake_end_to_end_through_the_real_upload_path(monkeypatch):
+    """The seam WITHOUT mocking upload_invoice: stub only the LLM extractor and
+    the agent, and prove intake really lands a document through the true
+    upload -> run_case -> get_case path, tags it, and that the bundle carries
+    the invoice_id key intake depends on. Also pins C3: the tag outlives the
+    intake response — a later get_case still reports the channel."""
+    from apagent.api import service as service_mod
+    from apagent.schemas import Action, AgentDecision, DocType, Document, LineItem
+
+    fake = Document(
+        doc_id="INV-INTAKE-9",
+        doc_type=DocType.INVOICE,
+        vendor_id="V001",
+        vendor_name="Tan Hardware Supplies Pte Ltd",
+        issue_date="2026-08-01",
+        ref_doc_id=None,
+        currency="SGD",
+        lines=[
+            LineItem(
+                line_no=1,
+                sku="A-1",
+                description="widget",
+                qty=1,
+                uom="PCS",
+                unit_price_cents=100,
+                line_total_cents=100,
+            )
+        ],
+        total_cents=100,
+        tax_cents=0,
+    )
+    monkeypatch.setattr(service_mod, "extract_invoice", lambda path, vendors: fake)
+    monkeypatch.setattr(
+        service_mod,
+        "decide_invoice",
+        lambda *a, **k: AgentDecision(
+            invoice_id="INV-INTAKE-9",
+            action=Action.HOLD,
+            hold_reason=None,
+            confidence=1.0,
+            reasoning="stub",
+            tool_calls=[],
+            rounds_used=0,
+        ),
+    )
+    svc = Service()
+    bundle = svc.intake("telegram", "msg.pdf", b"%PDF-1.4 fake")
+    assert bundle["invoice_id"] == "INV-INTAKE-9"
+    assert bundle["intake_source"] == "telegram"
+    assert svc.get_case("INV-INTAKE-9")["intake_source"] == "telegram"

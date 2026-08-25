@@ -286,8 +286,8 @@ async function dashboard() {
       <div class="card-h"><h3>What it saves</h3><span class="runtotal">manual cost: Ardent Partners 2025</span></div>
       <div class="perfgrid">
         <div class="perf"><div class="pl">Manual cost</div><div class="pv num">$${(r.manual_cost_cents / 100).toFixed(2)}</div><div class="ps">per invoice · $${(r.manual_batch_cents / 100).toFixed(2)} for ${r.invoices}</div></div>
-        <div class="perf"><div class="pl">Agent cost</div><div class="pv num">${r.agent_cost_measured ? "~" + r.agent_avg_tokens.toLocaleString("en") + " tok" : "≪ 1¢"}</div><div class="ps">${r.agent_cost_measured ? "per invoice · a fraction of a cent" : "per invoice · measure on a live run"}</div></div>
-        <div class="perf"><div class="pl">Rework avoided</div><div class="pv num">${r.rework_low_pct}–${r.rework_high_pct}%</div><div class="ps">on ${r.false_approve} false approvals</div></div>
+        <div class="perf"><div class="pl">Agent cost</div><div class="pv num">${r.agent_cost_measured ? "~" + r.agent_avg_tokens.toLocaleString("en") + " tok" : "—"}</div><div class="ps">${r.agent_cost_measured ? "avg tokens / run" : "run precompute to measure"}</div></div>
+        <div class="perf"><div class="pl">Rework avoided</div><div class="pv num">${r.rework_low_pct}–${r.rework_high_pct}%</div><div class="ps">manual rework rate · false approvals: ${r.false_approve}</div></div>
       </div>
     </div>`;
   const q = document.getElementById("queue");
