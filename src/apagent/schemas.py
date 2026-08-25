@@ -147,6 +147,14 @@ class Document(BaseModel):
     to PO). A missing ref_doc_id is a very common defect in real documents. When
     it is missing, the only way is to search back by vendor plus amount.
 
+    replaces names the document this one supersedes -- set only by code, when a
+    vendor sends a corrected invoice in answer to a query. It is what stops the
+    duplicate gate from flagging a correction as a resubmission: same vendor,
+    same purchase order, near-identical total is exactly what a duplicate looks
+    like, and exactly what a correction looks like too. The link is the only
+    thing that distinguishes them, which is why it is never read off the
+    vendor's paper.
+
     The invoice-only fields (payment_terms, due_date, tax_cents, total_cents)
     sit directly in Document and are None when they do not apply, instead of
     living in an Invoice subclass. The matching engine handles all three
@@ -170,6 +178,8 @@ class Document(BaseModel):
     ref_doc_id: str | None
     currency: str | None
     lines: list[LineItem]
+
+    replaces: str | None = None  # the doc_id this revision supersedes, set by code
 
     # These only have a value on an Invoice. On a PO or GRN they stay None.
     payment_terms: str | None = None
