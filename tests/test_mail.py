@@ -14,6 +14,7 @@ import pytest
 
 from apagent.mail.directory import VendorDirectory
 from apagent.mail.inbound import is_non_delivery, parse_mail
+from apagent.mail.thread import ThreadRegistry
 from apagent.schemas import EvidenceSource, ToleranceConfig, VendorReplyEvidence
 
 RAW_REPLY = b"""\
@@ -132,3 +133,59 @@ def test_a_delivery_failure_is_a_bounce_not_an_answer():
 def test_an_out_of_office_is_a_bounce_not_an_answer():
     raw = RAW_REPLY.replace(b"Date: Mon", b"Auto-Submitted: auto-replied\r\nDate: Mon")
     assert is_non_delivery(parse_mail(raw)) is True
+
+
+def test_a_reply_is_matched_by_the_message_id_we_generated():
+    registry = ThreadRegistry()
+    sent = registry.register("INV-V005-3005", "ap@example.test")
+    mail = parse_mail(RAW_REPLY.replace(b"<sent-1@example.test>", sent.message_id.encode()))
+    assert registry.correlate(mail) == ("INV-V005-3005", "in_reply_to")
+
+
+def test_a_reply_with_the_headers_stripped_is_matched_by_the_token():
+    registry = ThreadRegistry()
+    sent = registry.register("INV-V005-3005", "ap@example.test")
+    raw = RAW_REPLY.replace(b"In-Reply-To: <sent-1@example.test>\n", b"")
+    raw = raw.replace(b"References: <sent-1@example.test>\n", b"")
+    raw = raw.replace(b"ap+INV-V005-3005.tok123456@example.test", sent.reply_to.encode())
+    assert registry.correlate(parse_mail(raw)) == ("INV-V005-3005", "token")
+
+
+def test_the_subject_line_matches_nothing():
+    """The whole reason correlation is not 'find the invoice id in the text'."""
+    registry = ThreadRegistry()
+    registry.register("INV-V005-3005", "ap@example.test")
+    raw = RAW_REPLY.replace(b"In-Reply-To: <sent-1@example.test>\n", b"")
+    raw = raw.replace(b"References: <sent-1@example.test>\n", b"")
+    raw = raw.replace(b"ap+INV-V005-3005.tok123456@example.test", b"ap@example.test")
+    raw = raw.replace(
+        b"Subject: =?gb2312?B?u9i4tDogYXAtYWdlbnQgY29ubmVjdGl2aXR5IHRlc3Q=?=",
+        b"Subject: Re: invoice INV-V005-3005",
+    )
+    assert registry.correlate(parse_mail(raw)) is None
+
+
+def test_a_forged_token_for_a_real_invoice_matches_nothing():
+    """Knowing the invoice id is not enough; the token is a secret we made."""
+    registry = ThreadRegistry()
+    registry.register("INV-V005-3005", "ap@example.test")
+    raw = RAW_REPLY.replace(b"In-Reply-To: <sent-1@example.test>\n", b"")
+    raw = raw.replace(b"References: <sent-1@example.test>\n", b"")
+    raw = raw.replace(b"tok123456", b"guessed99")
+    assert registry.correlate(parse_mail(raw)) is None
+
+
+def test_the_reply_address_carries_the_invoice_and_a_token():
+    sent = ThreadRegistry().register("INV-V005-3005", "ap@example.test")
+    local, _, domain = sent.reply_to.partition("@")
+    assert local.startswith("ap+INV-V005-3005.")
+    assert domain == "example.test"
+    assert len(local.split(".", 1)[1]) >= 8
+
+
+def test_two_queries_never_share_a_token():
+    registry = ThreadRegistry()
+    first = registry.register("INV-V005-3005", "ap@example.test")
+    second = registry.register("INV-V001-3001", "ap@example.test")
+    assert first.token != second.token
+    assert first.message_id != second.message_id
