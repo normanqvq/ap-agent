@@ -7,7 +7,7 @@ serverless runtime. `deploy/agent.py` is `decide_invoice` plus four lines.
 
 `bedrock-agentcore` is an optional dependency: `pip install -e ".[deploy]"`.
 
-## Run it locally first — free, no AWS
+## Run it locally first — no AWS resources
 
 ```bash
 python deploy/01_run_local.py                 # the headline contract-flip case

@@ -3,7 +3,7 @@
 The agent's read-only lookup tools -- PO, goods receipt, vendor history,
 duplicate check, contract search -- are wrapped as an MCP (Model Context
 Protocol) server so any MCP client can call them: our own agent in-process,
-a teammate's agent, or Claude Desktop over a socket.
+a teammate's agent, or Claude Desktop over stdio.
 
 Two deliberate boundaries:
 

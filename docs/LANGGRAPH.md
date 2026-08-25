@@ -49,8 +49,8 @@ flowchart TD
 |---|---|---|
 | **State** — shared memory across the graph | the case bundle: `invoice → po/grn → match → checked (tolerances) → review_gate → duplicates → decision → guardrails` | `api/service.py:get_case` assembles it |
 | **Node** — reads state, does a job, writes back | `match_node`, `rules_node`, `agent_node`, `guardrails_node`, `outbound_node` | `pipeline.py:78-108` |
-| **Conditional edge** — routes on the current state | (1) the agent's tool loop: reason → *needs a tool?* → call → back; (2) the guardrails override: *did the model approve something the facts refuse?* | `loop.py:96`, `pipeline.py:_apply_guardrails` |
-| **Runtime** — walks the graph, prevents infinite loops | the `max_rounds` cap that force-stops a stuck agent and escalates | `loop.py:73`, `:186` |
+| **Conditional edge** — routes on the current state | (1) the agent's tool loop: reason → *needs a tool?* → call → back; (2) the guardrails override: *did the model approve something the facts refuse?* | `loop.py:118`, `pipeline.py:_apply_guardrails` |
+| **Runtime** — walks the graph, prevents infinite loops | the `max_rounds` cap that force-stops a stuck agent and escalates | `loop.py:92`, `:214` |
 
 The two conditional edges are the two routings LangGraph most wants to teach.
 The first is the canonical agent↔tools loop — the exact shape of the §4 diagram.
@@ -59,7 +59,7 @@ The second is ours: a code gate that can reverse the model.
 ## agent_node in detail — the only live node
 
 `match_node` and `rules_node` are pure computation; `guardrails_node` and
-`outbound_node` are pure code. `agent_node` (`run_agent`, `loop.py:35`) is the
+`outbound_node` are pure code. `agent_node` (`run_agent`, `loop.py:44`) is the
 one place the LLM runs, and it is a ReAct loop by hand.
 
 It receives the facts already computed — line pairings, price and quantity
@@ -82,11 +82,11 @@ returning to the top is the `tools → agent` back-edge. Four details are worth
 pointing at on the slide:
 
 - **Every tool call is recorded** with its round, arguments and result
-  (`loop.py:169`). That history is the glass box — it is exactly what the
+  (`loop.py:195`). That history is the glass box — it is exactly what the
   console's tool-trail column renders.
 - **`max_rounds` is the Runtime.** Hanging is worse than escalating: a stuck
   agent blocks the whole queue, so after five rounds we force-return `ESCALATE`
-  with the tool history attached (`loop.py:186`). LangGraph's runtime prevents
+  with the tool history attached (`loop.py:214`). LangGraph's runtime prevents
   infinite loops for you; here it is one `for` bound.
 - **One JSON-format retry.** Live DeepSeek runs write a prose analysis and put
   the JSON after it, so we scan for the last object carrying an `action` key
@@ -101,7 +101,7 @@ pointing at on the slide:
 In a stock LangGraph agent the model's decision is the graph's output. Here it
 is not. `agent_node` only *recommends*; the very next node, `guardrails_node`,
 re-derives the facts in code and can overrule an unjustified `APPROVE`
-(`pipeline.py:99`). The percentage a contract allows is re-parsed by code before
+(`pipeline.py:101`). The percentage a contract allows is re-parsed by code before
 it is enforced, the money threshold is a hard gate, and a duplicate is a
 computed fact — none of it depends on whether the model reasoned correctly.
 

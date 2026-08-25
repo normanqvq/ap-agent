@@ -37,11 +37,15 @@ def _protect_secrets() -> None:
     """Never let the build ship secrets. launch containerizes the project
     directory, so a real .env (API keys) at the repo root could land in the S3
     bundle and every ECR image layer. The deployed agent uses IAM for Bedrock
-    and does not need those keys, so exclude them explicitly rather than trust
-    the toolkit's generated .dockerignore.
+    and does not need those keys.
+
+    Called AFTER `agentcore configure`, which generates the toolkit's own fuller
+    .dockerignore (it excludes .git/, caches, tests, the runtime yaml). We only
+    APPEND the secret patterns the template may miss — creating the file
+    ourselves first would suppress that template entirely.
     """
     dockerignore = ROOT / ".dockerignore"
-    patterns = [".env", ".env.*", "*.pem", ".venv/"]
+    patterns = [".env", ".env.*", "*.pem", ".venv/", ".bedrock_agentcore.yaml"]
     existing = dockerignore.read_text().splitlines() if dockerignore.exists() else []
     missing = [p for p in patterns if p not in existing]
     if missing:
@@ -54,12 +58,12 @@ def _protect_secrets() -> None:
 
 
 def main() -> None:
-    _protect_secrets()
     # The starter toolkit ships the `agentcore` CLI. configure writes
-    # .bedrock_agentcore.yaml (the IAM role and S3 bucket), launch builds and
-    # provisions and waits for READY.
+    # .bedrock_agentcore.yaml (the IAM role and S3 bucket) AND its own
+    # .dockerignore; launch builds, provisions, and waits for READY.
     try:
         _run(["agentcore", "configure", "--entrypoint", str(ENTRYPOINT), "--region", REGION])
+        _protect_secrets()  # append secret patterns to the template configure wrote
         _run(["agentcore", "launch"])
     except FileNotFoundError:
         sys.exit("`agentcore` not found. Run: pip install -e '.[deploy]'")
