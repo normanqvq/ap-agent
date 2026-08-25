@@ -45,6 +45,11 @@ The core idea is **code owns the authority; the model explains the judgement.**
 - Batches the approved invoices into weekly Friday payment runs — one transfer per vendor, each invoice paid as late as possible but never past due. Only `APPROVE` moves money; everything else is listed as withheld, with its reason.
 - Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice.
 - Accepts a delivery **confirmed in a chat group**: a receiver @-mentions the bot in Telegram, code reads the surrounding conversation, resolves the items against the purchase order, and records an *informal* goods receipt. Whether that receipt releases payment is a policy setting (`OFF` / `EVIDENCE_ONLY` / `TIERED` / `TRUSTED`), enforced in code — an unauthorised sender's confirmation is kept as evidence for a reviewer, never as grounds to pay.
+- **Vendor queries answer themselves.** An unexplained overcharge emails the
+  vendor automatically; their reply is tied back to the invoice by message
+  headers and a code-generated token — never by the subject line — and lands
+  on the case as evidence. A vendor who stays silent gets one reminder, then
+  a human. `scripts/demo_email_intake.py` runs the whole loop offline.
 - Serves a web console: a dashboard of KPIs, the invoice queue and decision mix, a per-invoice detail view showing the decision, the guardrail results, the glass-box tool trail, the three-way reconciliation, and the rationale — plus the payment-run plan.
 
 ## Product Tour
