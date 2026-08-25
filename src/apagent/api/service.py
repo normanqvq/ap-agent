@@ -69,6 +69,15 @@ class Service:
     def __init__(self) -> None:
         self.store = DocumentStore.from_dir(DATA)
         self.registry = build_registry(self.store, CONTRACTS)
+        # AP_MCP=inproc routes the agent's tool calls over an in-process MCP
+        # server, with an automatic fallback to this same registry on any
+        # transport failure. Default off: the committed demo path is the plain
+        # in-process registry, unchanged. The results are identical either way
+        # (tests/test_mcp.py pins that), so the toggle never changes a decision.
+        if os.getenv("AP_MCP") == "inproc":
+            from apagent.mcp_bridge import in_process_resilient_registry
+
+            self.registry = in_process_resilient_registry(self.registry)
         self.config = ToleranceConfig()
         self._cache: dict[str, dict] = {}
         if CACHE.exists():
