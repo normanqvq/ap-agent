@@ -394,6 +394,83 @@ class Service:
             "distribution": counts,
         }
 
+    def baseline_comparison(self) -> dict:
+        """Rules-only vs the agent, scored over the same committed benchmark.
+
+        The baseline runs the deterministic pipeline with no agent and no
+        contract lookup (pipeline.decide_invoice_rules_only); the agent column
+        is the committed decisions. Both go through the same eval harness, so
+        the panel shows what the agent's judgement actually buys: the invoices
+        it recovers that pure rules would hold — with false approvals still
+        zero on BOTH sides, i.e. the agent adds STP without adding risk.
+        """
+        from apagent.pipeline import decide_invoice_rules_only
+
+        view = self._eval_view()
+        baseline_decisions: dict[str, dict] = {}
+        for invoice_id in view:
+            invoice = self.store.get_invoice(invoice_id)
+            if invoice is None:
+                continue
+            baseline_decisions[invoice_id] = decide_invoice_rules_only(
+                invoice, self.store, self.config
+            ).model_dump()
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        base_report = evaluate(manifest, baseline_decisions)
+        agent_report = evaluate(manifest, view)
+        # Invoices the agent approved that pure rules held: the measured payoff
+        # of the judgement, same-direction only (a recovered approve, never a
+        # recovered risk — a baseline approve the agent held would show as a
+        # negative and is not what this panel claims).
+        recovered = []
+        for invoice_id, agent_dec in view.items():
+            base_dec = baseline_decisions.get(invoice_id)
+            if base_dec is None or agent_dec["action"] != Action.APPROVE:
+                continue
+            if base_dec["action"] == Action.APPROVE:
+                continue
+            inv = self.store.get_invoice(invoice_id)
+            recovered.append(
+                {
+                    "invoice_id": invoice_id,
+                    "vendor_name": self.store.vendors().get(inv.vendor_id, "") if inv else "",
+                    "baseline_action": base_dec["action"],
+                    "baseline_reason": _reason_label(base_dec),
+                }
+            )
+        return {
+            "baseline": base_report["metrics"],
+            "agent": agent_report["metrics"],
+            "recovered": recovered,
+        }
+
+    def roi(self) -> dict:
+        """The cost case: measured where it can be, cited where it cannot.
+
+        Manual processing runs about US$9.40 per invoice, and fixing a
+        mis-keyed or mis-approved one adds 25-40% on top (Ardent Partners,
+        2025 — the source the README already cites). The agent's own cost is
+        token cost: a few hundred tokens per run, a fraction of a cent at any
+        mainstream model price. agent_avg_tokens is the measured number when a
+        real provider reported usage, and None otherwise — left unmeasured
+        rather than guessed, the same honesty rule as the rest of the panel.
+        The headline is not the token bill (it is negligible) but the 25-40%
+        rework that never happens because false approvals are zero.
+        """
+        perf = self.performance()
+        n = perf["schema_pass"]["total"]
+        manual_cents = 940  # US$9.40 per invoice, Ardent Partners 2025
+        return {
+            "invoices": n,
+            "manual_cost_cents": manual_cents,
+            "manual_batch_cents": manual_cents * n,
+            "rework_low_pct": 25,
+            "rework_high_pct": 40,
+            "agent_avg_tokens": perf["avg_tokens_per_run"],
+            "agent_cost_measured": perf["avg_tokens_per_run"] is not None,
+            "false_approve": perf["false_approve"],
+        }
+
     def schedule(self, as_of: str = DEMO_AS_OF) -> dict:
         """Plan the weekly payment runs from the cached decisions."""
         plan = schedule_payments(

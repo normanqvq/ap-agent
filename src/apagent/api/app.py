@@ -129,6 +129,19 @@ def analytics() -> dict:
     return get_service().analytics()
 
 
+@app.get("/api/baseline")
+def baseline() -> dict:
+    """Rules-only vs the agent, scored over the same benchmark — what the
+    agent's judgement buys in STP, with false approvals zero on both sides."""
+    return get_service().baseline_comparison()
+
+
+@app.get("/api/roi")
+def roi() -> dict:
+    """The cost case: manual per-invoice cost vs the agent's measured cost."""
+    return get_service().roi()
+
+
 @app.get("/api/config")
 def config() -> dict:
     """The code-enforced policy, read-only."""

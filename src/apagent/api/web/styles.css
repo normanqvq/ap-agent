@@ -352,3 +352,5 @@ body {
 .perf .pl { color: var(--muted); font-size: 12px; font-weight: 500; }
 .perf .pv { font-size: 22px; font-weight: 700; margin: 4px 0 2px; }
 .perf .ps { color: var(--muted); font-size: 11.5px; }
+.ab-rec { padding: 12px 18px 6px; }
+.ab-rec-h { color: var(--muted); font-size: 12px; font-weight: 500; margin-bottom: 6px; }

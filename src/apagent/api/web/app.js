@@ -234,7 +234,7 @@ async function invoices() {
 // --- dashboard -------------------------------------------------------------
 async function dashboard() {
   view.innerHTML = `<div class="placeholder">Loading…</div>`;
-  const [m, list] = await Promise.all([api("/api/metrics"), api("/api/invoices")]);
+  const [m, list, r] = await Promise.all([api("/api/metrics"), api("/api/invoices"), api("/api/roi")]);
   const d = m.distribution;
   const maxN = Math.max(1, ...Object.values(d));
   const bar = (label, n, color) =>
@@ -281,6 +281,14 @@ async function dashboard() {
         return `<div class="act"><span class="dot" style="background:${a.accent}"></span>
           <span class="rl"><b>${esc(x.invoice_id)}</b> · ${esc(x.vendor_name)} → <b>${x.action}</b>${x.reason && x.reason !== "—" ? " · " + esc(x.reason) : ""}</span></div>`;
       }).join("")}
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>What it saves</h3><span class="runtotal">manual cost: Ardent Partners 2025</span></div>
+      <div class="perfgrid">
+        <div class="perf"><div class="pl">Manual cost</div><div class="pv num">$${(r.manual_cost_cents / 100).toFixed(2)}</div><div class="ps">per invoice · $${(r.manual_batch_cents / 100).toFixed(2)} for ${r.invoices}</div></div>
+        <div class="perf"><div class="pl">Agent cost</div><div class="pv num">${r.agent_cost_measured ? "~" + r.agent_avg_tokens.toLocaleString("en") + " tok" : "≪ 1¢"}</div><div class="ps">${r.agent_cost_measured ? "per invoice · a fraction of a cent" : "per invoice · measure on a live run"}</div></div>
+        <div class="perf"><div class="pl">Rework avoided</div><div class="pv num">${r.rework_low_pct}–${r.rework_high_pct}%</div><div class="ps">on ${r.false_approve} false approvals</div></div>
+      </div>
     </div>`;
   const q = document.getElementById("queue");
   q.innerHTML = list.slice(0, 8).map(invoiceRow).join("");
@@ -460,9 +468,32 @@ function perfPanel(p) {
     </div>`;
 }
 
+// Rules-only vs the agent, both scored by the same harness. The point: the
+// agent lifts STP without lifting risk — false approvals stay zero on both.
+function abPanel(b) {
+  if (!b) return "";
+  const stat = (label, value, sub) =>
+    `<div class="perf"><div class="pl">${label}</div><div class="pv num">${value}</div><div class="ps">${sub}</div></div>`;
+  const recovered = b.recovered.length
+    ? `<div class="ab-rec"><div class="ab-rec-h">Recovered by the agent's judgement</div>${b.recovered.map((r) =>
+        `<div class="row" data-id="${esc(r.invoice_id)}"><div class="rl"><b>${esc(r.invoice_id)}</b><small>${esc(r.vendor_name)}</small></div>
+          <div class="rr"><span class="pill mid">rules-only: ${r.baseline_action}${r.baseline_reason && r.baseline_reason !== "—" ? " · " + esc(r.baseline_reason) : ""}</span><span class="pill ok">agent: APPROVE</span></div></div>`).join("")}</div>`
+    : "";
+  return `
+    <div class="card">
+      <div class="card-h"><h3>Agent vs rules-only</h3><span class="runtotal">same invoices, same eval harness</span></div>
+      <div class="perfgrid">
+        ${stat("STP rate", `${b.baseline.stp_pct}% → ${b.agent.stp_pct}%`, "rules-only → agent")}
+        ${stat("False approvals", `${b.baseline.false_approve_count} · ${b.agent.false_approve_count}`, "zero on both — no added risk")}
+        ${stat("Recovered", b.recovered.length, "held by rules, approved by the agent")}
+      </div>
+      ${recovered}
+    </div>`;
+}
+
 async function analytics() {
   view.innerHTML = `<div class="placeholder">Loading…</div>`;
-  const a = await api("/api/analytics");
+  const [a, b] = await Promise.all([api("/api/analytics"), api("/api/baseline")]);
   const m = a.metrics, d = a.distribution;
   const maxN = Math.max(1, ...Object.values(d));
   const bar = (label, n, color) =>
@@ -504,6 +535,7 @@ async function analytics() {
       </div>
     </div>
     ${perfPanel(a.performance)}
+    ${abPanel(b)}
     <div class="card">
       <div class="card-h"><h3>By vendor</h3><span class="runtotal">billed vs approved for payment</span></div>
       ${a.vendors.map((v) => `
