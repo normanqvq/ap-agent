@@ -1,0 +1,22 @@
+# Runtime dependencies (mirror of pyproject.toml [project.dependencies]).
+# The hackathon submission asks for a requirements.txt; pyproject remains the
+# source of truth. Install with: pip install -r requirements.txt
+pydantic>=2
+anthropic[aws]
+boto3
+openai
+python-dotenv
+scipy
+pulp
+pdfplumber
+reportlab
+httpx
+fastapi
+python-multipart
+uvicorn
+sqlalchemy
+
+# Optional extras (not required to run the core system):
+#   pip install -e ".[dev]"        # pytest, ruff, pre-commit
+#   pip install -e ".[langgraph]"  # the LangGraph view of the pipeline
+#   pip install -e ".[mcp]"        # expose the tools as an MCP server
