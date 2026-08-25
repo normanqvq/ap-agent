@@ -396,8 +396,9 @@ class InboundMail(BaseModel):
     for display only — never for matching, see thread.py.
 
     references is the parsed References header, oldest first. Kept whole
-    because a long thread carries the original Message-ID at the front while
-    In-Reply-To only names the immediate parent.
+    because correlate() walks it newest-first: both the immediate parent and
+    every ancestor before it are candidates for a match, not just the head
+    of the list.
     """
 
     message_id: str

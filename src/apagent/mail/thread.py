@@ -30,9 +30,10 @@ from datetime import datetime
 
 from apagent.schemas import InboundMail
 
-# ap+INV-V005-3005.9tK2mQ7x@host — the invoice for a human reading a log, the
-# token for the actual check.
-_TOKEN_RE = re.compile(r"\+([A-Za-z0-9-]+)\.([A-Za-z0-9_-]{8,})@")
+# ap+INV-V005-3005.9tK2mQ7x@host — only the token (group 1) is ever looked
+# up; the invoice segment is matched but not captured because nothing here
+# reads it back out.
+_TOKEN_RE = re.compile(r"\+(?:[A-Za-z0-9-]+)\.([A-Za-z0-9_-]{8,})@")
 
 
 @dataclass
@@ -87,6 +88,6 @@ class ThreadRegistry:
                 return self._by_message_id[header.strip()].invoice_id, "in_reply_to"
         for address in mail.to_addrs:
             found = _TOKEN_RE.search(address)
-            if found and found.group(2) in self._by_token:
-                return self._by_token[found.group(2)].invoice_id, "token"
+            if found and found.group(1) in self._by_token:
+                return self._by_token[found.group(1)].invoice_id, "token"
         return None

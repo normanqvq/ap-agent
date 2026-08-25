@@ -58,9 +58,25 @@ class MailRunner:
                 self._stop.wait(_POLL_SECONDS)
 
     def tick(self) -> None:
-        """One poll: file every reply, then run the timers."""
+        """One poll: file every reply, then run the timers.
+
+        self.adapter.poll() is deliberately left to propagate -- a mailbox
+        outage should surface, and the caller (run_forever) already backs
+        off and retries on any exception. Everything below it is wrapped
+        per-message instead: a message that fails to parse or harvest must
+        cost exactly that message, not the whole tick. Without the wrapping,
+        one unreadable message never gets mark_handled and is re-read (and
+        re-fails) on every subsequent poll, forever -- and because it never
+        reaches _run_timers, it takes the chase and escalation timers down
+        with it too.
+        """
         for uid, raw in self.adapter.poll():
-            evidence = self.harvester.on_mail(parse_mail(raw))
+            try:
+                evidence = self.harvester.on_mail(parse_mail(raw))
+            except Exception:
+                log.exception("could not parse/harvest mail uid=%s; skipping", uid)
+                self.adapter.mark_handled(uid)
+                continue
             # Flagged even when it correlates to nothing. Otherwise every
             # stray message in the mailbox is re-read on every poll, forever.
             self.adapter.mark_handled(uid)

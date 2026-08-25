@@ -197,6 +197,119 @@ def test_two_queries_never_share_a_token():
     assert first.message_id != second.message_id
 
 
+# The twelve tests above all build on one well-formed RAW_REPLY. A real
+# mailbox also delivers messages an RFC would call malformed: raw 8-bit
+# headers, charsets nobody can look up, broken RFC 2047, and structures
+# built to hide the vendor's own words. parse_mail must survive every one
+# of these without raising, and without discarding the reply itself.
+
+
+def test_a_raw_8bit_subject_does_not_raise():
+    """Not RFC 2047 at all -- decode_header reports this as the pseudo-
+    charset 'unknown-8bit', which is not a real codec and raises
+    LookupError before errors='replace' ever gets a chance to run."""
+    raw = RAW_REPLY.replace(
+        b"Subject: =?gb2312?B?u9i4tDogYXAtYWdlbnQgY29ubmVjdGl2aXR5IHRlc3Q=?=",
+        b"Subject: \xc4\xe3\xba\xc3",
+    )
+    mail = parse_mail(raw)
+    assert isinstance(mail.subject, str)
+
+
+def test_an_unresolvable_body_charset_does_not_raise():
+    """get_content_charset() hands back the header text unvalidated -- this
+    is attacker-controlled outright."""
+    raw = RAW_REPLY.replace(
+        b'Content-Type: text/plain; charset="utf-8"\n\nCorrected invoice attached.',
+        b'Content-Type: text/plain; charset="x-unknown"\n\nCorrected invoice attached.',
+    )
+    mail = parse_mail(raw)
+    assert "Corrected invoice attached." in mail.body_text
+
+
+def test_a_broken_rfc2047_subject_does_not_raise():
+    raw = RAW_REPLY.replace(
+        b"Subject: =?gb2312?B?u9i4tDogYXAtYWdlbnQgY29ubmVjdGl2aXR5IHRlc3Q=?=",
+        b"Subject: =?utf-8?B?!!!!not-base64?=",
+    )
+    mail = parse_mail(raw)
+    assert isinstance(mail.subject, str)
+
+
+def test_a_bounce_with_a_raw_8bit_display_name_is_still_classified():
+    """parseaddr on a still-encoded Header silently returns ('', ''), which
+    would launder this bounce into an unidentifiable sender instead of a
+    recognised non-delivery -- and stop the chase timer on a vendor who
+    never received the query."""
+    raw = RAW_REPLY.replace(
+        b"From: AR Dept <ar-dept@pacific.example>",
+        b"From: \xc4\xe3\xba\xc3 <mailer-daemon@example.test>",
+    )
+    mail = parse_mail(raw)
+    assert is_non_delivery(mail) is True
+
+
+def test_a_filenamed_text_part_still_yields_its_text():
+    """The only text part carries a filename; an empty body would hide the
+    vendor's actual words from the reviewer."""
+    raw = b"""\
+From: AR Dept <ar-dept@pacific.example>
+To: ap+INV-V005-3005.tok123456@example.test
+Subject: reply
+Message-ID: <reply-2@pacific.example>
+Date: Mon, 25 Aug 2026 10:00:00 +0800
+Content-Type: text/plain; charset="utf-8"; name="note.txt"
+Content-Disposition: inline; filename="note.txt"
+
+We REJECT this price. Do not pay.
+"""
+    mail = parse_mail(raw)
+    assert "REJECT" in mail.body_text
+    assert mail.attachments == ["note.txt"]
+
+
+def test_an_attached_forwarded_message_does_not_replace_the_real_body():
+    """message/rfc822, placed first, must not let text from the forwarded
+    message stand in for what the vendor typed at the top level."""
+    raw = b"""\
+From: AR Dept <ar-dept@pacific.example>
+To: ap+INV-V005-3005.tok123456@example.test
+Subject: reply
+Message-ID: <reply-3@pacific.example>
+Date: Mon, 25 Aug 2026 10:00:00 +0800
+Content-Type: multipart/mixed; boundary="OUT"
+
+--OUT
+Content-Type: message/rfc822
+
+From: someone@else.example
+Subject: an old thread
+Content-Type: text/plain
+
+Text from the forwarded message.
+--OUT
+Content-Type: text/plain; charset="utf-8"
+
+We REJECT this price. Do not pay.
+--OUT--
+"""
+    mail = parse_mail(raw)
+    assert mail.body_text.strip() == "We REJECT this price. Do not pay."
+
+
+def test_missing_to_date_and_at_sign_in_from_does_not_raise():
+    raw = b"""\
+From: not-an-email-address
+Subject: reply
+Message-ID: <reply-4@pacific.example>
+
+body text
+"""
+    mail = parse_mail(raw)
+    assert mail.to_addrs == []
+    assert mail.from_addr == "not-an-email-address"
+
+
 class FakeSender:
     """Records what would have gone out. The only thing tests ever send to."""
 
@@ -454,3 +567,27 @@ def test_no_imap_configuration_means_no_thread(monkeypatch, harvester):
     monkeypatch.delenv("IMAP_USER", raising=False)
     monkeypatch.delenv("IMAP_PASSWORD", raising=False)
     assert start_if_configured(harvester, dispatcher=None) is None
+
+
+def test_an_unparseable_message_costs_one_message_not_the_tick(monkeypatch, dispatcher):
+    """A message that cannot be parsed must still be flagged handled -- else
+    it is re-read (and re-fails) on every poll, forever -- and the timers
+    that come after the loop must still run, so a genuinely due chase still
+    goes out even when every message in the batch was unreadable."""
+    dispatcher.registry.register("INV-V005-3005", "ap@example.test")
+    _aged(dispatcher.registry, "INV-V005-3005", 80)  # past the chase window
+    harvester = MailHarvester(
+        directory=dispatcher.directory, registry=dispatcher.registry, vendor_of=lambda _: "V005"
+    )
+    adapter = FlakyAdapter(b"@@@ not a message @@@")
+    adapter.calls = 1  # skip FlakyAdapter's built-in outage step
+    monkeypatch.setattr(
+        "apagent.mail.runner.parse_mail",
+        lambda raw: (_ for _ in ()).throw(ValueError("garbled message")),
+    )
+    runner = MailRunner(adapter, harvester, dispatcher, config=ToleranceConfig())
+
+    runner.tick()  # must not raise
+
+    assert adapter.flagged == [b"1"]
+    assert len(dispatcher.sender.sent) == 1  # the due chase still went out
