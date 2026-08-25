@@ -7,3 +7,4 @@ data/*.db
 data/generated/
 .DS_Store
 data/chat/roster.json
+data/email/vendors.json
