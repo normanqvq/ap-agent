@@ -32,7 +32,7 @@
     "po_id": "PO-2026-1005",
     "grn_id": "GRN-2005",
     "defect": "price_variance",
-    "notes": "Line 1 unit price is 8% above PO PO-2026-1005 (beyond the 2% tolerance). Expect HOLD or ESCALATE."
+    "notes": "Line 1 unit price is 8% above PO PO-2026-1005 (beyond the 2% tolerance). Expect EMAIL - a corrected invoice is a question for the vendor. HOLD or ESCALATE also score as a pass; only APPROVE is a false approve."
   },
   {
     "invoice_id": "INV-V006-3006",

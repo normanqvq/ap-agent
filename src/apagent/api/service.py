@@ -285,7 +285,11 @@ class Service:
         for d in decided:
             counts[d["action"]] = counts.get(d["action"], 0) + 1
         approve = counts["APPROVE"]
-        hold = counts["HOLD"]
+        # HOLD and EMAIL alike: decided, with no human touched at that moment.
+        # Kept in step with eval.harness deliberately — test_api asserts the
+        # two agree, which is the only thing stopping this copy from drifting
+        # into a second, quieter definition of the headline number.
+        untouched = counts["HOLD"] + counts["EMAIL"]
         # Denominator is ALL invoices (CLAUDE.md metric definitions): an
         # undecided invoice is not straight-through, so missing decisions
         # lower STP instead of inflating it.
@@ -298,7 +302,7 @@ class Service:
             "decided": len(decided),
             "pending": total - len(decided),
             "stp_pct": round(approve / n * 100),
-            "touchless_pct": round((approve + hold) / n * 100),
+            "touchless_pct": round((approve + untouched) / n * 100),
             "false_approve": report["metrics"]["false_approve_count"],
             "distribution": counts,
         }

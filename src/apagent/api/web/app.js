@@ -256,7 +256,7 @@ async function dashboard() {
     </div>
     <div class="kpis">
       <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.total} invoices</div></div>
-      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE+HOLD / decided</div></div>
+      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE + HOLD + EMAIL / ${m.total}</div></div>
       <div class="card kpi ${m.false_approve ? "warn" : "good"}"><div class="l">False approvals</div><div class="v num">${m.false_approve}</div><div class="s">${m.false_approve ? "Zero-tolerance · TARGET BROKEN" : "Zero-tolerance · on target"}</div></div>
       <div class="card kpi warn"><div class="l">Pending</div><div class="v num">${m.pending}</div><div class="s">Awaiting review</div></div>
     </div>
@@ -451,7 +451,7 @@ async function analytics() {
     </div>
     <div class="kpis">
       <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.total} invoices</div></div>
-      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE + HOLD / ${m.total}</div></div>
+      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE + HOLD + EMAIL / ${m.total}</div></div>
       <div class="card kpi ${m.false_approve_count ? "warn" : "good"}"><div class="l">False approvals</div><div class="v num">${m.false_approve_count}</div><div class="s">${m.false_approve_count ? "Zero-tolerance · TARGET BROKEN" : "every planted defect blocked"}</div></div>
       <div class="card kpi"><div class="l">Friction</div><div class="v num">${m.friction_count}</div><div class="s">payable but held — safe, costs STP</div></div>
     </div>

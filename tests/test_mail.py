@@ -10,10 +10,12 @@ invoice by anything except text the sender chose.
 
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from apagent.api.service import Service
+from apagent.eval import evaluate
 from apagent.mail.adapters import _password
 from apagent.mail.chase import due_for_chase, due_for_escalation
 from apagent.mail.directory import VendorDirectory
@@ -666,3 +668,32 @@ def test_a_reply_never_moves_the_measured_benchmark():
 def test_a_case_with_no_replies_reports_an_empty_list():
     service = Service()
     assert service.get_case("INV-V005-3005")["vendor_replies"] == []
+
+
+# --- the data change that makes EMAIL fire at all -------------------------
+
+DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
+
+
+def test_an_automatic_vendor_query_counts_as_touchless():
+    """Same rationale that puts HOLD in the numerator: nobody was touched at
+    the moment of the decision."""
+    manifest = [
+        {"invoice_id": "INV-1", "defect": "clean"},
+        {"invoice_id": "INV-2", "defect": "price_variance"},
+    ]
+    decisions = {
+        "INV-1": {"action": "APPROVE", "hold_reason": None},
+        "INV-2": {"action": "EMAIL", "hold_reason": None},
+    }
+    metrics = evaluate(manifest, decisions)["metrics"]
+    assert metrics["touchless_pct"] == 100
+    assert metrics["stp_pct"] == 50
+    assert metrics["false_approve_count"] == 0
+
+
+def test_the_price_variance_case_asks_the_vendor():
+    """The committed cache, not a fabricated one: an 8% overcharge with no
+    contractual allowance is a question for the vendor."""
+    decisions = json.loads((DATA / "decisions.json").read_text(encoding="utf-8"))
+    assert decisions["INV-V005-3005"]["action"] == "EMAIL"
