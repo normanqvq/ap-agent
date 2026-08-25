@@ -62,6 +62,11 @@ DEMO_ORDER = [
     "INV-V004-3010",  # missing PO ref
 ]
 
+# The channels a document can arrive through. "upload" is the manual web
+# upload; "email" and "telegram" are the external fetchers' seam (docs/INTAKE.md).
+# A set — order carries no meaning here.
+VALID_INTAKE_SOURCES = {"upload", "email", "telegram"}
+
 
 class Service:
     """Holds the loaded dataset and the decisions cache for the API."""
@@ -123,6 +128,10 @@ class Service:
         # can show the conversation. Session state: the verbatim messages
         # are never written to disk.
         self._chat_evidence: dict = {}
+        # invoice id -> the channel it arrived through (upload / email /
+        # telegram). Session state like _uploaded; the seam the external
+        # fetchers tag their documents with. See docs/INTAKE.md.
+        self._intake_source: dict[str, str] = {}
 
     # --- decisions cache ---------------------------------------------------
 
@@ -522,6 +531,29 @@ class Service:
         self.store.add_invoice(doc)
         self._uploaded.add(doc.doc_id)
         return self.run_case(doc.doc_id)
+
+    def intake(self, source: str, filename: str, content: bytes) -> dict:
+        """Land a document from an external channel into the upload pipeline,
+        tagged with where it came from.
+
+        The seam for the email / Telegram intake work: a fetcher on the other
+        side normalises whatever it received (an email attachment, a file
+        exported from a chat) into (source, filename, PDF bytes) and calls
+        this. Extraction and the agent decision are EXACTLY the upload path —
+        one intake, one set of guardrails — so a new channel adds a provenance
+        label, never a second decision path that could drift from the first.
+        Like uploads, an intake document is session state and never touches the
+        committed dataset. See docs/INTAKE.md for the full contract, including
+        why the Telegram fetcher must not open a second getUpdates consumer.
+        """
+        if source not in VALID_INTAKE_SOURCES:
+            raise ValueError(
+                f"unknown intake source {source!r} (expected one of {sorted(VALID_INTAKE_SOURCES)})"
+            )
+        bundle = self.upload_invoice(filename, content)
+        self._intake_source[bundle["invoice_id"]] = source
+        bundle["intake_source"] = source
+        return bundle
 
     def confirm_payment(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """A human confirms an APPROVEd invoice for payment.

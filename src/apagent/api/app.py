@@ -171,6 +171,18 @@ def upload_invoice(file: UploadFile) -> dict:
         raise HTTPException(status_code=422, detail=str(e)) from None
 
 
+@app.post("/api/intake")
+def intake(source: str, file: UploadFile) -> dict:
+    """Land a document from an external channel (email, Telegram) into the same
+    upload pipeline, tagged with its source. The seam the email / Telegram
+    fetchers build against — see docs/INTAKE.md."""
+    content = file.file.read()
+    try:
+        return get_service().intake(source, file.filename or "invoice.pdf", content)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+
 @app.post("/api/invoices/{invoice_id}/run")
 def run_invoice(invoice_id: str) -> dict:
     """Run the agent live on one invoice and return the fresh case bundle."""
