@@ -29,6 +29,7 @@ from apagent.rules.tolerance import apply_tolerances, requires_manual_review, re
 from apagent.scheduling import schedule_payments
 from apagent.schemas import (
     Action,
+    ChatGrnEvidence,
     ChatGrnPolicy,
     DiscrepancyField,
     Document,
@@ -638,6 +639,68 @@ class Service:
         self._chat_confirmed.add(invoice_id)
         return self.run_case(invoice_id)
 
+    def upload_delivery_photo(
+        self, invoice_id: str, image_bytes: bytes, media_type: str, actor: str = "reviewer"
+    ) -> dict:
+        """A reviewer uploads a photo of a delivery note; it becomes a
+        chat-tier goods receipt against this invoice's PO and re-decides it.
+
+        The console equivalent of a warehouse colleague photographing the
+        signed docket instead of typing "it came". It runs the EXACT chat
+        pipeline — extract the claim, resolve it against OUR PO, apply the same
+        grn_gate — with the image as the only new part. A signed-in reviewer
+        counts as an authorised confirmer, but the informal-ceiling and quantity
+        checks still apply, so a photo never pays a large invoice on its own.
+        Session state like every other piece of chat evidence: the receipt lives
+        in memory and never reaches data/synthetic/.
+        """
+        from apagent.chat.extract import ChatExtractionError
+        from apagent.chat.resolve import resolve_grn
+        from apagent.chat.vision import extract_delivery_claim_from_image
+
+        invoice = self.store.get_invoice(invoice_id)
+        if invoice is None:
+            raise KeyError(invoice_id)
+        if len(image_bytes) > 5 * 1024 * 1024:
+            raise ValueError("image too large (5 MB limit)")
+
+        try:
+            claim = extract_delivery_claim_from_image(image_bytes, media_type)
+        except ChatExtractionError as exc:
+            raise ValueError(f"could not read the delivery photo: {exc}") from exc
+
+        captured_at = datetime.now().isoformat(timespec="seconds")
+        evidence_id = f"PHOTO-EV-{len(self._chat_evidence) + 1:04d}"
+        receipt, reason = resolve_grn(
+            claim,
+            self.store,
+            [],
+            confirmer_label=actor,
+            captured_at=captured_at,
+            evidence_id=evidence_id,
+        )
+        if receipt is None:
+            # resolve refused: the PO reference the photo names does not match
+            # ours, an item cannot be tied to the order, or no quantity was
+            # stated. The same safe refusal a chat message gets — surfaced to
+            # the reviewer, never acted on.
+            raise ValueError(f"the photo did not confirm a delivery ({reason})")
+
+        self.store.add_grn(receipt)
+        # Evidence for the detail page. platform="photo" so the card can say the
+        # confirmation came from an image; no verbatim messages exist to keep.
+        self._chat_evidence[receipt.doc_id] = ChatGrnEvidence(
+            evidence_id=evidence_id,
+            platform="photo",
+            chat_id="photo-upload",
+            po_id=receipt.ref_doc_id,
+            confirmed_by=actor,
+            captured_at=captured_at,
+            messages=[],
+        )
+        self._chat_confirmed.add(invoice_id)
+        return self.run_case(invoice_id)
+
     def _chat_grn_view(self, grn, po) -> dict | None:
         """The chat confirmation behind a receipt, for the detail page.
 
@@ -671,6 +734,7 @@ class Service:
             ],
             "unconfirmed": unconfirmed,
             "messages": [m.model_dump() for m in evidence.messages] if evidence else [],
+            "source": evidence.platform if evidence else None,
         }
 
     def on_chat_receipt(self, result) -> None:

@@ -237,6 +237,51 @@ def _anthropic_style_request(client, model: str, messages, tools, system) -> dic
     }
 
 
+def _anthropic_client_and_model():
+    """Construct the first-party Anthropic client and its model id.
+
+    Shared by the tool-calling path (_call_anthropic) and the single-shot
+    vision path (call_model_vision), so both honour ANTHROPIC_BASE_URL (the
+    DeepSeek Anthropic-compatible endpoint) and ANTHROPIC_MODEL identically.
+    """
+    import anthropic
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY environment variable not set")
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    client = (
+        anthropic.Anthropic(api_key=api_key, base_url=base_url)
+        if base_url
+        else anthropic.Anthropic(api_key=api_key)
+    )
+    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    return client, model
+
+
+def _bedrock_client_and_model():
+    """Construct the AnthropicBedrock client and its Bedrock model id.
+
+    Shared by the tool-calling path (_call_bedrock) and the vision path. See
+    _call_bedrock for why AnthropicBedrock (not boto3) and how credentials are
+    resolved from the standard AWS chain.
+    """
+    try:
+        from anthropic import AnthropicBedrock
+    except ImportError as exc:
+        raise ValueError(
+            "Bedrock support needs the AWS extra: pip install 'anthropic[aws]'."
+        ) from exc
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    if not region:
+        raise ValueError(
+            "Bedrock needs a region. Set AWS_REGION (or AWS_DEFAULT_REGION), e.g. ap-southeast-1."
+        )
+    client = AnthropicBedrock(aws_region=region)
+    model = os.getenv("BEDROCK_MODEL", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
+    return client, model
+
+
 def _call_anthropic(messages: list[dict], tools: list[dict], system: str) -> dict:
     """Call Anthropic API with prompt caching enabled.
 
@@ -246,19 +291,7 @@ def _call_anthropic(messages: list[dict], tools: list[dict], system: str) -> dic
     can target either provider. DeepSeek ignores cache_control markers (it has
     its own automatic disk cache), so leaving them on is harmless there.
     """
-    import anthropic
-
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY environment variable not set")
-
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
-    if base_url:
-        client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
-    else:
-        client = anthropic.Anthropic(api_key=api_key)
-
-    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    client, model = _anthropic_client_and_model()
     return _anthropic_style_request(client, model, messages, tools, system)
 
 
@@ -372,20 +405,63 @@ def _call_bedrock(messages: list[dict], tools: list[dict], system: str) -> dict:
     and tool use are supported (kept on); the server-side web-search / code-
     execution tools and the Files/Batches endpoints are not.
     """
-    try:
-        from anthropic import AnthropicBedrock
-    except ImportError as exc:
-        raise ValueError(
-            "Bedrock support needs the AWS extra: pip install 'anthropic[aws]'."
-        ) from exc
+    client, model = _bedrock_client_and_model()
+    return _anthropic_style_request(client, model, messages, tools, system)
 
-    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
-    if not region:
+
+def call_model_vision(
+    image_bytes: bytes,
+    media_type: str,
+    prompt: str,
+    system: str,
+    provider: str | None = None,
+) -> dict:
+    """Single-shot multimodal read: one image plus a text prompt, no tools.
+
+    Deliberately separate from call_model, which speaks the string-content,
+    tool-calling protocol the agent loop needs. This is one-way — an image in,
+    text out — used only by the photo goods-receipt path, and only on providers
+    whose Messages API accepts image blocks: the first-party Anthropic client
+    and Bedrock. Every other provider raises, so the capability cleanly does not
+    exist there (the same optional-by-construction stance as MCP/LangGraph), and
+    a demo on DeepSeek fails loudly here instead of silently mis-reading a
+    receipt. Returns {"text", "usage"} like call_model, without tool_calls.
+    """
+    provider = provider or os.getenv("LLM_PROVIDER", "anthropic")
+    if provider == "anthropic":
+        client, model = _anthropic_client_and_model()
+    elif provider == "bedrock":
+        client, model = _bedrock_client_and_model()
+    else:
         raise ValueError(
-            "Bedrock needs a region. Set AWS_REGION (or AWS_DEFAULT_REGION), e.g. ap-southeast-1."
+            f"provider {provider!r} has no image support; the photo goods-receipt "
+            "path needs anthropic or bedrock (their Messages API takes image blocks)"
         )
 
-    # Credentials come from the standard AWS chain; we pass only the region.
-    client = AnthropicBedrock(aws_region=region)
-    model = os.getenv("BEDROCK_MODEL", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
-    return _anthropic_style_request(client, model, messages, tools, system)
+    import base64
+
+    content = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": base64.standard_b64encode(image_bytes).decode("ascii"),
+            },
+        },
+        {"type": "text", "text": prompt},
+    ]
+    response = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        system=system,
+        messages=[{"role": "user", "content": content}],
+    )
+    text_parts = [block.text for block in response.content if block.type == "text"]
+    usage = getattr(response, "usage", None)
+    return {
+        "text": "\n".join(text_parts) if text_parts else None,
+        "usage": {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+        if usage
+        else None,
+    }
