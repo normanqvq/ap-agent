@@ -9,10 +9,12 @@ invoice by anything except text the sender chose.
 """
 
 import json
+from datetime import datetime, timedelta
 
 import pytest
 
 from apagent.mail.adapters import _password
+from apagent.mail.chase import due_for_chase, due_for_escalation
 from apagent.mail.directory import VendorDirectory
 from apagent.mail.dispatch import MailDispatcher
 from apagent.mail.harvest import MailHarvester
@@ -332,3 +334,59 @@ def test_a_very_long_reply_is_truncated_not_stored_whole(harvester):
     raw = raw.replace(b"Corrected invoice attached.", b"x" * 20000)
     evidence = harvester.on_mail(parse_mail(raw))
     assert len(evidence.body_text) == 4000
+
+
+def _aged(registry, invoice_id, hours):
+    query = registry.for_invoice(invoice_id)
+    query.sent_at = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+    return query
+
+
+def test_a_fresh_query_is_left_alone():
+    registry = ThreadRegistry()
+    registry.register("INV-V005-3005", "ap@example.test")
+    config = ToleranceConfig()
+    assert due_for_chase(registry, config, datetime.now()) == []
+    assert due_for_escalation(registry, config, datetime.now()) == []
+
+
+def test_silence_past_the_chase_window_earns_one_reminder():
+    registry = ThreadRegistry()
+    registry.register("INV-V005-3005", "ap@example.test")
+    _aged(registry, "INV-V005-3005", 80)
+    due = due_for_chase(registry, ToleranceConfig(), datetime.now())
+    assert [q.invoice_id for q in due] == ["INV-V005-3005"]
+
+
+def test_a_query_is_only_chased_once():
+    registry = ThreadRegistry()
+    registry.register("INV-V005-3005", "ap@example.test")
+    query = _aged(registry, "INV-V005-3005", 80)
+    query.chased_at = datetime.now().isoformat(timespec="seconds")
+    assert due_for_chase(registry, ToleranceConfig(), datetime.now()) == []
+
+
+def test_silence_past_the_escalation_window_goes_to_a_human():
+    registry = ThreadRegistry()
+    registry.register("INV-V005-3005", "ap@example.test")
+    _aged(registry, "INV-V005-3005", 200)
+    due = due_for_escalation(registry, ToleranceConfig(), datetime.now())
+    assert [q.invoice_id for q in due] == ["INV-V005-3005"]
+
+
+def test_a_vendor_who_answered_is_never_chased_or_escalated():
+    registry = ThreadRegistry()
+    registry.register("INV-V005-3005", "ap@example.test")
+    query = _aged(registry, "INV-V005-3005", 200)
+    query.answered = True
+    config = ToleranceConfig()
+    assert due_for_chase(registry, config, datetime.now()) == []
+    assert due_for_escalation(registry, config, datetime.now()) == []
+
+
+def test_an_unreadable_timestamp_delays_rather_than_escalates():
+    """Our own bug must not cost the vendor an escalation."""
+    registry = ThreadRegistry()
+    registry.register("INV-V005-3005", "ap@example.test")
+    registry.for_invoice("INV-V005-3005").sent_at = "not a date"
+    assert due_for_escalation(registry, ToleranceConfig(), datetime.now()) == []
