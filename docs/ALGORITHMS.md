@@ -1,24 +1,35 @@
+<div align="center">
+
 # Algorithms in AP Agent
 
-The load-bearing algorithms behind the invoice-matching agent, in one place —
-what each one does, where it lives, why it was chosen over the obvious
-alternative, and how it is tested. Every reference is `file:line` against the
-committed code.
+**Seven load-bearing algorithms** — what each does, why we picked it over the obvious alternative, and how it is tested. Every reference is `file:line` against the committed code.
 
-There are **seven**. They split cleanly into the project's core principle —
-*code computes facts, the model judges meaning, code owns authority* — so all
-six are deterministic code. The model never runs any of them; it reads their
-output.
+</div>
 
-| # | Algorithm | Where | Job |
-|---|-----------|-------|-----|
-| 1 | Hungarian assignment | `matching/engine.py` | pair invoice lines to PO lines without SKUs |
-| 2 | BM25 ranking | `retrieval/search.py` | retrieve the relevant contract clause (the RAG core) |
-| 3 | Regex clause parsing | `retrieval/search.py` | pull the price allowance % out of the retrieved clause, in code |
-| 4 | Fuzzy name matching | `extraction/invoice.py` | map a printed supplier name to an internal vendor id |
-| 5 | Duplicate-key detection | `agent/ap_tools.py` | catch a re-billed invoice under a new number |
-| 6 | Modular weekday arithmetic | `scheduling/scheduler.py` | place each approved invoice in the right weekly pay run |
-| 7 | Containment-or-ratio matching | `chat/resolve.py` | tie a phrase typed in a chat group to a purchase-order line |
+They all sit on one side of the project's rule — **code computes facts, the model judges meaning, code owns authority** — so all seven are deterministic code the model never runs; it only reads their output. Here is where each one sits in the flow:
+
+```mermaid
+flowchart LR
+    PDF[Invoice PDF] --> EX["4 · Fuzzy name match<br/>printed name → vendor id"]
+    EX --> MATCH["1 · Hungarian assignment<br/>pair invoice ↔ PO lines"]
+    MATCH --> DUP["5 · Duplicate key<br/>resolved PO + amount"]
+    DUP --> RAG["2 · BM25 retrieval<br/>3 · regex allowance"]
+    RAG --> DECIDE{decision}
+    DECIDE --> SCHED["6 · Modular weekday<br/>pay-run placement"]
+    CHAT["7 · Containment-or-ratio<br/>chat phrase → PO line"] -. informal GRN .-> MATCH
+```
+
+## Key Design Decisions
+
+| Algorithm | We chose | Over the obvious | Why (short version) |
+| --- | --- | --- | --- |
+| **1 · line pairing** | Hungarian assignment (global optimum) | greedy nearest-neighbour | greedy chain-steals a line's best match, so the price delta lands on the wrong line |
+| **2 · contract retrieval** | hand-written BM25 | a vector database | deterministic, explainable, offline — six short contracts don't need embeddings |
+| **3 · allowance parsing** | regex, in code | trust the model's number | the % that moves money must never pass through the LLM |
+| **4 · vendor id** | Ratcliff–Obershelp + floor + margin | exact string match | printed names drift; an ambiguous match returns `UNKNOWN`, not a wrong id |
+| **5 · duplicate detection** | key on resolved PO + amount | key on the printed ref | the ref is supplier-controlled — four evasions collapse once we resolve the PO ourselves |
+| **6 · pay-run placement** | modulo-7 weekday arithmetic | a date library / by hand | one line each way, works for any run day, pay-late-but-never-late |
+| **7 · chat phrase → line** | `max(containment, ratio)` | `SequenceMatcher.ratio` alone | people type fragments — ratio alone rejected plain-correct English |
 
 ---
 
@@ -60,6 +71,20 @@ for r, c in zip(row_idx, col_idx, strict=True):
   "unmatched" rather than forced. That errs toward *unmatched*, which is the
   safe direction — an unmatched invoice line trips the no-unordered-lines
   guardrail instead of being waved through as a confident pairing.
+
+```mermaid
+flowchart LR
+    P1["PO line 1<br/>hex nut m8"]
+    P2["PO line 2<br/>steel bolt m8 zinc"]
+    I1["inv line<br/>steel bolt m8"]
+    I2["inv line<br/>flat washer m8"]
+    P2 == pick · 0.68 ==> I1
+    P1 == pick · 0.42 ==> I2
+    P1 -. 0.52 .-> I1
+    P2 -. 0.26 .-> I2
+```
+
+*Greedy grabs P1→I1 (0.52) first and strands P2 on 0.26 — total 0.78. Hungarian sees the whole matrix and pairs P1→I2, P2→I1 — total 1.10 — because I1 was really P2's line.*
 
 **Tested:** `tests/test_matching.py` — `test_pair_lines_finds_the_optimal_not_greedy_assignment`
 pins a case where greedy and optimal differ; `test_pair_lines_drops_below_floor_pair_to_unmatched`
@@ -104,6 +129,19 @@ score += idf * norm
 `K1`/`B` are the textbook defaults (`search.py:33`). Query and documents go
 through the **same** `_tokenize` (`:55`) so the term counts line up.
 
+```mermaid
+flowchart LR
+    Q[query terms] --> T[tokenise<br/>same tokeniser as the chunks]
+    T --> PT{per term}
+    PT --> IDF[IDF · rare = heavier]
+    PT --> TF[TF saturation · k1<br/>5th mention < 2nd]
+    PT --> LEN[length norm · b<br/>long ≠ relevant]
+    IDF --> S["Σ idf × tf-norm"]
+    TF --> S
+    LEN --> S
+    S --> R[rank the contract sections]
+```
+
 **Tested:** matched to an independent Lucene-variant reference to 1e-12;
 empty-corpus / empty-chunk / empty-query all return `[]` with no divide-by-zero.
 
@@ -140,6 +178,15 @@ is silent keeps the default 2% in force.
 **This is the headline security property:** the percentage that decides whether
 money moves is derived by code, never by the LLM.
 
+```mermaid
+flowchart LR
+    C[retrieved clause] --> H{heading<br/>mentions price?}
+    H -- no --> SKIP[skip · a late-interest % is not a price tolerance]
+    H -- yes --> RE["regex: up to N percent"]
+    RE -- match --> PCT[N% + source chunk · enforced by code]
+    RE -- none --> NONE[None → the default 2% stands]
+```
+
 **Tested:** V004 → 3.0, V005 → 5.0 parsed from the real PDFs; the four silent
 vendors → `None`; the late-interest clause is correctly excluded.
 
@@ -175,6 +222,15 @@ if best_score < 0.75 or best_score - runner_up < 0.05:
   canonicals ("Estern" between "Eastern"/"Western") would resolve to a
   coin-flip. Below the margin we return `UNKNOWN` and let the agent escalate —
   a known-unknown beats a confident wrong id.
+
+```mermaid
+flowchart LR
+    N[printed name] --> NORM[normalise · lowercase,<br/>strip legal suffixes on word boundaries]
+    NORM --> SIM[Ratcliff–Obershelp similarity<br/>vs every vendor]
+    SIM --> BEST{best ≥ 0.75<br/>AND leads runner-up by ≥ 0.05?}
+    BEST -- yes --> ID[vendor id]
+    BEST -- no --> UNK[UNKNOWN · the agent escalates]
+```
 
 **Tested:** `tests/test_extraction.py` — all six real vendors + drifted variants
 resolve; the "Prince/Pre" substring collision and the "Estern" tie are pinned.
@@ -217,6 +273,17 @@ from a genuinely different invoice without a paid-status ledger. That ledger is
 the real fix; until then this catches the cheap evasions and the money/facts
 gates catch the rest.
 
+```mermaid
+flowchart LR
+    INV[incoming invoice] --> FP[find_po · resolve the PO ourselves,<br/>ignore the printed ref]
+    FP --> SCAN[scan the same vendor's invoices]
+    SCAN --> Q{same resolved PO<br/>AND amount within tolerance?}
+    Q -- yes --> DUP[hard duplicate · escalate]
+    Q -- no --> OK[not a duplicate]
+```
+
+*Because we resolve the PO ourselves, dropping, forging, or one-cent-nudging the printed ref all land on the same order anyway — the four evasions collapse.*
+
 **Tested:** the planted pair `INV-V003-3003 ↔ INV-V003-3901` is caught;
 ref-stripped and cent-nudged resubmissions are caught; cross-vendor same-amount
 is correctly **not** flagged.
@@ -250,6 +317,14 @@ make. Past-due invoices go into the next run and are flagged late.
 The `% 7` is the whole trick — weekday arithmetic wraps, and `(target - current) % 7`
 is the forward distance to the target weekday; the mirrored form gives the
 backward distance. Works for any `run_weekday`, not just Friday.
+
+```mermaid
+flowchart LR
+    DUE[due date] --> LAST["last_run_on_or_before<br/>d − (weekday − run) mod 7"]
+    LAST --> CLAMP{run ≥ the first Friday we can still make?}
+    CLAMP -- yes --> RUN[that Friday · on time · pay as late as allowed]
+    CLAMP -- no --> NEXT[next run · flagged late · release first]
+```
 
 **Tested:** exhaustively — all 7 possible run weekdays × 14 consecutive dates
 for both helpers (always lands on the right weekday, on the correct side, within
@@ -312,6 +387,19 @@ margin collapses, and the item is **refused** instead of guessed at. Floor
 `0.6`, margin `0.1` — stricter than the matcher's `PAIR_SIMILARITY_FLOOR = 0.4`,
 because that one pairs two structured documents describing the same order,
 while this one reads a sentence typed on a phone.
+
+```mermaid
+flowchart LR
+    P["chat phrase<br/>'gloves came, 60'"] --> C[containment · fraction of<br/>my words that appear in the line]
+    P --> R[SequenceMatcher ratio]
+    C --> M["max(containment, ratio)"]
+    R --> M
+    M --> F{≥ 0.6 AND leads runner-up by ≥ 0.1?}
+    F -- yes --> LINE[that PO line · qty 60<br/>receipt line copied from the PO, never invented]
+    F -- no --> REFUSE[refuse · ask, don't guess]
+```
+
+*"nitrile gloves" scores only 0.60 on ratio against "Nitrile gloves size L, box of 100" — the words the speaker skipped drag it down. Containment reads it as a full hit, which is what a human would say too.*
 
 **Tested:** the fragment cases above resolve; an item matching nothing on the
 order is refused; a word common to two lines is refused rather than coin-flipped
