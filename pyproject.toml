@@ -30,6 +30,10 @@ dev = [
     "pytest",
     "ruff",
     "pre-commit",
+    # so `pip install -e ".[dev]"` then `pytest` runs the FULL 268 — the
+    # graph/mcp tests importorskip these and would otherwise skip 31.
+    "langgraph",
+    "mcp>=1.2,<2",
 ]
 # Optional: the same pipeline expressed as a LangGraph state graph
 # (src/apagent/graph.py). The core system does not import it.

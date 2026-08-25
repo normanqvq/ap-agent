@@ -301,12 +301,11 @@ class Service:
         if report is None:
             report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), view)
 
-        # 1. schema-validation pass rate: a decision whose reasoning is the
-        # parse-failure message did NOT produce valid JSON — count those as
-        # misses rather than calling every cached row a pass.
-        schema_ok = sum(
-            1 for d in decided if not d.get("reasoning", "").startswith("Failed to parse agent")
-        )
+        # 1. schema-validation pass rate: a decision that did NOT produce usable
+        # JSON — the parse failure, or an empty model response — is a miss,
+        # rather than calling every cached row a pass.
+        schema_misses = ("Failed to parse agent", "Model returned empty response")
+        schema_ok = sum(1 for d in decided if not d.get("reasoning", "").startswith(schema_misses))
         # 2. tool-call success: registry.execute returns an "Error:" string for
         # an unknown tool or a handler crash; everything else is a served
         # result (a plain "not found" is a valid answer, not a failure).
@@ -369,7 +368,10 @@ class Service:
         it is visible too, rather than folded into a rate.
         """
         decided = list(self._eval_view().values())
-        total = len(self._ordered_invoices())
+        # The benchmark population excludes session uploads, matching `decided`
+        # (which reads _eval_view) — otherwise an uploaded-and-decided invoice
+        # would swell `total` and be counted as pending, dropping STP.
+        total = sum(1 for i in self._ordered_invoices() if i.doc_id not in self._uploaded)
         counts = {a.value: 0 for a in Action}
         for d in decided:
             counts[d["action"]] = counts.get(d["action"], 0) + 1
@@ -684,10 +686,11 @@ class Service:
                 }
             )
 
-        # Distribution counted inline — calling self.metrics() here would
-        # run evaluate() a second time just to throw most of it away.
+        # Distribution over the SAME eval view every other number uses, so the
+        # decision mix agrees with the dashboard and does not swell when an
+        # invoice is uploaded this session.
         distribution = {a.value: 0 for a in Action}
-        for d in self._cache.values():
+        for d in self._eval_view().values():
             distribution[d["action"]] = distribution.get(d["action"], 0) + 1
         return {
             "metrics": report["metrics"],

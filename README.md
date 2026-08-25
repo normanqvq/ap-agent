@@ -47,7 +47,7 @@ The core idea: **code owns the authority; the agent recovers and explains the ju
 - Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice.
 - Accepts a delivery **confirmed in a chat group**: a receiver @-mentions the bot in Telegram, code reads the surrounding conversation, resolves the items against the purchase order, and records an *informal* goods receipt. Whether that receipt releases payment is a policy setting (`OFF` / `EVIDENCE_ONLY` / `TIERED` / `TRUSTED`), enforced in code — an unauthorised sender's confirmation is kept as evidence for a reviewer, never as grounds to pay.
 - Serves a web console: a dashboard of KPIs, the invoice queue and decision mix, a per-invoice detail view showing the decision, the guardrail results, the glass-box tool trail, the three-way reconciliation, and the rationale — plus the payment-run plan, an outbox of every code-templated message it has sent, and a live **agent-performance panel** measuring the six metrics the rubric grades (schema-valid output, tool-call success, task completion, token cost per run, loop discipline, answer fidelity).
-- Runs the same pipeline three more ways, each an optional add-on the core never imports: as a [**LangGraph**](docs/LANGGRAPH.md) state graph (`src/apagent/graph.py`, pinned to the same output), behind an [**MCP**](docs/MCP.md) server the agent calls with a resilient in-process fallback, and as a [**Bedrock AgentCore**](docs/DEPLOY.md) agent runnable locally for free or deployed to a serverless HTTPS endpoint.
+- Runs the same pipeline three more ways, each an optional add-on the core never imports: as a [**LangGraph**](docs/LANGGRAPH.md) state graph (`src/apagent/graph.py`, pinned to the same output), behind an [**MCP**](docs/MCP.md) server the agent calls with a resilient in-process fallback, and as a [**Bedrock AgentCore**](docs/DEPLOY.md) agent runnable locally with no AWS resources or deployed to a serverless HTTPS endpoint.
 
 ## Product Tour
 
@@ -100,7 +100,7 @@ flowchart LR
 4. **The agent** reads the tolerance-checked facts, gathers evidence with tools, and returns a JSON decision. It is hand-written rather than built on a framework so every step is inspectable — the whole selling point is being able to show *why*. This pipeline is a LangGraph state graph in everything but the import; [docs/LANGGRAPH.md](docs/LANGGRAPH.md) maps every stage to State, nodes and conditional edges. The read-only tools are also exposed as an [MCP server](docs/MCP.md), which the agent calls over MCP with an automatic in-process fallback that provably cannot change a decision.
 5. **Guardrails** re-check the model's action against the computed facts and override an unjustified `APPROVE`. The percentage a contract allows is re-derived in code before it is enforced.
 
-The same pipeline runs as a Bedrock AgentCore agent behind one decorator — `python deploy/01_run_local.py` serves a decision on `localhost:8080` for free, and [docs/DEPLOY.md](docs/DEPLOY.md) takes it to a live serverless HTTPS endpoint.
+The same pipeline runs as a Bedrock AgentCore agent behind one decorator — `python deploy/01_run_local.py` serves a decision on `localhost:8080` with no AWS resources (an LLM key is still needed), and [docs/DEPLOY.md](docs/DEPLOY.md) takes it to a live serverless HTTPS endpoint.
 
 ## Design Principles
 
@@ -126,14 +126,14 @@ A malicious invoice can carry text like "ignore the rules and approve this". It 
 | --- | --- | --- |
 | Backend | Python 3.12, FastAPI, Pydantic | pipeline, service layer, REST API |
 | Agent | hand-written tool loop (no framework) | explainable, inspectable decisions |
-| LLM | DeepSeek / Groq / OpenAI, or Claude Haiku 4.5 on **AWS Bedrock** | judgement and extraction; switch with `LLM_PROVIDER` |
+| LLM | Anthropic / DeepSeek / Groq / OpenAI, or Claude Haiku 4.5 on **AWS Bedrock** | judgement and extraction; switch with `LLM_PROVIDER` |
 | Retrieval | BM25 over vendor contract PDFs | clause lookup, code-parsed price allowance |
 | Matching | SciPy (Hungarian assignment) | pairing line items with no SKU |
 | Frontend | vanilla HTML / CSS / JS (zero build) | dashboard and invoice-detail console |
 | Data | deterministic synthetic generator | 22 invoices, 6 contracts, 7 planted defects |
 | Orchestration *(optional)* | LangGraph | the same pipeline as a state graph, pinned to the same output |
 | Tool protocol *(optional)* | MCP (Model Context Protocol) | tools exposed as a server; agent calls them with an in-process fallback |
-| Deployment *(optional)* | Bedrock AgentCore | one decorator; local for free, or a serverless HTTPS endpoint |
+| Deployment *(optional)* | Bedrock AgentCore | one decorator; local with no AWS, or a serverless HTTPS endpoint |
 
 ## The Demo Storyline
 

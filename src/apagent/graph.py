@@ -22,7 +22,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from apagent.agent.loop import run_agent
+from apagent.agent.loop import MAX_ROUNDS, run_agent
 from apagent.agent.prompts import AP_SYSTEM_PROMPT, build_task_message
 from apagent.agent.registry import ToolRegistry
 from apagent.matching.engine import match_invoice
@@ -55,7 +55,7 @@ def build_graph(
     registry: ToolRegistry,
     contracts_dir: str | Path | None = None,
     base_config: ToleranceConfig | None = None,
-    max_rounds: int = 5,
+    max_rounds: int = MAX_ROUNDS,
 ):
     """Compile the AP pipeline as a LangGraph. The store, registry and config
     are captured here so each node is a plain state->update function, exactly

@@ -1,14 +1,16 @@
-"""Call the DEPLOYED AgentCore endpoint with plain boto3.
+"""Call the DEPLOYED AgentCore endpoint via the agentcore CLI.
 
-After deploy/02_deploy.py, this invokes the live HTTPS endpoint the same way
-any client would -- no framework, just boto3 against the AgentCore runtime.
-It reads the deployed agent's id from .bedrock_agentcore.yaml (written by
-configure), so there is nothing to paste.
+After deploy/02_deploy.py, this invokes the live runtime. It uses the same
+`agentcore` CLI that 02/03 drive -- the CLI loads .bedrock_agentcore.yaml from
+the working directory (so run this from the repo root) and invokes the
+deployed runtime, so there is nothing to paste. (The in-process
+`Runtime().invoke` does not read the cwd config, which is why we shell out.)
 
     python deploy/04_call_agent.py INV-V005-3018
 """
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -21,16 +23,15 @@ def main() -> None:
     if not CONFIG.exists():
         sys.exit("No .bedrock_agentcore.yaml -- run deploy/02_deploy.py first.")
 
-    # The starter toolkit's Runtime reads .bedrock_agentcore.yaml from the
-    # working directory (so run this from the repo root) and invokes the
-    # deployed runtime over SigV4 — no ARN to paste.
+    payload = json.dumps({"invoice_id": invoice_id})
     try:
-        from bedrock_agentcore_starter_toolkit import Runtime
-    except ImportError:
-        sys.exit("Install the toolkit: pip install -e '.[deploy]'")
-
-    response = Runtime().invoke({"invoice_id": invoice_id})
-    print(json.dumps(response, indent=2, ensure_ascii=False, default=str))
+        subprocess.run(["agentcore", "invoke", payload], check=True)  # noqa: S603, S607
+    except FileNotFoundError:
+        sys.exit("`agentcore` not found. Run: pip install -e '.[deploy]'")
+    except subprocess.CalledProcessError as exc:
+        sys.exit(
+            f"invoke failed ({exc.returncode}); is the runtime deployed? (deploy/02_deploy.py)"
+        )
 
 
 if __name__ == "__main__":

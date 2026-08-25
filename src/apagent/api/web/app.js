@@ -256,7 +256,7 @@ async function dashboard() {
     </div>
     <div class="kpis">
       <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.total} invoices</div></div>
-      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE+HOLD / decided</div></div>
+      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE+HOLD / ${m.total} invoices</div></div>
       <div class="card kpi ${m.false_approve ? "warn" : "good"}"><div class="l">False approvals</div><div class="v num">${m.false_approve}</div><div class="s">${m.false_approve ? "Zero-tolerance · TARGET BROKEN" : "Zero-tolerance · on target"}</div></div>
       <div class="card kpi warn"><div class="l">Pending</div><div class="v num">${m.pending}</div><div class="s">Awaiting review</div></div>
     </div>

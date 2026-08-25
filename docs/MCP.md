@@ -17,8 +17,8 @@ agent runs the tools in-process exactly as before.
 | **In-process MCP** | a real MCP session over in-memory streams, same process | yes — shares this store, no socket, no network surface |
 | **Remote MCP** | a separate `python -m apagent.mcp_server` process over stdio | yes — the decoupled microservice others can reuse |
 
-The agent talks MCP (in-process by default, remote when configured); on any
-transport failure it drops to the raw registry. The move that makes the
+The agent talks MCP when `AP_MCP` selects a transport (in-process or remote) —
+off by default; on any transport failure it drops to the raw registry. The move that makes the
 fallback safe is that every MCP tool is a one-line delegation to the same
 `registry.execute`, so an MCP call returns byte-for-byte what a raw call
 returns — falling back swaps the transport, never the answer. That equality
