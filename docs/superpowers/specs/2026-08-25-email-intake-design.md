@@ -227,3 +227,29 @@ Phase 1 alone is a complete story if 9/7 arrives early.
 - An LLM key (a free Groq account suffices) to regenerate `INV-V005-3005`'s
   decision as `EMAIL`. Hand-editing the committed decision cache is not an
   option — the cache is the evidence behind the headline numbers.
+
+## Verified against a live round trip, 2026-08-25
+
+One message sent through Gmail SMTP to a real second mailbox, replied to from
+Outlook/Exchange, and read back over IMAP. What the headers showed:
+
+- `In-Reply-To` and `References` both came back carrying the original
+  Message-ID. The primary correlation path holds across a different mail
+  system, not just Gmail talking to itself.
+- The subject returned as `=?gb2312?B?...?=` — RFC 2047, in a legacy Chinese
+  codepage, with a **localised** reply prefix ("回复:", not "Re:"). Two
+  consequences: matching on the subject would have to decode arbitrary
+  charsets and know every language's prefix, which is a second reason never
+  to do it; and anywhere a subject is displayed must go through
+  `email.header.decode_header` with a fallback, or the console shows mojibake.
+- `Auto-Submitted` was absent, as it should be for something a person typed.
+  Its presence is what the bounce classifier keys on.
+- The body arrived as `multipart/alternative`: extraction takes `text/plain`
+  and falls back to stripping the HTML part.
+
+One risk this surfaced. The test send did not set a Message-ID, so Gmail
+generated one (`@mx.google.com`). Our dispatcher will set its own and record
+it, and whether Gmail preserves a client-supplied Message-ID has to be
+measured rather than assumed — if it rewrites it, header correlation breaks
+on the very first send. That is what the token in `Reply-To` is for, and it
+is why the design does not lean on headers alone.
