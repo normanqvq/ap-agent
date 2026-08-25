@@ -78,10 +78,10 @@ flowchart LR
     P2["PO line 2<br/>steel bolt m8 zinc"]
     I1["inv line<br/>steel bolt m8"]
     I2["inv line<br/>flat washer m8"]
-    P2 == pick · 0.68 ==> I1
-    P1 == pick · 0.42 ==> I2
-    P1 -. 0.52 .-> I1
-    P2 -. 0.26 .-> I2
+    P2 ==>|pick 0.68| I1
+    P1 ==>|pick 0.42| I2
+    P1 -.->|0.52| I1
+    P2 -.->|0.26| I2
 ```
 
 *Greedy grabs P1→I1 (0.52) first and strands P2 on 0.26 — total 0.78. Hungarian sees the whole matrix and pairs P1→I2, P2→I1 — total 1.10 — because I1 was really P2's line.*
