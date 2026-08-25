@@ -62,6 +62,11 @@ DEMO_ORDER = [
     "INV-V004-3010",  # missing PO ref
 ]
 
+# The channels a document can arrive through. "upload" is the manual web
+# upload; "email" and "telegram" are the external fetchers' seam (docs/INTAKE.md).
+# A set — order carries no meaning here.
+VALID_INTAKE_SOURCES = {"upload", "email", "telegram"}
+
 
 class Service:
     """Holds the loaded dataset and the decisions cache for the API."""
@@ -123,6 +128,10 @@ class Service:
         # can show the conversation. Session state: the verbatim messages
         # are never written to disk.
         self._chat_evidence: dict = {}
+        # invoice id -> the channel it arrived through (upload / email /
+        # telegram). Session state like _uploaded; the seam the external
+        # fetchers tag their documents with. See docs/INTAKE.md.
+        self._intake_source: dict[str, str] = {}
 
     # --- decisions cache ---------------------------------------------------
 
@@ -285,6 +294,10 @@ class Service:
             ),
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
             "outbound_to": self.outbound_recipient(invoice.doc_id),
+            # None for the committed dataset; set only for a document that came
+            # in through intake() this session. Makes the provenance label
+            # outlive the intake response, as docs/INTAKE.md promises.
+            "intake_source": self._intake_source.get(invoice.doc_id),
         }
 
     def performance(self, report: dict | None = None) -> dict:
@@ -394,6 +407,92 @@ class Service:
             "distribution": counts,
         }
 
+    def baseline_comparison(self) -> dict:
+        """Rules-only vs the agent, scored over the same committed benchmark.
+
+        The baseline runs the deterministic pipeline with no agent and no
+        contract lookup (pipeline.decide_invoice_rules_only); the agent column
+        is the committed decisions. Both go through the same eval harness, so
+        the panel shows what the agent's judgement actually buys: the invoices
+        it recovers that pure rules would hold — with false approvals still
+        zero on BOTH sides, i.e. the agent adds STP without adding risk.
+        """
+        from apagent.pipeline import decide_invoice_rules_only
+
+        view = self._eval_view()
+        baseline_decisions: dict[str, dict] = {}
+        for invoice_id in view:
+            invoice = self.store.get_invoice(invoice_id)
+            if invoice is None:
+                continue
+            baseline_decisions[invoice_id] = decide_invoice_rules_only(
+                invoice, self.store, self.config
+            ).model_dump()
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        base_report = evaluate(manifest, baseline_decisions)
+        agent_report = evaluate(manifest, view)
+        # Invoices the agent approved that pure rules held: the measured payoff
+        # of the judgement, same-direction only (a recovered approve, never a
+        # recovered risk — a baseline approve the agent held would show as a
+        # negative and is not what this panel claims).
+        # Only count a recovery the ground truth agrees with: the agent's
+        # APPROVE must be a verdict=="pass" (the invoice really was payable),
+        # never a false approve the baseline happened to hold. Without this the
+        # panel could parade an invoice the agent wrongly paid as a "recovery"
+        # (the false_approve tile and the A/B test would still catch it, but
+        # the recovered list must not present risk as a win).
+        passed_ids = {c["invoice_id"] for c in agent_report["cases"] if c["verdict"] == "pass"}
+        recovered = []
+        for invoice_id, agent_dec in view.items():
+            base_dec = baseline_decisions.get(invoice_id)
+            if base_dec is None or agent_dec["action"] != Action.APPROVE:
+                continue
+            if base_dec["action"] == Action.APPROVE or invoice_id not in passed_ids:
+                continue
+            inv = self.store.get_invoice(invoice_id)
+            recovered.append(
+                {
+                    "invoice_id": invoice_id,
+                    "vendor_name": self.store.vendors().get(inv.vendor_id, "") if inv else "",
+                    "baseline_action": base_dec["action"],
+                    "baseline_reason": _reason_label(base_dec),
+                }
+            )
+        return {
+            "baseline": base_report["metrics"],
+            "agent": agent_report["metrics"],
+            "recovered": recovered,
+        }
+
+    def roi(self) -> dict:
+        """The cost case: measured where it can be, cited where it cannot.
+
+        Manual processing runs about US$9.40 per invoice, and fixing a
+        mis-keyed or mis-approved one adds 25-40% on top (Ardent Partners,
+        2025 — the source the README already cites). The agent's own cost is
+        token cost: agent_avg_tokens is the measured tokens per run when a real
+        provider reported usage, and None otherwise — left unmeasured rather
+        than guessed, the same honesty rule as the rest of the panel, and the
+        UI shows a dash rather than a dollar figure until it is measured (a run
+        carries the system prompt, the full invoice dump and several tool
+        results, so "a fraction of a cent" is a claim, not a measurement). The
+        headline is the manual cost and the 25-40% rework a zero-false-approve
+        run never triggers, not the token bill.
+        """
+        perf = self.performance()
+        n = perf["schema_pass"]["total"]
+        manual_cents = 940  # US$9.40 per invoice, Ardent Partners 2025
+        return {
+            "invoices": n,
+            "manual_cost_cents": manual_cents,
+            "manual_batch_cents": manual_cents * n,
+            "rework_low_pct": 25,
+            "rework_high_pct": 40,
+            "agent_avg_tokens": perf["avg_tokens_per_run"],
+            "agent_cost_measured": perf["avg_tokens_per_run"] is not None,
+            "false_approve": perf["false_approve"],
+        }
+
     def schedule(self, as_of: str = DEMO_AS_OF) -> dict:
         """Plan the weekly payment runs from the cached decisions."""
         plan = schedule_payments(
@@ -445,6 +544,29 @@ class Service:
         self.store.add_invoice(doc)
         self._uploaded.add(doc.doc_id)
         return self.run_case(doc.doc_id)
+
+    def intake(self, source: str, filename: str, content: bytes) -> dict:
+        """Land a document from an external channel into the upload pipeline,
+        tagged with where it came from.
+
+        The seam for the email / Telegram intake work: a fetcher on the other
+        side normalises whatever it received (an email attachment, a file
+        exported from a chat) into (source, filename, PDF bytes) and calls
+        this. Extraction and the agent decision are EXACTLY the upload path —
+        one intake, one set of guardrails — so a new channel adds a provenance
+        label, never a second decision path that could drift from the first.
+        Like uploads, an intake document is session state and never touches the
+        committed dataset. See docs/INTAKE.md for the full contract, including
+        why the Telegram fetcher must not open a second getUpdates consumer.
+        """
+        if source not in VALID_INTAKE_SOURCES:
+            raise ValueError(
+                f"unknown intake source {source!r} (expected one of {sorted(VALID_INTAKE_SOURCES)})"
+            )
+        bundle = self.upload_invoice(filename, content)
+        self._intake_source[bundle["invoice_id"]] = source
+        bundle["intake_source"] = source
+        return bundle
 
     def confirm_payment(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """A human confirms an APPROVEd invoice for payment.

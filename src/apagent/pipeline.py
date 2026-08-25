@@ -108,6 +108,48 @@ def decide_invoice(
     return decision
 
 
+def decide_invoice_rules_only(
+    invoice: Document,
+    store: DocumentStore,
+    base_config: ToleranceConfig | None = None,
+) -> AgentDecision:
+    """The same pipeline WITHOUT the agent: assume payable and let the
+    deterministic gates decide — and, the point of the A/B, never look at a
+    contract.
+
+    This is the honest baseline the agent is measured against. It reuses the
+    real _apply_guardrails (no weakened straw-man), so the only thing missing
+    is the agent's judgement: the plan-act-adapt loop that reads a vendor's
+    contract and recovers a price variance the default tolerance would hold.
+    chunks=() makes the price gate see no contract allowance, so
+    INV-V005-3018's 4% stays out of tolerance here and holds — exactly the
+    friction the agent removes. Everything else (duplicate, money gate, proof
+    of delivery) is identical to decide_invoice, so the baseline is as SAFE as
+    the full pipeline; it just leaves approvals on the table. Both columns
+    score false-approves = 0; the difference is STP, not risk.
+    """
+    config = resolve_config(invoice.vendor_id, base_config or ToleranceConfig())
+    match = match_invoice(invoice, store.all_pos(), store.all_grns())
+    checked = apply_tolerances(match, config)
+    review_gate = requires_manual_review(invoice.total_cents, config)
+    duplicates = hard_duplicates(invoice, store, config)
+    reason = "[rules-only baseline] deterministic gates only, no contract lookup"
+    baseline = AgentDecision(
+        invoice_id=invoice.doc_id,
+        action=Action.APPROVE,
+        hold_reason=None,
+        confidence=1.0,
+        reasoning=reason,
+        tool_calls=[],
+        rounds_used=0,
+    )
+    grn = store.get_grn_for_po(checked.po_id) if checked.po_id else None
+    po = store.get_po(checked.po_id) if checked.po_id else None
+    return _apply_guardrails(
+        baseline, invoice, checked, review_gate, duplicates, config, (), grn, po
+    )
+
+
 def _override(decision: AgentDecision, action: Action, hold_reason, why: str) -> AgentDecision:
     return decision.model_copy(
         update={

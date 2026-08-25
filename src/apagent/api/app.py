@@ -129,6 +129,19 @@ def analytics() -> dict:
     return get_service().analytics()
 
 
+@app.get("/api/baseline")
+def baseline() -> dict:
+    """Rules-only vs the agent, scored over the same benchmark — what the
+    agent's judgement buys in STP, with false approvals zero on both sides."""
+    return get_service().baseline_comparison()
+
+
+@app.get("/api/roi")
+def roi() -> dict:
+    """The cost case: manual per-invoice cost vs the agent's measured cost."""
+    return get_service().roi()
+
+
 @app.get("/api/config")
 def config() -> dict:
     """The code-enforced policy, read-only."""
@@ -154,6 +167,18 @@ def upload_invoice(file: UploadFile) -> dict:
     content = file.file.read()
     try:
         return get_service().upload_invoice(file.filename or "invoice.pdf", content)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+
+@app.post("/api/intake")
+def intake(source: str, file: UploadFile) -> dict:
+    """Land a document from an external channel (email, Telegram) into the same
+    upload pipeline, tagged with its source. The seam the email / Telegram
+    fetchers build against — see docs/INTAKE.md."""
+    content = file.file.read()
+    try:
+        return get_service().intake(source, file.filename or "invoice.pdf", content)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from None
 
