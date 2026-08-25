@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from apagent.api.service import Service
 from apagent.mail.adapters import _password
 from apagent.mail.chase import due_for_chase, due_for_escalation
 from apagent.mail.directory import VendorDirectory
@@ -591,3 +592,77 @@ def test_an_unparseable_message_costs_one_message_not_the_tick(monkeypatch, disp
 
     assert adapter.flagged == [b"1"]
     assert len(dispatcher.sender.sent) == 1  # the due chase still went out
+
+
+def _wired_service(sender):
+    service = Service()
+    service.attach_mail(
+        VendorDirectory({"V005": {"email": "billing@pacific.example"}}),
+        sender,
+        "ap@example.test",
+    )
+    return service
+
+
+def test_an_email_decision_is_dispatched_to_the_registered_vendor():
+    sender = FakeSender()
+    service = _wired_service(sender)
+    service._cache["INV-V005-3005"] = {
+        "action": "EMAIL",
+        "outbound_message": "Please send a corrected invoice.",
+    }
+    assert service.dispatch_vendor_queries() == ["INV-V005-3005"]
+    assert sender.sent[0]["To"] == "billing@pacific.example"
+
+
+def test_a_dispatched_query_shows_up_in_the_outbox():
+    sender = FakeSender()
+    service = _wired_service(sender)
+    service._cache["INV-V005-3005"] = {
+        "action": "EMAIL",
+        "outbound_message": "Please send a corrected invoice.",
+    }
+    service.dispatch_vendor_queries()
+    entry = service.outbox()[0]
+    assert entry["invoice_id"] == "INV-V005-3005"
+    assert entry["to"] == "billing@pacific.example"
+    assert "corrected invoice" in entry["body"]
+
+
+def test_nothing_is_sent_when_no_mailbox_is_attached():
+    service = Service()
+    service._cache["INV-V005-3005"] = {
+        "action": "EMAIL",
+        "outbound_message": "Please send a corrected invoice.",
+    }
+    assert service.dispatch_vendor_queries() == []
+
+
+def test_a_reply_lands_on_the_case_a_reviewer_opens():
+    service = _wired_service(FakeSender())
+    registry = service.mail_harvester().registry
+    registry.register("INV-V005-3005", "ap@example.test")
+    evidence = service.mail_harvester().on_mail(parse_mail(_reply_to(registry, "INV-V005-3005")))
+    service.on_vendor_reply(evidence)
+    case = service.get_case("INV-V005-3005")
+    assert case["vendor_replies"][0]["matched_by"] == "in_reply_to"
+    assert case["vendor_replies"][0]["from_addr"] == "ar-dept@pacific.example"
+
+
+def test_a_reply_never_moves_the_measured_benchmark():
+    """The guarantee chat evidence already has: whatever this session
+    collected, the committed benchmark is still the benchmark."""
+    service = _wired_service(FakeSender())
+    before = service.analytics()["metrics"]
+    registry = service.mail_harvester().registry
+    registry.register("INV-V005-3005", "ap@example.test")
+    service.on_vendor_reply(
+        service.mail_harvester().on_mail(parse_mail(_reply_to(registry, "INV-V005-3005")))
+    )
+    assert service.analytics()["metrics"] == before
+    assert service.metrics()["false_approve"] == 0
+
+
+def test_a_case_with_no_replies_reports_an_empty_list():
+    service = Service()
+    assert service.get_case("INV-V005-3005")["vendor_replies"] == []

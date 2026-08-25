@@ -15,6 +15,7 @@ live in memory: a restart signs everyone out, which is fine for a demo
 and means nothing secret is ever written to disk.
 """
 
+import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -46,11 +47,30 @@ async def lifespan(_app: FastAPI):
 
     service = get_service()
     runner = start_if_configured(service.chat_harvester(), on_receipt=service.on_chat_receipt)
+
+    from apagent.mail.adapters import SmtpSender
+    from apagent.mail.directory import VendorDirectory
+    from apagent.mail.runner import start_if_configured as start_mail
+
+    mail_runner = None
+    sender = SmtpSender()
+    mail_from = os.getenv("APAGENT_MAIL_FROM", "")
+    if sender.configured and mail_from:
+        service.attach_mail(VendorDirectory.from_file(), sender, mail_from)
+        service.dispatch_vendor_queries()
+        mail_runner = start_mail(
+            service.mail_harvester(),
+            service._dispatcher,
+            on_reply=service.on_vendor_reply,
+            config=service.config,
+        )
     try:
         yield
     finally:
         if runner is not None:
             runner.stop()
+        if mail_runner is not None:
+            mail_runner.stop()
 
 
 app = FastAPI(title="AP Agent", version="0.1.0", lifespan=lifespan)

@@ -104,6 +104,14 @@ class Service:
         # can show the conversation. Session state: the verbatim messages
         # are never written to disk.
         self._chat_evidence: dict = {}
+        # The mail side, built only when a mailbox is configured. None here
+        # means the app runs exactly as it did before this feature, which is
+        # what keeps the test suite offline.
+        self._mail_harvester = None
+        self._dispatcher = None
+        # invoice_id -> the replies received this session. Session state like
+        # _chat_evidence: verbatim vendor text never reaches disk.
+        self._vendor_replies: dict[str, list] = {}
 
     # --- decisions cache ---------------------------------------------------
 
@@ -251,6 +259,7 @@ class Service:
             ),
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
             "outbound_to": self.outbound_recipient(invoice.doc_id),
+            "vendor_replies": self._vendor_replies.get(invoice_id, []),
         }
 
     def metrics(self) -> dict:
@@ -478,6 +487,75 @@ class Service:
         if self._harvester is None:
             self._harvester = ChatHarvester(self.store)
         return self._harvester
+
+    def attach_mail(self, directory, sender, mail_from: str) -> None:
+        """Build the mail side against THIS service's store.
+
+        Injected rather than constructed from the environment so a test can
+        hand in a fake sender — the same reason the chat harvester takes its
+        store instead of loading one.
+        """
+        from apagent.mail.dispatch import MailDispatcher
+        from apagent.mail.harvest import MailHarvester
+        from apagent.mail.thread import ThreadRegistry
+
+        registry = ThreadRegistry()
+        self._mail_harvester = MailHarvester(
+            directory=directory, registry=registry, vendor_of=self._vendor_of
+        )
+        self._dispatcher = MailDispatcher(
+            directory=directory, registry=registry, sender=sender, mail_from=mail_from
+        )
+
+    def mail_harvester(self):
+        return self._mail_harvester
+
+    def _vendor_of(self, invoice_id: str) -> str | None:
+        invoice = self.store.get_invoice(invoice_id)
+        return invoice.vendor_id if invoice else None
+
+    def dispatch_vendor_queries(self) -> list[str]:
+        """Send every outstanding EMAIL decision. Returns what went out.
+
+        Called after decisions change rather than from inside the pipeline:
+        pipeline.py is pure functions that the offline suite runs constantly,
+        and a send in there would mean pytest mails vendors.
+        """
+        if self._dispatcher is None:
+            return []
+        sent = []
+        for invoice_id, decision in self._cache.items():
+            if decision.get("action") != Action.EMAIL:
+                continue
+            body = decision.get("outbound_message")
+            vendor_id = self._vendor_of(invoice_id)
+            if not body or not vendor_id:
+                continue
+            query = self._dispatcher.send_query(invoice_id, vendor_id, body)
+            if query is None:
+                continue
+            # The same outbox the console already renders, so an automatic
+            # send is as visible as one a reviewer triggered. Recorded here
+            # rather than inside the dispatcher: the outbox is a console
+            # concern, and the dispatcher must stay usable without a Service.
+            self._record_sent(
+                invoice_id,
+                "vendor_query",
+                {
+                    "to": self._dispatcher.directory.address_for(vendor_id),
+                    "subject": f"Query on invoice {invoice_id}",
+                    "body": body,
+                },
+                "system",
+            )
+            sent.append(invoice_id)
+        return sent
+
+    def on_vendor_reply(self, evidence) -> None:
+        """File a reply against its invoice. Phase 1 changes no decision."""
+        if evidence is None:
+            return
+        self._vendor_replies.setdefault(evidence.invoice_id, []).append(evidence.model_dump())
 
     def send_to_human(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """Route an invoice to a human reviewer and record the hand-off
