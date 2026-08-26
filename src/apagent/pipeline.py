@@ -376,7 +376,28 @@ def _apply_guardrails(
             "overrides APPROVE to ESCALATE.",
         )
 
-    # 4. Invoice lines that exist on no PO: the over-billing / wrong-customer
+    # 4. The currency gate. Everything below this line compares integers of
+    # cents, and not one of those comparisons looks at the unit: an invoice
+    # denominated in another currency than the order matches line for line,
+    # clears every tolerance, and asks for a different amount of money.
+    # USD billed as GBP is a silent ~30% overpayment that no later gate can
+    # see. The currency on an invoice is the vendor's text; the currency on
+    # the purchase order is ours, and they must agree. A currency we could
+    # not read is not a match either -- the strict direction, and the only
+    # one a guardrail is allowed to take.
+    if po is None or invoice.currency != po.currency:
+        billed = invoice.currency or "a currency we could not read"
+        ordered = po.currency if po is not None else "one we cannot look up"
+        return _override(
+            decision,
+            Action.ESCALATE,
+            None,
+            f"The invoice is billed in {billed} and purchase order "
+            f"{checked.po_id} was placed in {ordered}, so code overrides "
+            "APPROVE to ESCALATE.",
+        )
+
+    # 5. Invoice lines that exist on no PO: the over-billing / wrong-customer
     # case, and money attached to goods we never ordered.
     if checked.unmatched_inv_lines:
         return _override(
@@ -387,7 +408,7 @@ def _apply_guardrails(
             "order line, so code overrides APPROVE to ESCALATE.",
         )
 
-    # 5. The duplicate gate. If ANY hard duplicate exists, neither invoice
+    # 6. The duplicate gate. If ANY hard duplicate exists, neither invoice
     # of the pair is auto-payable — a human picks the real one. We used to
     # let the earlier-dated one through, but issue_date is printed by the
     # supplier: back-dating a resubmission walked straight past that gate
@@ -406,7 +427,7 @@ def _apply_guardrails(
             "so code overrides APPROVE to ESCALATE.",
         )
 
-    # 6. The facts gate. Re-check every tolerance verdict — with the
+    # 7. The facts gate. Re-check every tolerance verdict — with the
     # vendor's contractual price allowance re-derived IN CODE from the
     # clause text (the same computation the recheck tool showed the model).
     # An APPROVE survives only if code agrees the rows are covered. This is
@@ -451,7 +472,7 @@ def _apply_guardrails(
             "overrides APPROVE to ESCALATE.",
         )
 
-    # 7. The proof-of-delivery gate. No goods receipt means nothing confirms
+    # 8. The proof-of-delivery gate. No goods receipt means nothing confirms
     # the goods arrived; paying on the vendor's word alone is the exact risk
     # a three-way match exists to prevent. (If the business later handles
     # service invoices with no GRN concept, this gate gains an exemption —

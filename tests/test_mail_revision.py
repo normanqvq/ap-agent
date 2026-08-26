@@ -20,7 +20,7 @@ from apagent.mail.inbound import parse_mail
 from apagent.mail.revise import make_revision
 from apagent.matching.engine import match_invoice
 from apagent.pipeline import _apply_guardrails
-from apagent.rules.tolerance import apply_tolerances
+from apagent.rules.tolerance import apply_tolerances, requires_manual_review
 from apagent.schemas import (
     Action,
     AgentDecision,
@@ -63,6 +63,38 @@ def test_an_ordinary_document_supersedes_nothing():
 @pytest.fixture
 def store():
     return DocumentStore.from_dir(DATA)
+
+
+def _decide(invoice, store, action=Action.APPROVE):
+    """Run the guardrail layer over a model that said `action`.
+
+    The gates are what these tests are about, so the model is a constant.
+    Going through _apply_guardrails rather than decide_invoice keeps them
+    offline and keeps the failure message about the gate that fired.
+    """
+    config = ToleranceConfig()
+    checked = apply_tolerances(match_invoice(invoice, store.all_pos(), store.all_grns()), config)
+    decision = AgentDecision(
+        invoice_id=invoice.doc_id,
+        action=action,
+        hold_reason=None,
+        confidence=0.9,
+        reasoning="looks fine",
+        tool_calls=[],
+        rounds_used=1,
+    )
+    return _apply_guardrails(
+        decision,
+        invoice,
+        checked,
+        review_gate=requires_manual_review(invoice.total_cents, config),
+        duplicates=[],
+        config=config,
+        chunks=(),
+        grn=store.get_grn_for_po(checked.po_id) if checked.po_id else None,
+        po=store.get_po(checked.po_id) if checked.po_id else None,
+        superseded=superseded_by(invoice, store),
+    )
 
 
 def test_a_revision_is_not_a_duplicate_of_what_it_replaces(store):
@@ -545,3 +577,52 @@ def test_the_detail_view_shows_the_supersession_gate(monkeypatch):
         g for g in svc.get_case("INV-V005-3005-R1")["guardrails"] if g["key"] == "superseded"
     )
     assert live["passed"] is True
+
+
+# --- the unit every other figure is counted in ---------------------------
+
+
+def test_a_correction_cannot_change_the_currency(store):
+    """Not identity, but the multiplier on every figure that is."""
+    original = store.get_invoice("INV-V005-3005")
+    extracted = original.model_copy(update={"currency": "EUR"})
+    assert make_revision(original, extracted, sequence=1).currency == "USD"
+
+
+def test_the_gate_refuses_an_invoice_billed_in_another_currency(store):
+    """At the exact ordered prices, so nothing else can be what blocks it."""
+    original = store.get_invoice("INV-V005-3005")
+    po = store.get_po(original.ref_doc_id)
+    at_po_prices = original.model_copy(
+        update={"lines": po.lines, "total_cents": sum(x.line_total_cents for x in po.lines)}
+    )
+    assert _decide(at_po_prices, store).action == Action.APPROVE
+    in_euros = at_po_prices.model_copy(update={"currency": "EUR"})
+    out = _decide(in_euros, store)
+    assert out.action == Action.ESCALATE
+    assert "billed in EUR" in out.reasoning and "placed in USD" in out.reasoning
+
+
+def test_an_unreadable_currency_is_not_a_match(store):
+    """Extraction returns null when nothing is printed. A guardrail may only
+    fail in the strict direction, so that is a hold, not a pass."""
+    original = store.get_invoice("INV-V005-3005")
+    po = store.get_po(original.ref_doc_id)
+    unlabelled = original.model_copy(
+        update={
+            "lines": po.lines,
+            "total_cents": sum(x.line_total_cents for x in po.lines),
+            "currency": None,
+        }
+    )
+    assert _decide(unlabelled, store).action == Action.ESCALATE
+
+
+def test_the_detail_view_shows_the_currency_gate(monkeypatch):
+    svc = _wired(monkeypatch)
+    gate = next(g for g in svc.get_case("INV-V005-3005")["guardrails"] if g["key"] == "currency")
+    assert gate == {
+        "key": "currency",
+        "label": "Billed in the currency ordered (USD)",
+        "passed": True,
+    }

@@ -531,6 +531,7 @@ def test_the_poller_survives_a_mailbox_outage(harvester):
     harvester.registry.register("INV-V005-3005", "ap@example.test")
     adapter = FlakyAdapter(_reply_to(harvester.registry, "INV-V005-3005"))
     seen = []
+
     # on_reply takes the raw message too, since phase 2 -- a corrected
     # invoice lives in an attachment. This test only cares about the evidence.
     def remember(evidence, raw=None):
@@ -539,8 +540,8 @@ def test_the_poller_survives_a_mailbox_outage(harvester):
     runner = MailRunner(adapter, harvester, dispatcher=None, on_reply=remember)
 
     with pytest.raises(ConnectionError):
-        runner.tick()          # the outage propagates out of tick...
-    runner.tick()              # ...and the next one works
+        runner.tick()  # the outage propagates out of tick...
+    runner.tick()  # ...and the next one works
     assert [e.invoice_id for e in seen] == ["INV-V005-3005"]
     assert adapter.flagged == [b"1"]
 
@@ -557,14 +558,14 @@ def test_run_forever_swallows_what_tick_raises(harvester, monkeypatch):
         raise ConnectionError("still down")
 
     monkeypatch.setattr(runner, "tick", once)
-    runner.run_forever()       # returns instead of raising
+    runner.run_forever()  # returns instead of raising
     assert calls == [1]
 
 
 def test_an_uncorrelated_message_is_still_marked_handled(harvester):
     """Otherwise every stray newsletter is re-read on every single poll."""
     adapter = FlakyAdapter(RAW_REPLY)
-    adapter.calls = 1          # skip the outage
+    adapter.calls = 1  # skip the outage
     runner = MailRunner(adapter, harvester, dispatcher=None)
     runner.tick()
     assert adapter.flagged == [b"1"]

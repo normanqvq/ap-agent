@@ -8,11 +8,19 @@ change what it is entitled to change -- prices, quantities, dates, the total
     vendor_id   carried from the invoice under query
     ref_doc_id  carried from the invoice under query
     replaces    the document this one withdraws, named by the caller
+    currency    carried from the invoice under query
 
 Without that, a "correction" is a way to re-point an invoice at a different
 purchase order, or to bill under a different vendor's terms -- both cheaper
 than any attack the correlation layer already refuses, and both invisible
 afterwards, because the resulting document looks entirely ordinary.
+
+Currency is on that list for a different reason: it is not identity, it is
+the unit every other figure is counted in, and nothing in matching or
+tolerance reads it. A correction at the exact ordered prices, relabelled
+EUR, clears every gate and asks for a different amount of money. The
+pipeline's currency gate refuses a mismatch against the order; carrying the
+value here means a correction cannot manufacture one in the first place.
 
 Marked EvidenceSource.EMAIL with the evidence id that carried it, so the
 provenance of every figure on it is one lookup away. A revision is an
@@ -48,6 +56,7 @@ def make_revision(
             "vendor_id": original.vendor_id,
             "vendor_name": original.vendor_name,
             "ref_doc_id": original.ref_doc_id,
+            "currency": original.currency,
             "replaces": supersedes or original.doc_id,
             "source": EvidenceSource.EMAIL,
             "source_ref": evidence_id,

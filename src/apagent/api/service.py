@@ -919,7 +919,7 @@ def _handoff_draft(invoice, vendor_name: str, decision: dict | None, gates: list
 def _guardrails(
     checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config, superseded
 ) -> list[dict]:
-    """The seven code gates as pass/fail, for the detail view. Mirrors
+    """The eight code gates as pass/fail, for the detail view. Mirrors
     pipeline._apply_guardrails so the UI shows exactly what code enforces.
 
     The GRN gate is not mirrored by hand any more — it CALLS pipeline.grn_gate,
@@ -944,6 +944,14 @@ def _guardrails(
         },
         {"key": "money", "label": "Amount within threshold", "passed": not review_gate},
         {"key": "po", "label": "PO matched", "passed": checked.po_id is not None},
+        {
+            # Passes with no PO to compare against: the PO chip above already
+            # reports that, and the pipeline never reaches the currency gate
+            # without one.
+            "key": "currency",
+            "label": f"Billed in the currency ordered ({po.currency})" if po else "Currency",
+            "passed": po is None or invoice.currency == po.currency,
+        },
         {
             "key": "unmatched",
             "label": "No unordered lines",
