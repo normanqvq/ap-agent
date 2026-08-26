@@ -133,6 +133,10 @@ class Service:
         # telegram). Session state like _uploaded; the seam the external
         # fetchers tag their documents with. See docs/INTAKE.md.
         self._intake_source: dict[str, str] = {}
+        # Monotonic counter for photo evidence ids. NOT len(_chat_evidence):
+        # a same-PO re-upload overwrites its dict entry, the size stalls, and
+        # the next distinct upload would reuse the previous id.
+        self._photo_seq = 0
 
     # --- decisions cache ---------------------------------------------------
 
@@ -687,7 +691,8 @@ class Service:
             raise ValueError(f"could not read the delivery photo: {exc}") from exc
 
         captured_at = datetime.now().isoformat(timespec="seconds")
-        evidence_id = f"PHOTO-EV-{len(self._chat_evidence) + 1:04d}"
+        self._photo_seq += 1
+        evidence_id = f"PHOTO-EV-{self._photo_seq:04d}"
         receipt, reason = resolve_grn(
             claim,
             self.store,

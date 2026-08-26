@@ -155,3 +155,30 @@ def test_photo_that_confirms_nothing_is_refused(monkeypatch):
     )
     with pytest.raises(ValueError, match="did not confirm"):
         svc.upload_delivery_photo("INV-V006-3019", b"blur", "image/jpeg")
+
+
+def test_reupload_gets_a_fresh_evidence_id(monkeypatch):
+    """A same-PO re-upload (a better photo of the same docket) overwrites its
+    receipt entry, so a dict-size counter would stall and hand the NEXT upload
+    a duplicate evidence id. The monotonic counter cannot."""
+    svc = Service()
+    po_id = svc.store.get_invoice("INV-V006-3019").ref_doc_id
+    monkeypatch.setattr(
+        vision,
+        "extract_delivery_claim_from_image",
+        lambda image_bytes, media_type, provider=None: {
+            "is_delivery_confirmation": True,
+            "po_reference": po_id,
+            "items": [],
+            "everything_arrived": True,
+            "notes": None,
+        },
+    )
+    monkeypatch.setattr(pipeline, "run_agent", _approve_agent)
+    receipt_id = f"GRN-CHAT-{po_id.split('-')[-1]}-1"
+    svc.upload_delivery_photo("INV-V006-3019", b"first", "image/jpeg")
+    first = svc._chat_evidence[receipt_id].evidence_id
+    svc.upload_delivery_photo("INV-V006-3019", b"better", "image/jpeg")
+    second = svc._chat_evidence[receipt_id].evidence_id
+    assert first == "PHOTO-EV-0001"
+    assert second == "PHOTO-EV-0002"
