@@ -847,3 +847,42 @@ def test_the_detail_view_shows_the_currency_gate(monkeypatch):
         "label": "Billed in the currency ordered (USD)",
         "passed": True,
     }
+
+
+def test_a_withdrawn_document_loses_its_confirmed_payment():
+    """R1 was approved AND a reviewer confirmed its payment; then R2 arrived.
+    _withdraw retired the decision but left the payment record's "Paid" row
+    live, so R2 could earn a second live payment for the same bill — two
+    standing payments, one delivery. The withdraw now voids the sign-off the
+    same way a re-run does."""
+    from apagent.api.service import Service
+    from apagent.schemas import Action, AgentDecision
+
+    svc = Service()
+    doc_id = "INV-UP-R1"
+    svc._uploaded.add(doc_id)  # session doc: never written to the disk cache
+    svc._cache[doc_id] = AgentDecision(
+        invoice_id=doc_id,
+        action=Action.APPROVE,
+        hold_reason=None,
+        confidence=1.0,
+        reasoning="stub",
+        tool_calls=[],
+        rounds_used=0,
+    ).model_dump()
+    svc._human[doc_id] = "confirmed"
+    svc._payment_record.append(
+        {
+            "invoice_id": doc_id,
+            "vendor_name": "Pacific Trading",
+            "currency": "SGD",
+            "total_cents": 49000,
+            "confirmed_by": "reviewer",
+            "confirmed_at": "2026-08-26T12:00:00",
+            "voided": False,
+        }
+    )
+    svc._withdraw(doc_id, "INV-UP-R2")
+    assert svc._cache[doc_id]["action"] == Action.ESCALATE
+    assert svc._payment_record[-1]["voided"] is True
+    assert doc_id not in svc._human

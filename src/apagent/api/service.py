@@ -268,6 +268,21 @@ class Service:
     def cached_decision(self, invoice_id: str) -> dict | None:
         return self._cache.get(invoice_id)
 
+    def _void_signoff(self, invoice_id: str) -> None:
+        """The decision changed under a sign-off: drop the badge, void the
+        recorded payment. A "confirmed" belonged to the OLD decision —
+        otherwise the badge could outlive the APPROVE it certified, and the
+        payment log would keep asserting "Paid" for a decision that changed.
+        Shared by run_case (a re-run) and _withdraw (a correction overtaking
+        an already-confirmed document), which used to skip the payment half —
+        a paid R1 overtaken by R2 kept a live "Paid" row while R2 could earn
+        its own, two live payments for one bill."""
+        if self._human.pop(invoice_id, None) == "confirmed":
+            for entry in reversed(self._payment_record):
+                if entry["invoice_id"] == invoice_id and not entry["voided"]:
+                    entry["voided"] = True
+                    break
+
     def run_case(self, invoice_id: str) -> dict:
         """Run the agent live on one invoice, cache the decision, return the
         full case bundle."""
@@ -286,15 +301,7 @@ class Service:
         )
         with self._cache_lock:
             self._cache[invoice_id] = decision.model_dump()
-            # A re-run is a NEW decision: any human sign-off belonged to the old
-            # one and is void — otherwise a "confirmed" badge could outlive the
-            # APPROVE it certified. Mark the recorded payment as voided too, so
-            # the payment log stops asserting "Paid" for a decision that changed.
-            if self._human.pop(invoice_id, None) == "confirmed":
-                for entry in reversed(self._payment_record):
-                    if entry["invoice_id"] == invoice_id and not entry["voided"]:
-                        entry["voided"] = True
-                        break
+            self._void_signoff(invoice_id)
             self._save_cache()
         # A decision that asks the vendor a question sends it. This is the
         # only place ongoing dispatch happens, so it must sit after the
@@ -1109,12 +1116,13 @@ class Service:
         that sent the query in the first place -- which is also why this
         cannot quietly move the committed benchmark.
         """
-        cached = self._cache.get(doc_id)
-        if cached is None or cached.get("action") != Action.APPROVE:
-            return
-        self._cache[doc_id] = supersede(AgentDecision(**cached), successor_id).model_dump()
-        self._human.pop(doc_id, None)
-        self._save_cache()
+        with self._cache_lock:
+            cached = self._cache.get(doc_id)
+            if cached is None or cached.get("action") != Action.APPROVE:
+                return
+            self._cache[doc_id] = supersede(AgentDecision(**cached), successor_id).model_dump()
+            self._void_signoff(doc_id)
+            self._save_cache()
 
     def on_vendor_silence(self, invoice_id: str) -> None:
         """A vendor never answered. Stop waiting and hand it to a person.
