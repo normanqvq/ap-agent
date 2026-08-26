@@ -7,7 +7,8 @@ result. Useful for seeing the reviewer's side without a bot token, and for
 rehearsing the demo offline.
 
     .venv/Scripts/python.exe scripts/demo_chat_grn.py            # supplier confirms (held)
-    .venv/Scripts/python.exe scripts/demo_chat_grn.py --authorised   # receiver confirms (released)
+    .venv/Scripts/python.exe scripts/demo_chat_grn.py --authorised   # receiver confirms, bags
+                                                     # short -> the quantity check still holds it
 
 Then open http://127.0.0.1:8000 and look at INV-V006-3019 -- the dataset's own
 "PO exists, the warehouse confirmed by phone, nobody typed a receipt" case.
