@@ -80,13 +80,22 @@ def extract_delivery_claim_from_image(
     if not image_bytes:
         raise ChatExtractionError("no image to read")
 
-    response = call_model_vision(
-        image_bytes=image_bytes,
-        media_type=media_type,
-        prompt="Read this delivery document photo and report what it confirms.",
-        system=PHOTO_GRN_PROMPT,
-        provider=provider,
-    )
+    try:
+        response = call_model_vision(
+            image_bytes=image_bytes,
+            media_type=media_type,
+            prompt="Read this delivery document photo and report what it confirms.",
+            system=PHOTO_GRN_PROMPT,
+            provider=provider,
+        )
+    except Exception as exc:
+        # Any provider failure — no image support on this provider, an image
+        # the API rejects, a network error — becomes the module's own error
+        # type, so the service layer turns it into one clean refusal instead
+        # of a 500. The broad catch is deliberate at this one boundary:
+        # nothing below it can recover better than "could not read the photo,
+        # and here is why".
+        raise ChatExtractionError(str(exc)) from exc
     raw = (response.get("text") or "").strip()
     if not raw:
         raise ChatExtractionError("model returned no text")

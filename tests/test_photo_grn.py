@@ -16,6 +16,7 @@ import pytest
 import apagent.pipeline as pipeline
 from apagent.api.service import Service
 from apagent.chat import vision
+from apagent.chat.extract import ChatExtractionError
 from apagent.llm.client import call_model_vision
 from apagent.schemas import Action, AgentDecision, EvidenceSource
 
@@ -182,3 +183,17 @@ def test_reupload_gets_a_fresh_evidence_id(monkeypatch):
     second = svc._chat_evidence[receipt_id].evidence_id
     assert first == "PHOTO-EV-0001"
     assert second == "PHOTO-EV-0002"
+
+
+def test_provider_failure_reads_as_a_clean_refusal(monkeypatch):
+    """Any failure inside the vision call — a provider without image support,
+    an image the API rejects, a network error — surfaces as
+    ChatExtractionError, which the service turns into one clean 422 refusal.
+    Before this wrapping, an SDK exception escaped as a 500."""
+
+    def boom(**kwargs):
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(vision, "call_model_vision", boom)
+    with pytest.raises(ChatExtractionError, match="provider exploded"):
+        vision.extract_delivery_claim_from_image(b"img", "image/jpeg")
