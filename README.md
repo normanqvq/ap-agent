@@ -157,6 +157,14 @@ For the live finale, drag one of the three attack PDFs from `data/samples/` into
 
 Or open `INV-V006-3019` — held for no delivery proof — and upload a photo of its delivery docket: the multimodal reader confirms the quantities, code turns it into an informal goods receipt, and the invoice releases in front of you. It is SGD 1,270, under the SGD 2,000 informal ceiling; a larger one would still wait for a reviewer, because a photo is evidence, not authority. A docket naming a different order, a blurred shot, or an iPhone HEIC (only JPEG / PNG / WebP / GIF are read) each get a clear refusal instead of a guess.
 
+The three states of that moment, captured on a live Bedrock run:
+
+| 1 · Held — no delivery proof | 2 · Reading the photo | 3 · Released — 6 / 6 gates |
+| --- | --- | --- |
+| ![Held: the goods-received gate fails and the invoice waits](docs/screenshots/photo-hold.png) | ![The multimodal model reading the photographed docket](docs/screenshots/photo-reading.png) | ![Released: delivery confirmed by photo, every gate green](docs/screenshots/photo-released.png) |
+
+The evidence card in the third shot is the honest part: who vouched, which policy applied, the quantities as code matched them to the purchase order — and the reminder that no photo can approve an invoice by itself.
+
 ## Running It
 
 ```bash
