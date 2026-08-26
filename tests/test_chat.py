@@ -156,6 +156,19 @@ def test_console_starts_when_the_chat_side_cannot(monkeypatch):
         assert client.get("/api/invoices").status_code == 200
 
 
+def test_mention_matching_respects_the_word_boundary(monkeypatch):
+    """ "@apbot" must not fire on "@apbotfake" — a look-alike bot in the same
+    group would otherwise have every one of its mentions harvested too."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456789:short-fake-value")
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "apbot")
+    from apagent.chat.adapters import TelegramAdapter
+
+    adapter = TelegramAdapter()
+    assert adapter.mentions_bot(msg("1", "@apbot confirm the receipt"))
+    assert adapter.mentions_bot(msg("2", "hey @APBOT confirm"))
+    assert not adapter.mentions_bot(msg("3", "@apbotfake confirm"))
+
+
 # --- resolution fails closed ----------------------------------------------
 
 

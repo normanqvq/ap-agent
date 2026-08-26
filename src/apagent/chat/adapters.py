@@ -185,7 +185,12 @@ class TelegramAdapter:
 
         out = []
         for update in payload.get("result", []):
-            self._offset = update["update_id"] + 1
+            update_id = update.get("update_id")
+            if update_id is None:
+                # A malformed update must not break the "never raises"
+                # promise two lines up in the docstring.
+                continue
+            self._offset = update_id + 1
             message = update.get("message") or update.get("channel_post")
             parsed = self._to_message(message)
             if parsed is not None:
@@ -222,7 +227,9 @@ class TelegramAdapter:
     def mentions_bot(self, message: ChatMessage) -> bool:
         if not self.username:
             return False
-        return f"@{self.username}".lower() in message.text.lower()
+        # Word boundary, not substring: "@apbot" must not fire on a message
+        # that only mentions "@apbotfake".
+        return re.search(rf"@{re.escape(self.username)}\b", message.text, re.IGNORECASE) is not None
 
     def reply(self, chat_id: str, text: str) -> None:
         """Send a reply. Silent on failure, for the same reason poll is."""
