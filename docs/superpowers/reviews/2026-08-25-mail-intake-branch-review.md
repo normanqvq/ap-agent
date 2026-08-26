@@ -13,6 +13,40 @@ reasoned about. The three marked ✔ were re-verified independently afterwards.
 
 ---
 
+## Disposition (2026-08-26)
+
+Every finding below was worked through in commit order. The branch is 354
+tests green, ruff clean, and STP 68% / touchless 82% / false approvals 0 are
+byte-identical to `main`.
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | Re-sent correction paid once per copy | fixed — `replaces` names the newest document; a superseded document cannot APPROVE (code gate) |
+| 2 | Currency copied off the vendor's paper | fixed — carried from the original, plus a currency-equals-PO gate covering upload too |
+| 3 | Unreachable SMTP stops startup | fixed — `send` returns a bool, registry written only after a successful send, boot dispatch off the critical path |
+| 4 | `_revise_from` raises and takes the timers down | fixed — `on_reply` wrapped in `tick`; read failures and decide failures handled differently |
+| 5 | Queries only dispatched at boot | fixed — `run_case` dispatches its own, so upload / re-run / chat acceptance all ask |
+| 6 | Escalation is a boolean nobody reads | fixed — `on_silence` hands the invoice to a reviewer, in the outbox, credited to "system" |
+| 7 | Revisions degrade the headline numbers | fixed — one population for every rate; the rollup counts one obligation once |
+| 8 | `unexpected` defeated | fixed — `_eval_view` split into `_benchmark_view` (rates, disk) and `_harness_input` (what evaluate sees) |
+| 9 | Console renders none of it | fixed — vendor email thread card, per-reply flags, links to each correction, withdrawn banner |
+| 10 | Two vacuous tests | fixed — both do what they claim; the missing cases are covered, including the `app.py` lifespan |
+| 11 | Smaller items | fixed except the two noted below |
+| Docs | Nine overstatements | fixed — five by fixing the code, four by rewriting the claim |
+
+**Two left, both deliberate.**
+
+- **The thin tool trail on `INV-V005-3005`.** Regenerating it means a live
+  model run, and the answer is not deterministic: if it comes back anything
+  other than EMAIL, touchless 82% moves and `test_eval.py` fails. That is a
+  call to make with the numbers in front of you, not a cleanup.
+- **Re-`register`ing an invoice leaves the old token indexed.** Left as is on
+  purpose: a late reply to the earlier query still correlates to the right
+  invoice, which is better than refusing it. Nothing leaks — the tokens map
+  to invoice ids, not to authority.
+
+---
+
 ## The short version
 
 The parts work. Assembled, they do not. Per-module review passed twice; what
