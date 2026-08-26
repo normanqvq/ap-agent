@@ -531,7 +531,7 @@ class Service:
         the metrics stay honest.
         """
         if len(content) > MAX_UPLOAD_BYTES:
-            raise ValueError("PDF too large (5 MB limit)")
+            raise ValueError(f"PDF too large ({MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit)")
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "-", Path(filename).stem) or "upload"
         tmp_dir = Path(tempfile.mkdtemp(prefix="apagent-upload-"))
         pdf_path = tmp_dir / f"{safe_name}.pdf"
@@ -669,7 +669,7 @@ class Service:
         if invoice is None:
             raise KeyError(invoice_id)
         if len(image_bytes) > MAX_UPLOAD_BYTES:
-            raise ValueError("image too large (5 MB limit)")
+            raise ValueError(f"image too large ({MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit)")
         # The two providers with image input take exactly these types. Checked
         # here so an iPhone HEIC gets a clear answer instead of an opaque
         # provider error mid-demo.
