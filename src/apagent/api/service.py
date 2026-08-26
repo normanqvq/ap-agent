@@ -738,6 +738,10 @@ class Service:
         # not just the one on screen — the same PO can back more than one
         # invoice, and _eval_view must serve the committed decision for all of
         # them (parity with the chat poller, which marks result.invoice_ids).
+        # The scan matches on the printed ref, like the chat harvester does: a
+        # ref-less invoice that only fallback-matches this PO is not caught.
+        # Unreachable today — every such PO carries an ERP receipt, refused
+        # above — and the same known limit as the chat path.
         self._chat_confirmed.add(invoice_id)
         for other in self.store.invoices_for_vendor(receipt.vendor_id):
             if other.ref_doc_id == receipt.ref_doc_id and other.doc_id != invoice_id:
