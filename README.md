@@ -236,6 +236,6 @@ docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap ana
 
 ## What's Left
 
-All planned modules are built. Beyond the hackathon scope: sending the code-templated outbound messages through a real mailbox, and reading documents from an actual ERP instead of the synthetic dataset.
+All planned modules are built. Beyond the hackathon scope: reading documents from an actual ERP instead of the synthetic dataset. The other item that used to sit in this sentence — a real mailbox for the outbound messages — got built: the vendor email loop sends its queries, chases once, and reads the replies for real.
 
 On the chat-confirmation path specifically, the honest gaps: **WeCom and Slack** are documented stubs rather than implementations, and WhatsApp can only ever work one-to-one because its Business Cloud API has no group chats; a single confirmation covers **every** invoice against that purchase order, bounded only by the informal ceiling and the duplicate gate; and delivery-note **photos are read only on Anthropic/Bedrock** (DeepSeek has no image input, so that provider falls back to text confirmation). The residual risk that has no technical fix is an authorised receiver who is wrong or complicit — a forged docket is the same class of problem as a false chat message, and segregation of duties needs a PO-requester field the data model does not have.
