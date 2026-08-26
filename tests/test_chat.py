@@ -541,3 +541,37 @@ def test_a_bot_token_never_reaches_the_logs(caplog):
     joined = "\n".join(r.getMessage() for r in caplog.records)
     assert "AAH_EmU" not in joined
     assert "bot<REDACTED>" in joined
+
+
+def test_redaction_survives_the_shapes_httpx_actually_logs(caplog):
+    """The first filter only redacted str args, and real leaks are not str:
+    httpx passes an httpx.URL OBJECT as a log arg, a failing request logs an
+    exception object whose str() contains the URL, and log.exception carries
+    the URL inside a traceback. A probe proved each shape leaked. This pins
+    the fix: everything is collapsed to text and scrubbed before a handler
+    sees it."""
+    import logging
+
+    import httpx
+
+    from apagent.chat.adapters import redact_tokens_from_logs
+
+    redact_tokens_from_logs()
+    url = httpx.URL(
+        "https://api.telegram.org/bot8874647777:AAH_EmUxAJ8XGk6ss9LADjxKTn63G7lKuOY/getUpdates"
+    )
+    with caplog.at_level(logging.INFO):
+        # 1. the URL as a non-str arg, exactly httpx's own log line
+        logging.getLogger("httpx").info('HTTP Request: GET %s "200 OK"', url)
+        # 2. an exception OBJECT as the arg
+        logging.getLogger("apagent.chat").info("poll failed: %s", ValueError(str(url)))
+        # 3. the URL inside a traceback via log.exception
+        try:
+            raise RuntimeError(f"connect failed for {url}")
+        except RuntimeError:
+            logging.getLogger("apagent.chat").exception("chat poll failed; retrying")
+    rendered = "\n".join(
+        r.getMessage() + (r.exc_text or "") + (r.stack_info or "") for r in caplog.records
+    )
+    assert "AAH_EmU" not in rendered
+    assert rendered.count("bot<REDACTED>") >= 3

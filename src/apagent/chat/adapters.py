@@ -48,6 +48,7 @@ this package sends is already rendered by code from a fixed template
 import logging
 import os
 import re
+import traceback
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -72,13 +73,29 @@ _TOKEN_RE = re.compile(r"bot\d{6,}:[A-Za-z0-9_-]{30,}")
 
 class _RedactBotToken(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str) and "bot" in record.msg:
-            record.msg = _TOKEN_RE.sub("bot<REDACTED>", record.msg)
-        if record.args:
-            record.args = tuple(
-                _TOKEN_RE.sub("bot<REDACTED>", a) if isinstance(a, str) else a
-                for a in (record.args if isinstance(record.args, tuple) else (record.args,))
+        # Collapse msg+args into one string FIRST. An isinstance(str) filter
+        # missed all three real leak paths (a probe proved each one): httpx
+        # logs the request with an httpx.URL OBJECT as an arg, an exception
+        # object str()s into a message containing the URL, and a traceback
+        # rides in exc_info untouched by msg/args filtering. Formatting here
+        # is exactly what the handler would have done anyway.
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 - a broken record must still not leak
+            message = str(record.msg)
+        record.msg = _TOKEN_RE.sub("bot<REDACTED>", message)
+        record.args = None
+        if record.exc_info:
+            # Pre-format the traceback so the sub can reach inside it; the
+            # handler uses exc_text when present and skips re-formatting.
+            record.exc_text = _TOKEN_RE.sub(
+                "bot<REDACTED>", "".join(traceback.format_exception(*record.exc_info))
             )
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = _TOKEN_RE.sub("bot<REDACTED>", record.exc_text)
+        if record.stack_info:
+            record.stack_info = _TOKEN_RE.sub("bot<REDACTED>", record.stack_info)
         return True
 
 
