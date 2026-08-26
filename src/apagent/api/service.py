@@ -197,6 +197,10 @@ class Service:
                     entry["voided"] = True
                     break
         self._save_cache()
+        # A decision that asks the vendor a question sends it. This is the
+        # only place ongoing dispatch happens, so it must sit after the
+        # cache write and before the bundle the caller renders.
+        self._dispatch_query(invoice_id)
         return self.get_case(invoice_id)
 
     def _human_state(self, invoice_id: str, action: str | None) -> str | None:
@@ -554,41 +558,55 @@ class Service:
         return invoice.vendor_id if invoice else None
 
     def dispatch_vendor_queries(self) -> list[str]:
-        """Send every outstanding EMAIL decision. Returns what went out.
+        """Send the queries every outstanding EMAIL decision asks for.
 
-        Called after decisions change rather than from inside the pipeline:
-        pipeline.py is pure functions that the offline suite runs constantly,
-        and a send in there would mean pytest mails vendors.
+        The catch-up, run once at boot for whatever the cache already held.
+        Ongoing dispatch is run_case's job -- this used to be the only call
+        site in the whole product, so uploading the overcharge PDF, or
+        clicking Run on an invoice that flipped to EMAIL, sent nothing at
+        all, and the one query that ever went out was for the invoice that
+        was already EMAIL in the committed cache when the process started.
+        """
+        return [invoice_id for invoice_id in list(self._cache) if self._dispatch_query(invoice_id)]
+
+    def _dispatch_query(self, invoice_id: str) -> bool:
+        """Send the query this invoice's decision asks for. True if one went.
+
+        Called from run_case, so every path that changes a decision --
+        upload, re-run, an accepted chat receipt, a correction that is still
+        wrong -- asks the vendor by itself. Not called from inside the
+        pipeline: pipeline.py is pure functions the offline suite runs
+        constantly, and a send in there would mean pytest mails vendors.
+        Repeats are the dispatcher's problem, and it refuses them on
+        (invoice, body), so clicking Run twice does not query twice.
         """
         if self._dispatcher is None:
-            return []
-        sent = []
-        for invoice_id, decision in self._cache.items():
-            if decision.get("action") != Action.EMAIL:
-                continue
-            body = decision.get("outbound_message")
-            vendor_id = self._vendor_of(invoice_id)
-            if not body or not vendor_id:
-                continue
-            query = self._dispatcher.send_query(invoice_id, vendor_id, body)
-            if query is None:
-                continue
-            # The same outbox the console already renders, so an automatic
-            # send is as visible as one a reviewer triggered. Recorded here
-            # rather than inside the dispatcher: the outbox is a console
-            # concern, and the dispatcher must stay usable without a Service.
-            self._record_sent(
-                invoice_id,
-                "vendor_query",
-                {
-                    "to": self._dispatcher.directory.address_for(vendor_id),
-                    "subject": f"Query on invoice {invoice_id}",
-                    "body": body,
-                },
-                "system",
-            )
-            sent.append(invoice_id)
-        return sent
+            return False
+        decision = self._cache.get(invoice_id) or {}
+        if decision.get("action") != Action.EMAIL:
+            return False
+        body = decision.get("outbound_message")
+        vendor_id = self._vendor_of(invoice_id)
+        if not body or not vendor_id:
+            return False
+        query = self._dispatcher.send_query(invoice_id, vendor_id, body)
+        if query is None:
+            return False
+        # The same outbox the console already renders, so an automatic
+        # send is as visible as one a reviewer triggered. Recorded here
+        # rather than inside the dispatcher: the outbox is a console
+        # concern, and the dispatcher must stay usable without a Service.
+        self._record_sent(
+            invoice_id,
+            "vendor_query",
+            {
+                "to": self._dispatcher.directory.address_for(vendor_id),
+                "subject": f"Query on invoice {invoice_id}",
+                "body": body,
+            },
+            "system",
+        )
+        return True
 
     def on_vendor_reply(self, evidence, raw: bytes | None = None) -> None:
         """File a reply, and raise a revision if it carried a corrected invoice.

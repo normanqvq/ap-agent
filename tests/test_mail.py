@@ -685,6 +685,76 @@ def test_a_case_with_no_replies_reports_an_empty_list():
     assert service.get_case("INV-V005-3005")["vendor_replies"] == []
 
 
+# --- a decision that asks the vendor a question sends it ------------------
+
+
+def _model_says(monkeypatch, action):
+    monkeypatch.setattr(
+        "apagent.agent.loop.call_model",
+        lambda messages, tools, system, provider=None: {
+            "text": json.dumps(
+                {"action": action, "hold_reason": None, "confidence": 0.9, "reasoning": "ok"}
+            ),
+            "tool_calls": [],
+        },
+    )
+
+
+def _wired_for_run(monkeypatch, sender, action="EMAIL"):
+    """A wired service whose next run_case produces `action`.
+
+    _save_cache is stubbed: run_case writes the committed benchmark, and a
+    test must never rewrite it.
+    """
+    _model_says(monkeypatch, action)
+    service = _wired_service(sender)
+    monkeypatch.setattr(service, "_save_cache", lambda: None)
+    return service
+
+
+def test_a_decision_that_flips_to_email_queries_the_vendor(monkeypatch):
+    """Finding 5 of the branch review: dispatch had exactly one caller, in
+    the lifespan, so clicking Run on an invoice that turned EMAIL sent
+    nothing -- which is the first thing anyone asks to see."""
+    sender = FakeSender()
+    service = _wired_for_run(monkeypatch, sender)
+    case = service.run_case("INV-V005-3005")
+    assert case["decision"]["action"] == "EMAIL"
+    assert len(sender.sent) == 1
+    assert sender.sent[0]["To"] == "billing@pacific.example"
+    assert service.outbox()[0]["invoice_id"] == "INV-V005-3005"
+
+
+def test_running_the_same_invoice_twice_does_not_query_twice(monkeypatch):
+    sender = FakeSender()
+    service = _wired_for_run(monkeypatch, sender)
+    service.run_case("INV-V005-3005")
+    service.run_case("INV-V005-3005")
+    assert len(sender.sent) == 1
+
+
+def test_a_decision_that_is_not_a_query_sends_nothing(monkeypatch):
+    sender = FakeSender()
+    service = _wired_for_run(monkeypatch, sender, action="HOLD")
+    assert service.run_case("INV-V005-3005")["decision"]["action"] != "EMAIL"
+    assert sender.sent == []
+
+
+def test_an_uploaded_invoice_queries_the_vendor_too(monkeypatch):
+    """The judge's version of this feature: upload the overcharge, watch it
+    ask. Upload funnels through run_case, so it comes for free -- and that
+    is worth a test, because it did not before."""
+    sender = FakeSender()
+    service = _wired_for_run(monkeypatch, sender)
+    original = service.store.get_invoice("INV-V005-3005")
+    monkeypatch.setattr(
+        "apagent.api.service.extract_invoice",
+        lambda path, vendors, **kw: original.model_copy(update={"doc_id": "INV-V005-3005-UP"}),
+    )
+    service.upload_invoice("scan.pdf", b"%PDF-1.4 pretend")
+    assert [m["To"] for m in sender.sent] == ["billing@pacific.example"]
+
+
 # --- a relay that is down costs the mail feature, never the console -------
 
 
