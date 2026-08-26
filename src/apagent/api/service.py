@@ -277,6 +277,7 @@ class Service:
         )
         po = self.store.get_po(match.po_id) if match.po_id else None
         grn = self.store.get_grn_for_po(match.po_id) if match.po_id else None
+        superseded = superseded_by(invoice, self.store)
         gates = _guardrails(
             checked,
             rechecked,
@@ -287,7 +288,7 @@ class Service:
             po,
             invoice,
             config,
-            superseded_by(invoice, self.store),
+            superseded,
         )
         decision = self._cache.get(invoice.doc_id)
         vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
@@ -317,6 +318,10 @@ class Service:
             ),
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
             "outbound_to": self.outbound_recipient(invoice.doc_id),
+            # The successor document, if a correction withdrew this one. The
+            # gate strip carries the same fact as a label; the page needs the
+            # id itself to link to it.
+            "superseded_by": superseded.doc_id if superseded else None,
             "vendor_query": self._vendor_query_view(invoice_id),
             "vendor_replies": self._vendor_replies.get(invoice_id, []),
             # Ids, not decided bundles. The console fetches each revision's

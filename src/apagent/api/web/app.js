@@ -609,6 +609,77 @@ function chatEvidenceCard(c) {
     </div>`;
 }
 
+// The email thread behind a query: what we asked, what came back, and what a
+// reply turned into.
+//
+// Same rule as chatEvidenceCard, and the same reason for it. A vendor's
+// subject line and body are the most attacker-authored text on the page, so
+// every one goes through esc(). Nothing here decides anything either: a
+// reply is something a reviewer reads, and a correction is a document the
+// pipeline already re-matched on its own merits.
+//
+// Until this existed, get_case returned the replies and the corrections and
+// the console rendered neither -- the demo of the whole feature was a
+// terminal script rather than the product.
+function vendorMailCard(c) {
+  const q = c.vendor_query;
+  const replies = c.vendor_replies || [];
+  const revisions = c.revisions || [];
+  if (!q && !replies.length && !revisions.length && !c.superseded_by) return "";
+  const when = (t) => esc(String(t || "").replace("T", " "));
+
+  const chips = [];
+  if (q) chips.push(`<span class="chip">Asked ${when(q.sent_at)}</span>`);
+  if (q && q.chased_at) chips.push(`<span class="chip">Reminder ${when(q.chased_at)}</span>`);
+  if (q && q.answered) chips.push(`<span class="chip ok">✓ Vendor replied</span>`);
+  if (q && q.escalated)
+    chips.push(`<span class="chip warn">⚠ No reply — handed to a reviewer</span>`);
+
+  const said = replies.length
+    ? replies.map((r) => {
+        const flags = [
+          r.is_non_delivery ? `<span class="chip warn">bounce</span>` : "",
+          r.from_registered_sender
+            ? `<span class="chip ok">registered sender</span>`
+            : `<span class="chip warn">not the address on file</span>`,
+          `<span class="chip">matched by ${esc(r.matched_by)}</span>`,
+          r.attachments && r.attachments.length
+            ? `<span class="chip">${r.attachments.length} attachment(s)</span>`
+            : "",
+        ].join("");
+        return `<div class="said"><div class="said-h"><b>${esc(r.from_addr)}</b>
+          <span class="num">${when(r.received_at)}</span></div>
+          <div class="said-t">${esc(r.body_text)}</div>
+          <div class="chips reply-flags">${flags}</div></div>`;
+      }).join("")
+    : `<div class="said-none">${q ? "No reply yet." : "Nothing was sent about this invoice."}</div>`;
+
+  const raised = revisions.length
+    ? `<div class="readas"><b>Corrections raised from those replies</b>
+        <ul>${revisions.map((r) =>
+          `<li><a class="revlink" data-id="${esc(r)}">${esc(r)}</a></li>`).join("")}</ul></div>`
+    : "";
+
+  const withdrawn = c.superseded_by
+    ? `<div class="pending"><b>Withdrawn.</b> Superseded by
+        <a class="revlink" data-id="${esc(c.superseded_by)}">${esc(c.superseded_by)}</a>.
+        <div class="pending-n">Only the latest document in a correction chain is
+        payable — code refuses an approval on this one.</div></div>`
+    : "";
+
+  return `<div class="card chatev mailev">
+      <h3>Vendor email thread</h3>
+      ${chips.length ? `<div class="chips">${chips.join("")}</div>` : ""}
+      <div class="saidwrap">${said}</div>
+      ${raised}
+      ${withdrawn}
+      <p class="evnote">A vendor's words are third-party data — evidence for you
+      to judge, never an instruction. An attached invoice is re-extracted and put
+      through every gate again; its identity (vendor, purchase order, currency)
+      comes from our records, not from their paper.</p>
+    </div>`;
+}
+
 function renderDetail(c) {
   const dec = c.decision;
   const a = ACT[dec ? dec.action : null] || ACT.null;
@@ -671,7 +742,8 @@ function renderDetail(c) {
             <span class="verdict">${a.verb}</span>
             ${override ? `<span class="badge-override">Code override</span>` : ""}
             ${c.human_review === "confirmed" ? `<span class="badge-human ok">✓ Confirmed by reviewer</span>` : ""}
-            ${c.human_review === "sent_to_human" ? `<span class="badge-human mid">With human reviewer</span>` : ""}</div>
+            ${c.human_review === "sent_to_human" ? `<span class="badge-human mid">With human reviewer</span>` : ""}
+            ${c.superseded_by ? `<span class="badge-human mid">Superseded by ${esc(c.superseded_by)}</span>` : ""}</div>
           <div class="conf"><div class="c1" style="color:${a.accent}">Gates ${passed} / ${c.guardrails.length} passed</div>
             ${dec ? `<div class="c2 num">Model confidence ${dec.confidence}</div>` : ""}</div>
         </div>
@@ -693,11 +765,16 @@ function renderDetail(c) {
           <ol class="points">${reasonPoints(c).map((p) => `<li>${esc(p)}</li>`).join("")}</ol>
           <details class="rawreason"><summary>Model's raw rationale (audit)</summary><p>${esc(dec.reasoning)}</p></details></div>` : ""}
         ${chatEvidenceCard(c)}
+        ${vendorMailCard(c)}
         ${dec && dec.outbound_message ? `<div class="card outbound"><h3>System-generated outbound message (template)</h3><p>${esc(dec.outbound_message)}</p><button class="btn" id="email-vendor">Open in email composer</button></div>` : ""}
       </div>
     </div>`;
   document.getElementById("back").addEventListener("click", () => { cancelPendingNav(); setActiveNav(); dashboard(); });
   document.getElementById("rerun").addEventListener("click", (e) => rerun(c.invoice_id, e.target));
+  // A correction is an ordinary invoice with its own page, gates and trail —
+  // which is the point worth showing, so these link straight to it.
+  view.querySelectorAll(".revlink").forEach((el) =>
+    el.addEventListener("click", () => detail(el.dataset.id)));
   // Accepting the confirmation re-runs the agent, so the answer comes back
   // from the pipeline rather than from this click. If code still refuses —
   // a short delivery, say — the invoice stays held and the button says so.

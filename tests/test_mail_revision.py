@@ -677,6 +677,29 @@ def test_the_corrected_invoice_stops_the_original_being_payable(monkeypatch):
     assert "superseded by INV-V005-3005-R1" in case["decision"]["reasoning"]
 
 
+def test_the_case_carries_everything_the_console_renders(monkeypatch):
+    """Finding 9 of the branch review: get_case grew vendor_replies and
+    revisions, app.js read neither, and a reviewer opening an invoice with
+    three replies and three corrections saw no sign of any of it. The page
+    reads these five keys -- this is the contract between them."""
+    svc = _wired(monkeypatch, at_po_prices=True)
+    _deliver(svc, _reply_with_pdf)
+
+    case = svc.get_case("INV-V005-3005")
+    assert case["superseded_by"] == "INV-V005-3005-R1"
+    assert case["revisions"] == ["INV-V005-3005-R1"]
+    assert case["vendor_query"]["answered"] is True
+    reply = case["vendor_replies"][0]
+    assert reply["from_addr"] == "ar-dept@pacific.example"
+    assert reply["from_registered_sender"] is True
+    assert reply["matched_by"] == "in_reply_to"
+    assert reply["attachments"] == ["corrected.pdf"]
+
+    correction = svc.get_case("INV-V005-3005-R1")
+    assert correction["superseded_by"] is None
+    assert correction["decision"]["action"] == Action.APPROVE
+
+
 def test_the_detail_view_shows_the_supersession_gate(monkeypatch):
     svc = _wired(monkeypatch)
     _deliver(svc, _reply_with_pdf)
