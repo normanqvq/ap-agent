@@ -131,7 +131,19 @@ class ChatHarvester:
         if receipt is None:
             return HarvestResult(templates.refusal(reason or ""), evidence=evidence)
 
-        self.store.add_grn(receipt)
+        try:
+            self.store.add_grn(receipt)
+        except ValueError:
+            # The store refuses to replace an ERP receipt with a chat one (the
+            # downgrade guard, store.py). Before this catch the ValueError
+            # escaped to the poller: the bot went silent, the crash was logged,
+            # and the REST of the poll batch was lost — getUpdates had already
+            # confirmed it. The photo path pre-checks the same condition; here
+            # the store's own refusal is the check, and the group gets told.
+            return HarvestResult(
+                templates.refusal("already_recorded"),
+                evidence=evidence.model_copy(update={"refusal_reason": "already_recorded"}),
+            )
         invoice_ids = [
             inv.doc_id
             for inv in self.store.invoices_for_vendor(receipt.vendor_id)

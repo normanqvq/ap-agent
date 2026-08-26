@@ -41,6 +41,10 @@ _REFUSALS = {
         "or confirm that the delivery was complete."
     ),
     "not_bound": "I am not set up to record deliveries in this group.",
+    "already_recorded": (
+        "That order already has a formal goods receipt on record, so a chat "
+        "confirmation is not needed. I have not changed anything."
+    ),
 }
 
 _FALLBACK = "I could not record that confirmation."

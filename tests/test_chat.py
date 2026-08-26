@@ -113,6 +113,27 @@ def test_authorised_sender_is_recorded_as_proof(monkeypatch, store, roster):
     assert "proof of delivery" in result.reply
 
 
+def test_confirming_an_order_with_an_erp_receipt_gets_a_reply_not_a_crash(
+    monkeypatch, store, roster
+):
+    """PO-2026-1001 already carries a formal ERP receipt, and the store
+    refuses the CHAT downgrade by design. Before this was caught, the
+    ValueError escaped to the poller: the bot went silent, and the rest of
+    the poll batch was lost. Now the group is told, and nothing changes."""
+    claim = {
+        "is_delivery_confirmation": True,
+        "po_reference": "PO-2026-1001",
+        "items": [],
+        "everything_arrived": True,
+        "notes": None,
+    }
+    h = harvester_with(monkeypatch, store, roster, claim)
+    result = h.on_mention(msg("1", "@apbot confirm"))
+    assert result.receipt is None
+    assert "already has a formal goods receipt" in result.reply
+    assert store.get_grn_for_po("PO-2026-1001").source == EvidenceSource.ERP
+
+
 # --- resolution fails closed ----------------------------------------------
 
 
