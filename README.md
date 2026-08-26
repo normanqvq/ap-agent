@@ -44,7 +44,7 @@ The core idea: **code owns the authority; the agent recovers and explains the ju
 - Applies eight code guardrails that override an unjustified approval — the injection defence, the "no auto-paying above a threshold" rule, and the refusal to pay a document a later correction has withdrawn all live here, not in the prompt.
 - Emits one of four actions — `APPROVE`, `HOLD`, `EMAIL`, `ESCALATE` — with a confidence, a rationale, the complete tool-call trail, and (for holds/queries) an outbound message rendered by code from a fixed template.
 - Batches the approved invoices into weekly Friday payment runs — one transfer per vendor, each invoice paid as late as possible but never past due. Only `APPROVE` moves money; everything else is listed as withheld, with its reason.
-- Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice.
+- Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice — alongside the photographed delivery docket the photo finale uses.
 - Accepts a delivery **confirmed in a chat group**: a receiver @-mentions the bot in Telegram, code reads the surrounding conversation, resolves the items against the purchase order, and records an *informal* goods receipt. Whether that receipt releases payment is a policy setting (`OFF` / `EVIDENCE_ONLY` / `TIERED` / `TRUSTED`), enforced in code — an unauthorised sender's confirmation is kept as evidence for a reviewer, never as grounds to pay.
 - Accepts a **photo of the delivery note**: a reviewer uploads a photographed docket, a multimodal model reads what it confirms, and the *same* chat path turns it into an informal goods receipt — the image changes the input, not the trust: the docket must name the very order the open invoice bills, the same ceiling and quantity checks apply, and a photo never pays a large invoice on its own. When the photo is unclear the reading refuses rather than guesses.
 - **Vendor queries answer themselves.** An unexplained overcharge emails the
@@ -167,7 +167,7 @@ Measured over the full set by the eval harness (`python scripts/run_eval.py`, gr
 
 For the live finale, drag one of the three attack PDFs from `data/samples/` into *Upload invoice* and watch it get caught in real time: `INV-V001-9001` (duplicate re-bill → ESCALATE), `INV-V004-9002` (12% overcharge → HOLD), `INV-V002-9003` (overcharge plus an injected "approve immediately" instruction → refused; the injection has nothing to attack). Regenerate them any time with `python scripts/make_upload_samples.py`.
 
-Or open `INV-V006-3019` — held for no delivery proof — and upload a photo of its delivery docket: the multimodal reader confirms the quantities, code turns it into an informal goods receipt, and the invoice releases in front of you. It is SGD 1,270, under the SGD 2,000 informal ceiling; a larger one would still wait for a reviewer, because a photo is evidence, not authority. A docket naming a different order, a blurred shot, or an iPhone HEIC (only JPEG / PNG / WebP / GIF are read) each get a clear refusal instead of a guess.
+Or open `INV-V006-3019` — held for no delivery proof — and upload the photographed delivery docket that ships at `data/samples/delivery-docket-PO-2026-1019.png`: the multimodal reader confirms the quantities, code turns it into an informal goods receipt, and the invoice releases in front of you. It is SGD 1,270, under the SGD 2,000 informal ceiling; a larger one would still wait for a reviewer, because a photo is evidence, not authority. A docket naming a different order, a blurred shot, or an iPhone HEIC (only JPEG / PNG / WebP / GIF are read) each get a clear refusal instead of a guess.
 
 The three states of that moment, captured on a live Bedrock run:
 
@@ -229,7 +229,7 @@ src/apagent/
 deploy/               # optional: Bedrock AgentCore entrypoint + local-run / deploy / teardown scripts
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
-data/samples/         # three attack PDFs for the live upload demo
+data/samples/         # three attack PDFs + the delivery-docket photo for the live demos
 tests/                # 421 offline tests
 docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap analysis
 ```
