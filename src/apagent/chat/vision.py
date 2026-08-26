@@ -21,9 +21,12 @@ which is the safe direction.
 """
 
 import json
+import logging
 
 from apagent.chat.extract import ChatExtractionError, _strip_fences
 from apagent.llm.client import call_model_vision
+
+log = logging.getLogger(__name__)
 
 PHOTO_GRN_PROMPT = """\
 You are looking at a PHOTO of a delivery document — a signed delivery note, a \
@@ -94,7 +97,10 @@ def extract_delivery_claim_from_image(
         # type, so the service layer turns it into one clean refusal instead
         # of a 500. The broad catch is deliberate at this one boundary:
         # nothing below it can recover better than "could not read the photo,
-        # and here is why".
+        # and here is why". Logged in full FIRST, so a programming error in
+        # here is a stack trace in the server log, not just a 422 costumed
+        # as a bad photo.
+        log.exception("vision call failed")
         raise ChatExtractionError(str(exc)) from exc
     raw = (response.get("text") or "").strip()
     if not raw:
