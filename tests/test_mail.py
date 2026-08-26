@@ -596,12 +596,29 @@ def test_run_forever_swallows_what_tick_raises(harvester, monkeypatch):
     assert calls == [1]
 
 
-def test_an_uncorrelated_message_is_still_marked_handled(harvester):
-    """Otherwise every stray newsletter is re-read on every single poll."""
-    adapter = FlakyAdapter(RAW_REPLY)
+def test_an_uncorrelated_message_is_left_exactly_as_found(harvester):
+    """The mailbox belongs to a person and most of it is not ours.
+
+    This used to flag every polled message read, on the argument that a
+    stray message is otherwise re-read forever. True of the flag -- but the
+    adapter remembers which uids it has examined, which does that job
+    without marking someone's unread personal mail as read. Run against a
+    real inbox with 4,581 unread messages, the old rule would have read all
+    of them.
+    """
+    adapter = FlakyAdapter(RAW_REPLY)  # correlates to nothing: no query registered
     adapter.calls = 1  # skip the outage
     runner = MailRunner(adapter, harvester, dispatcher=None)
     runner.tick()
+    assert adapter.flagged == []
+
+
+def test_a_correlated_reply_is_marked_handled(harvester):
+    """Ours, because we sent the query it answers."""
+    harvester.registry.register("INV-V005-3005", "ap@example.test")
+    adapter = FlakyAdapter(_reply_to(harvester.registry, "INV-V005-3005"))
+    adapter.calls = 1
+    MailRunner(adapter, harvester, dispatcher=None).tick()
     assert adapter.flagged == [b"1"]
 
 
@@ -632,7 +649,7 @@ def test_an_unparseable_message_costs_one_message_not_the_tick(monkeypatch, disp
 
     runner.tick()  # must not raise
 
-    assert adapter.flagged == [b"1"]
+    assert adapter.flagged == []  # unreadable, so not established as ours
     assert len(dispatcher.sender.sent) == 1  # the due chase still went out
 
 
@@ -910,6 +927,113 @@ def test_an_uploaded_invoice_queries_the_vendor_too(monkeypatch):
     )
     service.upload_invoice("scan.pdf", b"%PDF-1.4 pretend")
     assert [m["To"] for m in sender.sent] == ["billing@pacific.example"]
+
+
+# --- the mailbox is somebody's, and it is enormous ------------------------
+
+
+class FakeImap:
+    """Enough IMAP to drive ImapAdapter. Records every STORE it is asked for.
+
+    Modelled on what a real personal inbox answered: thousands of UNSEEN
+    messages, of which a handful are recent.
+    """
+
+    def __init__(self, uids, recent=None, sizes=None):
+        self.uids = [str(u).encode() for u in uids]
+        self.recent = [str(u).encode() for u in (uids if recent is None else recent)]
+        self.sizes = sizes or {}
+        self.fetched = []
+        self.stored = []
+        self.searches = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def login(self, user, password):
+        return ("OK", [b""])
+
+    def select(self, box, readonly=False):
+        return ("OK", [b"1"])
+
+    def uid(self, command, *args):
+        if command == "SEARCH":
+            self.searches.append(args)
+            pool = self.recent if "SINCE" in args else self.uids
+            return ("OK", [b" ".join(pool)])
+        if command == "FETCH":
+            uid, what = args
+            if "RFC822.SIZE" in what:
+                return ("OK", [b"1 (UID %s RFC822.SIZE %d)" % (uid, self.sizes.get(uid, 4096))])
+            self.fetched.append(uid)
+            return ("OK", [(b"1 (BODY[] {10}", b"raw-" + uid)])
+        if command == "STORE":
+            self.stored.append(args[0])
+            return ("OK", [b""])
+        raise AssertionError(command)
+
+
+def _adapter(monkeypatch, imap):
+    from apagent.mail.adapters import ImapAdapter
+
+    monkeypatch.setenv("IMAP_PASSWORD", "app password")
+    monkeypatch.setattr("imaplib.IMAP4_SSL", lambda host: imap)
+    return ImapAdapter(host="imap.example.test", user="ap@example.test")
+
+
+def test_the_poll_is_bounded_by_a_date_window(monkeypatch):
+    """UNSEEN alone is not a queue. The inbox this first ran against held
+    4,581 unread messages, so one poll never finished and the reply it was
+    waiting for was never reached."""
+    imap = FakeImap(uids=range(1, 5000), recent=[4998, 4999])
+    adapter = _adapter(monkeypatch, imap)
+    got = adapter.poll()
+    assert [uid for uid, _ in got] == [b"4998", b"4999"]
+    assert "SINCE" in imap.searches[0]
+
+
+def test_one_poll_takes_a_bounded_bite(monkeypatch):
+    from apagent.mail.adapters import MAX_PER_POLL
+
+    imap = FakeImap(uids=range(1, 200), recent=range(1, 200))
+    adapter = _adapter(monkeypatch, imap)
+    assert len(adapter.poll()) == MAX_PER_POLL
+
+
+def test_each_poll_advances_instead_of_re_reading(monkeypatch):
+    """The reason an uncorrelated message no longer needs its flag set."""
+    from apagent.mail.adapters import MAX_PER_POLL
+
+    imap = FakeImap(uids=range(1, 60), recent=range(1, 60))
+    adapter = _adapter(monkeypatch, imap)
+    first = [uid for uid, _ in adapter.poll()]
+    second = [uid for uid, _ in adapter.poll()]
+    assert len(first) == MAX_PER_POLL
+    assert set(first).isdisjoint(second)
+    assert second[0] == str(MAX_PER_POLL + 1).encode()
+
+
+def test_an_oversized_message_is_left_unread_and_not_fetched(monkeypatch):
+    from apagent.mail.adapters import MAX_MESSAGE_BYTES
+
+    imap = FakeImap(uids=[1, 2], sizes={b"1": MAX_MESSAGE_BYTES + 1})
+    adapter = _adapter(monkeypatch, imap)
+    assert [uid for uid, _ in adapter.poll()] == [b"2"]
+    assert imap.fetched == [b"2"]  # the big one's body was never pulled
+    assert imap.stored == []  # and its flags were not touched
+
+
+def test_polling_never_marks_anything_read(monkeypatch):
+    """Only mark_handled writes a flag, and only the runner calls it."""
+    imap = FakeImap(uids=[1, 2, 3])
+    adapter = _adapter(monkeypatch, imap)
+    adapter.poll()
+    assert imap.stored == []
+    adapter.mark_handled(b"2")
+    assert imap.stored == [b"2"]
 
 
 # --- a relay that is down costs the mail feature, never the console -------

@@ -9,9 +9,23 @@ rather than taking a webhook: nothing new has to be exposed. IDLE would hold
 a socket open for efficiency we do not need at one mailbox and a handful of
 messages.
 
-UNSEEN as the queue, with a PEEK fetch so reading does not consume it. The
-flag is then set explicitly once the message has been handled, which means a
-crash mid-handling costs a re-read rather than a silently dropped reply.
+UNSEEN as the queue, but UNSEEN ALONE IS NOT A QUEUE. A real person's inbox
+holds thousands of unread messages -- 4,581 on the mailbox this was first
+run against -- and fetching all of them takes far longer than the poll
+interval, so the one reply being waited for is never reached. Three bounds
+make it a queue: a SINCE window (a reply to a query this process sent cannot
+predate the process), a cap per poll, and an in-memory record of which uids
+have already been looked at so each poll advances instead of restarting.
+
+PEEK on the fetch, so looking does not consume. The seen flag is then set
+explicitly, and ONLY for a message that correlated to one of our own queries
+-- see MailRunner.tick. Marking a stranger's newsletter read because it
+happened to be sitting in the same inbox is not ours to do; the in-memory
+record is what stops it being re-read, not the flag.
+
+Real UIDs (imap.uid) rather than sequence numbers: sequence numbers shift
+when anything is expunged, so a number cached between the search and the
+flag-set can name a different message by the time it is used.
 """
 
 import imaplib
@@ -19,6 +33,7 @@ import logging
 import os
 import re
 import smtplib
+from datetime import date, timedelta
 from typing import Protocol
 
 log = logging.getLogger(__name__)
@@ -28,6 +43,13 @@ log = logging.getLogger(__name__)
 # process's memory before anything had a chance to refuse it. Asked for with
 # RFC822.SIZE first, which costs one small round trip per message.
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
+# How many unexamined messages one poll will look at. Bounds a tick on a busy
+# mailbox; the rest are picked up by the next one, a minute later.
+MAX_PER_POLL = 25
+# How far back a reply could possibly be. A query sent by this process cannot
+# be answered before this process started, so yesterday is already generous
+# -- it exists only so a run that crosses midnight does not blind itself.
+LOOKBACK_DAYS = 1
 
 
 def _password(name: str) -> str:
@@ -64,6 +86,11 @@ class ImapAdapter:
         # tests can build one, never for normal use.
         self.host = host or os.getenv("IMAP_HOST", "")
         self.user = user or os.getenv("IMAP_USER", "")
+        # Uids this process has already handed to the runner. In memory, like
+        # the thread registry it serves: a restart re-examines a handful of
+        # recent messages, which is cheap and correlates to nothing.
+        self._examined: set[bytes] = set()
+        self._since = (date.today() - timedelta(days=LOOKBACK_DAYS)).strftime("%d-%b-%Y")
 
     @property
     def configured(self) -> bool:
@@ -80,14 +107,22 @@ class ImapAdapter:
             with imaplib.IMAP4_SSL(self.host) as imap:
                 imap.login(self.user, _password("IMAP_PASSWORD"))
                 imap.select("INBOX")
-                status, data = imap.search(None, "UNSEEN")
+                status, data = imap.uid("SEARCH", None, "UNSEEN", "SINCE", self._since)
                 if status != "OK":
                     return []
+                fresh = [uid for uid in data[0].split() if uid not in self._examined]
+                if len(fresh) > MAX_PER_POLL:
+                    log.info("%s unexamined messages; taking %s", len(fresh), MAX_PER_POLL)
+                    fresh = fresh[:MAX_PER_POLL]
                 out = []
-                for uid in data[0].split():
+                for uid in fresh:
+                    # Marked examined even when the fetch is skipped or fails:
+                    # the point is that the next poll moves past it rather
+                    # than re-reading the same message forever.
+                    self._examined.add(uid)
                     if self._too_big(imap, uid):
                         continue
-                    status, fetched = imap.fetch(uid, "(BODY.PEEK[])")
+                    status, fetched = imap.uid("FETCH", uid, "(BODY.PEEK[])")
                     if status == "OK" and fetched and fetched[0]:
                         out.append((uid, fetched[0][1]))
                 return out
@@ -102,7 +137,7 @@ class ImapAdapter:
         it in the mailbox rather than discover that the system silently ate
         it. A size the server will not tell us is not a reason to refuse.
         """
-        status, data = imap.fetch(uid, "(RFC822.SIZE)")
+        status, data = imap.uid("FETCH", uid, "(RFC822.SIZE)")
         if status != "OK" or not data or not data[0]:
             return False
         line = data[0]
@@ -115,11 +150,17 @@ class ImapAdapter:
         return False
 
     def mark_handled(self, uid: bytes) -> None:
+        """Flag one message read. Called only for mail that was ours.
+
+        See the module docstring: the runner marks a message handled once it
+        has correlated to a query we sent. Anything else in the mailbox
+        belongs to whoever owns it, and its flags are left exactly as found.
+        """
         try:
             with imaplib.IMAP4_SSL(self.host) as imap:
                 imap.login(self.user, _password("IMAP_PASSWORD"))
                 imap.select("INBOX")
-                imap.store(uid, "+FLAGS", "\\Seen")
+                imap.uid("STORE", uid, "+FLAGS", "\\Seen")
         except Exception as exc:  # noqa: BLE001
             log.warning("imap flag failed: %s: %s", type(exc).__name__, exc)
 

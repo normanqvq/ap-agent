@@ -77,10 +77,13 @@ class MailRunner:
         Everything below it is wrapped per-message: a message that fails to
         parse, to harvest, or to handle must cost exactly that message and
         not the whole tick. Without the wrapping, one unreadable message
-        never gets mark_handled and is re-read (and re-fails) on every
-        subsequent poll, forever -- and because it never reaches
-        _run_timers, it takes the chase and escalation timers down with it,
-        so silent-vendor escalation just stops.
+        takes _run_timers down with it, so silent-vendor escalation just
+        stops.
+
+        Only a message that correlated to a query we sent is marked handled.
+        The mailbox belongs to a person, and most of what is in it has
+        nothing to do with us; the adapter remembers what it has examined,
+        so nothing is re-read on every poll either way.
 
         on_reply is inside that wrapping and is the reason it matters. It is
         the call that runs the most code: extraction, then the whole
@@ -94,13 +97,18 @@ class MailRunner:
                 evidence = self.harvester.on_mail(parse_mail(raw))
             except Exception:
                 log.exception("could not parse/harvest mail uid=%s; skipping", uid)
-                self.adapter.mark_handled(uid)
                 continue
-            # Flagged even when it correlates to nothing. Otherwise every
-            # stray message in the mailbox is re-read on every poll, forever.
-            self.adapter.mark_handled(uid)
             if evidence is None:
+                # Not an answer to anything we sent, so not ours to touch.
+                # This used to be flagged read regardless, on the argument
+                # that otherwise a stray message is re-read forever -- true
+                # of the flag, but the adapter now remembers which uids it
+                # has examined, which does that job without reaching into
+                # someone's mailbox and marking their unread mail read.
                 continue
+            # Ours: we sent the query it answers, so flagging it read is a
+            # statement about our own work queue.
+            self.adapter.mark_handled(uid)
             log.info(
                 "reply on %s from %s (matched by %s)",
                 evidence.invoice_id,
