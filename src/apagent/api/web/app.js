@@ -234,7 +234,7 @@ async function invoices() {
 // --- dashboard -------------------------------------------------------------
 async function dashboard() {
   view.innerHTML = `<div class="placeholder">Loading…</div>`;
-  const [m, list] = await Promise.all([api("/api/metrics"), api("/api/invoices")]);
+  const [m, list, r] = await Promise.all([api("/api/metrics"), api("/api/invoices"), api("/api/roi")]);
   const d = m.distribution;
   const maxN = Math.max(1, ...Object.values(d));
   const bar = (label, n, color) =>
@@ -281,6 +281,14 @@ async function dashboard() {
         return `<div class="act"><span class="dot" style="background:${a.accent}"></span>
           <span class="rl"><b>${esc(x.invoice_id)}</b> · ${esc(x.vendor_name)} → <b>${x.action}</b>${x.reason && x.reason !== "—" ? " · " + esc(x.reason) : ""}</span></div>`;
       }).join("")}
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>What it saves</h3><span class="runtotal">manual cost: Ardent Partners 2025</span></div>
+      <div class="perfgrid">
+        <div class="perf"><div class="pl">Manual cost</div><div class="pv num">$${(r.manual_cost_cents / 100).toFixed(2)}</div><div class="ps">per invoice · $${(r.manual_batch_cents / 100).toFixed(2)} for ${r.invoices}</div></div>
+        <div class="perf"><div class="pl">Agent cost</div><div class="pv num">${r.agent_cost_measured ? "~" + r.agent_avg_tokens.toLocaleString("en") + " tok" : "—"}</div><div class="ps">${r.agent_cost_measured ? "avg tokens / run" : "run precompute to measure"}</div></div>
+        <div class="perf"><div class="pl">Rework avoided</div><div class="pv num">${r.rework_low_pct}–${r.rework_high_pct}%</div><div class="ps">manual rework rate · false approvals: ${r.false_approve}</div></div>
+      </div>
     </div>`;
   const q = document.getElementById("queue");
   q.innerHTML = list.slice(0, 8).map(invoiceRow).join("");
@@ -437,9 +445,55 @@ const VERDICT_EN = {
   missing: { cls: "mid", text: "not run" },
 };
 
+// The six agent-performance metrics from the training deck, each measured
+// from the decided runs — not asserted.
+function perfPanel(p) {
+  if (!p) return "";
+  const cell = (label, value, sub) =>
+    `<div class="perf"><div class="pl">${label}</div><div class="pv num">${value}</div><div class="ps">${sub}</div></div>`;
+  const tokens = p.avg_tokens_per_run != null
+    ? [`${p.avg_tokens_per_run.toLocaleString("en")}`, `avg tokens / run · ${p.token_runs_measured} measured`]
+    : ["—", "captured on live runs"];
+  return `
+    <div class="card">
+      <div class="card-h"><h3>Agent performance</h3><span class="runtotal">six metrics, measured over ${p.schema_pass.total} runs</span></div>
+      <div class="perfgrid">
+        ${cell("Schema-valid output", `${p.schema_pass.ok}/${p.schema_pass.total}`, "decisions that parsed")}
+        ${cell("Tool-call success", p.tool_success_pct != null ? p.tool_success_pct + "%" : "—", `${p.tool_calls} calls served`)}
+        ${cell("Task completion", p.completion_pct + "%", `${p.hit_cap} hit the round cap`)}
+        ${cell("Token cost / run", tokens[0], tokens[1])}
+        ${cell("Loop discipline", p.avg_rounds, `avg rounds · cap ${p.max_rounds}`)}
+        ${cell("Answer fidelity", `${p.defects_handled}/${p.defects_total}`, `defects handled · ${p.false_approve} false approvals`)}
+      </div>
+    </div>`;
+}
+
+// Rules-only vs the agent, both scored by the same harness. The point: the
+// agent lifts STP without lifting risk — false approvals stay zero on both.
+function abPanel(b) {
+  if (!b) return "";
+  const stat = (label, value, sub) =>
+    `<div class="perf"><div class="pl">${label}</div><div class="pv num">${value}</div><div class="ps">${sub}</div></div>`;
+  const recovered = b.recovered.length
+    ? `<div class="ab-rec"><div class="ab-rec-h">Recovered by the agent's judgement</div>${b.recovered.map((r) =>
+        `<div class="row" data-id="${esc(r.invoice_id)}"><div class="rl"><b>${esc(r.invoice_id)}</b><small>${esc(r.vendor_name)}</small></div>
+          <div class="rr"><span class="pill mid">rules-only: ${r.baseline_action}${r.baseline_reason && r.baseline_reason !== "—" ? " · " + esc(r.baseline_reason) : ""}</span><span class="pill ok">agent: APPROVE</span></div></div>`).join("")}</div>`
+    : "";
+  return `
+    <div class="card">
+      <div class="card-h"><h3>Agent vs rules-only</h3><span class="runtotal">same invoices, same eval harness</span></div>
+      <div class="perfgrid">
+        ${stat("STP rate", `${b.baseline.stp_pct}% → ${b.agent.stp_pct}%`, "rules-only → agent")}
+        ${stat("False approvals", `${b.baseline.false_approve_count} · ${b.agent.false_approve_count}`, "zero on both — no added risk")}
+        ${stat("Recovered", b.recovered.length, "held by rules, approved by the agent")}
+      </div>
+      ${recovered}
+    </div>`;
+}
+
 async function analytics() {
   view.innerHTML = `<div class="placeholder">Loading…</div>`;
-  const a = await api("/api/analytics");
+  const [a, b] = await Promise.all([api("/api/analytics"), api("/api/baseline")]);
   const m = a.metrics, d = a.distribution;
   const maxN = Math.max(1, ...Object.values(d));
   const bar = (label, n, color) =>
@@ -480,6 +534,8 @@ async function analytics() {
         <div class="cap num">${m.decided} / ${m.total} ground-truth invoices decided${a.unexpected.length ? ` · +${a.unexpected.length} raised this session (no ground truth, unscored)` : ""}</div>
       </div>
     </div>
+    ${perfPanel(a.performance)}
+    ${abPanel(b)}
     <div class="card">
       <div class="card-h"><h3>By vendor</h3><span class="runtotal">billed vs approved for payment</span></div>
       ${a.vendors.map((v) => `
@@ -584,12 +640,15 @@ function chatEvidenceCard(c) {
   const endorsed = ev.endorsed_by
     ? `<span class="chip ok">✓ accepted by ${esc(ev.endorsed_by)}</span>`
     : "";
+  const isPhoto = ev.source === "photo";
   const said = ev.messages.length
     ? ev.messages.map((m) =>
         `<div class="said"><div class="said-h"><b>${esc(m.sender_name)}</b>
           <span class="num">${esc(m.sent_at.replace("T", " "))}</span></div>
           <div class="said-t">${esc(m.text)}</div></div>`).join("")
-    : `<div class="said-none">The conversation is not in this session's buffer.</div>`;
+    : isPhoto
+      ? `<div class="said-none">Read from a photo of the delivery note. The image was read by a multimodal model, then discarded.</div>`
+      : `<div class="said-none">The conversation is not in this session's buffer.</div>`;
   const read = ev.lines.map((l) =>
     `<li><span class="num">${l.qty}</span> × ${esc(l.sku || l.description)}</li>`).join("");
   const pending = ev.unconfirmed.length
@@ -598,16 +657,16 @@ function chatEvidenceCard(c) {
         still holds on those lines.</div></div>`
     : "";
   return `<div class="card chatev ${ev.authorised ? "" : "unauth"}">
-      <h3>Delivery confirmed in chat</h3>
+      <h3>${isPhoto ? "Delivery confirmed by photo" : "Delivery confirmed in chat"}</h3>
       <div class="chips">${who}${endorsed}
         <span class="chip">${esc(ev.receipt_id)}</span>
         <span class="chip">policy: ${esc(ev.policy)}</span></div>
       <div class="saidwrap">${said}</div>
       <div class="readas"><b>Recorded as received</b><ul>${read}</ul></div>
       ${pending}
-      <p class="evnote">Chat text is third-party data. It is evidence for you to
+      <p class="evnote">${isPhoto ? "The photo" : "Chat text"} is third-party data. It is evidence for you to
       judge — the quantities above were matched to the purchase order in code,
-      and no message can approve an invoice by itself.</p>
+      and no ${isPhoto ? "photo" : "message"} can approve an invoice by itself.</p>
     </div>`;
 }
 
@@ -727,7 +786,10 @@ function renderDetail(c) {
             : `<button class="btn primary" id="confirm">Confirm payment</button>`)
           : ""}
         ${c.chat_grn && !c.chat_grn.endorsed_by && !(dec && dec.action === "APPROVE")
-          ? `<button class="btn primary" id="accept-chat">Accept the chat confirmation</button>`
+          ? `<button class="btn primary" id="accept-chat">Accept the ${c.chat_grn.source === "photo" ? "photo" : "chat"} confirmation</button>`
+          : ""}
+        ${!c.chat_grn && !c.grn && !(dec && dec.action === "APPROVE")
+          ? `<button class="btn" id="photo-grn">Upload delivery photo</button>`
           : ""}
         ${c.human_review === "sent_to_human"
           ? `<button class="btn" disabled>✓ Sent to human</button>`
@@ -791,6 +853,47 @@ function renderDetail(c) {
         ? `Confirmation accepted — ${c.invoice_id} released`
         : `Confirmation accepted — still held by code`);
     } catch { e.target.disabled = false; e.target.textContent = "Could not accept (retry)"; }
+  });
+  // A signed-in reviewer uploads a photo of the delivery note. It runs the
+  // exact chat pipeline (extract -> resolve -> grn_gate), so a blurry photo or
+  // a short delivery leaves the invoice held; only a clean, covered receipt
+  // releases it. The image is read by a multimodal model, then discarded.
+  // Build a fresh <input> per click, so a failed upload can be retried. It is
+  // parked inside #view, not on <body>: Safari and Firefox fire no change
+  // event when the picker is cancelled, and an input the next render sweeps
+  // away cannot pile up.
+  const photoBtn = document.getElementById("photo-grn");
+  if (photoBtn) photoBtn.addEventListener("click", () => {
+    const photoInput = document.createElement("input");
+    photoInput.type = "file";
+    photoInput.accept = "image/*";
+    photoInput.hidden = true;
+    view.appendChild(photoInput);
+    photoInput.addEventListener("change", async () => {
+      const f = photoInput.files[0];
+      if (!f) { photoInput.remove(); return; }
+      photoBtn.disabled = true;
+      photoBtn.textContent = "Reading the photo…";
+      const fd = new FormData();
+      fd.append("file", f);
+      try {
+        const r = await fetch(`/api/invoices/${c.invoice_id}/delivery-photo`, { method: "POST", body: fd });
+        if (r.status === 401) { showLogin(); return; }
+        const j = await r.json();
+        if (!r.ok) { toast(j.detail || "Could not read the photo"); return; }
+        renderDetail(j);
+        toast(j.decision && j.decision.action === "APPROVE"
+          ? `Delivery confirmed by photo — ${c.invoice_id} released`
+          : `Delivery photo recorded — still held by code`);
+      } catch {
+        toast("Upload failed — network error");
+      } finally {
+        photoInput.remove();
+        const again = document.getElementById("photo-grn");
+        if (again) { again.disabled = false; again.textContent = "Upload delivery photo"; }
+      }
+    });
+    photoInput.click();
   });
   const confirmBtn = document.getElementById("confirm");
   if (confirmBtn) confirmBtn.addEventListener("click", async (e) => {

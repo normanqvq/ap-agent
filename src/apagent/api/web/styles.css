@@ -352,3 +352,13 @@ body {
 .policy .opt b { font-size: 12px; letter-spacing: .02em; }
 .policy .opt.on b { color: var(--accent); }
 .policy-note { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.5; }
+
+/* Agent performance panel */
+.perfgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--divider);
+  border-top: 1px solid var(--divider); }
+.perf { background: var(--card); padding: 15px 18px; }
+.perf .pl { color: var(--muted); font-size: 12px; font-weight: 500; }
+.perf .pv { font-size: 22px; font-weight: 700; margin: 4px 0 2px; }
+.perf .ps { color: var(--muted); font-size: 11.5px; }
+.ab-rec { padding: 12px 18px 6px; }
+.ab-rec-h { color: var(--muted); font-size: 12px; font-weight: 500; margin-bottom: 6px; }

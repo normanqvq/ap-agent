@@ -766,6 +766,7 @@ def test_the_case_carries_everything_the_console_renders(monkeypatch):
     assert reply["attachments"] == ["corrected.pdf"]
 
     correction = svc.get_case("INV-V005-3005-R1")
+    assert correction["intake_source"] == "email"  # the provenance seam from main
     assert correction["superseded_by"] is None
     assert correction["decision"]["action"] == Action.APPROVE
 

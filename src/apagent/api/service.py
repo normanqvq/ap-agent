@@ -38,6 +38,7 @@ from apagent.scheduling import schedule_payments
 from apagent.schemas import (
     Action,
     AgentDecision,
+    ChatGrnEvidence,
     ChatGrnPolicy,
     DiscrepancyField,
     Document,
@@ -73,13 +74,40 @@ DEMO_ORDER = [
     "INV-V004-3010",  # missing PO ref
 ]
 
+# The channels a document can arrive through. "upload" is the manual web
+# upload; "email" and "telegram" are the external fetchers' seam (docs/INTAKE.md).
+# A set — order carries no meaning here.
+VALID_INTAKE_SOURCES = {"upload", "email", "telegram"}
+
+# One cap for everything a browser can hand us (invoice PDFs, docket photos).
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
 
 class Service:
     """Holds the loaded dataset and the decisions cache for the API."""
 
     def __init__(self) -> None:
         self.store = DocumentStore.from_dir(DATA)
-        self.registry = build_registry(self.store, CONTRACTS)
+        # The raw in-process registry is always kept: it is the fallback, and
+        # the path uploaded (session-only) invoices always take.
+        self._raw_registry = build_registry(self.store, CONTRACTS)
+        self.registry = self._raw_registry
+        # AP_MCP routes the agent's tool calls over MCP, with an automatic
+        # fallback to the raw registry on any transport failure. Default off:
+        # the committed demo path is the plain registry, unchanged. Results are
+        # identical either way (tests/test_mcp.py pins that), so the toggle
+        # never changes a decision.
+        #   inproc  -- an in-process MCP session (shares this store)
+        #   remote  -- a separate `python -m apagent.mcp_server` process
+        self._mcp_mode = os.getenv("AP_MCP", "off")
+        if self._mcp_mode == "inproc":
+            from apagent.mcp_bridge import in_process_resilient_registry
+
+            self.registry = in_process_resilient_registry(self._raw_registry)
+        elif self._mcp_mode == "remote":
+            from apagent.mcp_bridge import remote_resilient_registry
+
+            self.registry = remote_resilient_registry(self._raw_registry)
         self.config = ToleranceConfig()
         self._cache: dict[str, dict] = {}
         if CACHE.exists():
@@ -131,6 +159,14 @@ class Service:
         # Session state like _uploaded: a corrected invoice never joins the
         # committed dataset or the decisions cache on disk.
         self._revisions: dict[str, list[str]] = {}
+        # invoice id -> the channel it arrived through (upload / email /
+        # telegram). Session state like _uploaded; the seam the external
+        # fetchers tag their documents with. See docs/INTAKE.md.
+        self._intake_source: dict[str, str] = {}
+        # Monotonic counter for photo evidence ids. NOT len(_chat_evidence):
+        # a same-PO re-upload overwrites its dict entry, the size stalls, and
+        # the next distinct upload would reuse the previous id.
+        self._photo_seq = 0
 
     # --- decisions cache ---------------------------------------------------
 
@@ -197,10 +233,17 @@ class Service:
         return view
 
     def _save_cache(self) -> None:
-        CACHE.write_text(
-            json.dumps(self._benchmark_view(), indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        # Drop token fields when the provider did not report usage, so a live
+        # re-run that produced no counts leaves the committed cache byte-for-byte
+        # unchanged instead of adding `input_tokens: null` noise.
+        view = {}
+        for doc_id, decision in self._benchmark_view().items():
+            view[doc_id] = {
+                k: v
+                for k, v in decision.items()
+                if not (k in ("input_tokens", "output_tokens") and v is None)
+            }
+        CACHE.write_text(json.dumps(view, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def cached_decision(self, invoice_id: str) -> dict | None:
         return self._cache.get(invoice_id)
@@ -211,8 +254,15 @@ class Service:
         invoice = self.store.get_invoice(invoice_id)
         if invoice is None:
             raise KeyError(invoice_id)
+        # A remote MCP server has its own store and cannot see an invoice
+        # uploaded this session, so those decisions must use the in-process
+        # registry — otherwise a duplicate check would miss the upload. An
+        # in-process MCP session shares this store, so no special case there.
+        registry = self.registry
+        if invoice_id in self._uploaded and getattr(self.registry, "shares_store", True) is False:
+            registry = self._raw_registry
         decision = decide_invoice(
-            invoice, self.store, self.registry, self.config, contracts_dir=CONTRACTS
+            invoice, self.store, registry, self.config, contracts_dir=CONTRACTS
         )
         self._cache[invoice_id] = decision.model_dump()
         # A re-run is a NEW decision: any human sign-off belonged to the old
@@ -323,6 +373,10 @@ class Service:
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
             "outbound_to": (route := self.outbound_route(invoice.doc_id)) and route["to"],
             "outbound_subject": route["subject"] if route else None,
+            # None for the committed dataset; set only for a document that came
+            # in through intake() this session. Makes the provenance label
+            # outlive the intake response, as docs/INTAKE.md promises.
+            "intake_source": self._intake_source.get(invoice.doc_id),
             # The successor document, if a correction withdrew this one. The
             # gate strip carries the same fact as a label; the page needs the
             # id itself to link to it.
@@ -335,6 +389,69 @@ class Service:
             # invoice they correct.
             "revisions": self._revisions.get(invoice_id, []),
         }
+
+    def performance(self, report: dict | None = None) -> dict:
+        """The six agent-performance metrics from the training deck, MEASURED
+        over the decided runs — the honest version, where a cell can show a
+        failure. Scores the same _benchmark_view() the other scorecards use,
+        so the panel can never disagree with the defect table above it.
+        """
+        from apagent.agent.loop import CAP_ESCALATE_PREFIX, MAX_ROUNDS
+
+        view = self._benchmark_view()
+        decided = list(view.values())
+        n = len(decided) or 1
+        if report is None:
+            report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), view)
+
+        # 1. schema-validation pass rate: a decision that did NOT produce usable
+        # JSON — the parse failure, or an empty model response — is a miss,
+        # rather than calling every cached row a pass.
+        schema_misses = ("Failed to parse agent", "Model returned empty response")
+        schema_ok = sum(1 for d in decided if not d.get("reasoning", "").startswith(schema_misses))
+        # 2. tool-call success: registry.execute returns an "Error:" string for
+        # an unknown tool or a handler crash; everything else is a served
+        # result (a plain "not found" is a valid answer, not a failure).
+        tool_results = [tc.get("result", "") for d in decided for tc in d.get("tool_calls", [])]
+        tool_ok = sum(1 for r in tool_results if not r.startswith("Error:"))
+        # 3. task completion: reached a decision without force-escalating at the
+        # round cap (loop.py writes CAP_ESCALATE_PREFIX only on that exit).
+        completed = sum(
+            1 for d in decided if not d.get("reasoning", "").startswith(CAP_ESCALATE_PREFIX)
+        )
+        # 4. token cost per run, averaged over runs the provider reported usage for
+        rounds = [d.get("rounds_used", 0) for d in decided]
+        token_runs = [
+            (d.get("input_tokens") or 0) + (d.get("output_tokens") or 0)
+            for d in decided
+            if d.get("input_tokens") is not None
+        ]
+        return {
+            "schema_pass": {"ok": schema_ok, "total": len(decided)},
+            "tool_calls": len(tool_results),
+            "tool_success_pct": round(tool_ok / len(tool_results) * 100) if tool_results else None,
+            "completion_pct": round(completed / n * 100),
+            "hit_cap": len(decided) - completed,
+            "avg_tokens_per_run": round(sum(token_runs) / len(token_runs)) if token_runs else None,
+            "token_runs_measured": len(token_runs),
+            "avg_rounds": round(sum(rounds) / n, 2),
+            "max_rounds": MAX_ROUNDS,
+            # 6. answer fidelity vs the reviewed ground-truth set (the eval)
+            "false_approve": report["metrics"]["false_approve_count"],
+            "defects_handled": sum(
+                1 for c in report["cases"] if c["defect"] != "clean" and c["verdict"] == "pass"
+            ),
+            "defects_total": sum(1 for c in report["cases"] if c["defect"] != "clean"),
+        }
+
+    def mcp_status(self) -> dict:
+        """How the agent is calling its tools: off, in-process MCP, or a remote
+        MCP server -- plus the transport split and breaker state when MCP is on.
+        A degraded-to-fallback run is visible here without reading logs."""
+        status = {"mode": self._mcp_mode}
+        if hasattr(self.registry, "status"):
+            status.update(self.registry.status())
+        return status
 
     def metrics(self) -> dict:
         """The dashboard's headline numbers, all measured over the same set.
@@ -360,7 +477,8 @@ class Service:
         # divided by a denominator one larger than its numerator's world:
         # STP 68 -> 65 and touchless 82 -> 78, live, because the feature
         # fired. A document with no ground truth is not pending; it is not
-        # part of this measurement at all.
+        # part of this measurement at all. main fixed the upload half of this
+        # in parallel; _session_documents covers corrections too.
         held_out = self._session_documents()
         total = sum(1 for inv in self._ordered_invoices() if inv.doc_id not in held_out)
         counts = {a.value: 0 for a in Action}
@@ -387,6 +505,92 @@ class Service:
             "touchless_pct": round((approve + untouched) / n * 100),
             "false_approve": report["metrics"]["false_approve_count"],
             "distribution": counts,
+        }
+
+    def baseline_comparison(self) -> dict:
+        """Rules-only vs the agent, scored over the same committed benchmark.
+
+        The baseline runs the deterministic pipeline with no agent and no
+        contract lookup (pipeline.decide_invoice_rules_only); the agent column
+        is the committed decisions. Both go through the same eval harness, so
+        the panel shows what the agent's judgement actually buys: the invoices
+        it recovers that pure rules would hold — with false approvals still
+        zero on BOTH sides, i.e. the agent adds STP without adding risk.
+        """
+        from apagent.pipeline import decide_invoice_rules_only
+
+        view = self._benchmark_view()
+        baseline_decisions: dict[str, dict] = {}
+        for invoice_id in view:
+            invoice = self.store.get_invoice(invoice_id)
+            if invoice is None:
+                continue
+            baseline_decisions[invoice_id] = decide_invoice_rules_only(
+                invoice, self.store, self.config
+            ).model_dump()
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        base_report = evaluate(manifest, baseline_decisions)
+        agent_report = evaluate(manifest, view)
+        # Invoices the agent approved that pure rules held: the measured payoff
+        # of the judgement, same-direction only (a recovered approve, never a
+        # recovered risk — a baseline approve the agent held would show as a
+        # negative and is not what this panel claims).
+        # Only count a recovery the ground truth agrees with: the agent's
+        # APPROVE must be a verdict=="pass" (the invoice really was payable),
+        # never a false approve the baseline happened to hold. Without this the
+        # panel could parade an invoice the agent wrongly paid as a "recovery"
+        # (the false_approve tile and the A/B test would still catch it, but
+        # the recovered list must not present risk as a win).
+        passed_ids = {c["invoice_id"] for c in agent_report["cases"] if c["verdict"] == "pass"}
+        recovered = []
+        for invoice_id, agent_dec in view.items():
+            base_dec = baseline_decisions.get(invoice_id)
+            if base_dec is None or agent_dec["action"] != Action.APPROVE:
+                continue
+            if base_dec["action"] == Action.APPROVE or invoice_id not in passed_ids:
+                continue
+            inv = self.store.get_invoice(invoice_id)
+            recovered.append(
+                {
+                    "invoice_id": invoice_id,
+                    "vendor_name": self.store.vendors().get(inv.vendor_id, "") if inv else "",
+                    "baseline_action": base_dec["action"],
+                    "baseline_reason": _reason_label(base_dec),
+                }
+            )
+        return {
+            "baseline": base_report["metrics"],
+            "agent": agent_report["metrics"],
+            "recovered": recovered,
+        }
+
+    def roi(self) -> dict:
+        """The cost case: measured where it can be, cited where it cannot.
+
+        Manual processing runs about US$9.40 per invoice, and fixing a
+        mis-keyed or mis-approved one adds 25-40% on top (Ardent Partners,
+        2025 — the source the README already cites). The agent's own cost is
+        token cost: agent_avg_tokens is the measured tokens per run when a real
+        provider reported usage, and None otherwise — left unmeasured rather
+        than guessed, the same honesty rule as the rest of the panel, and the
+        UI shows a dash rather than a dollar figure until it is measured (a run
+        carries the system prompt, the full invoice dump and several tool
+        results, so "a fraction of a cent" is a claim, not a measurement). The
+        headline is the manual cost and the 25-40% rework a zero-false-approve
+        run never triggers, not the token bill.
+        """
+        perf = self.performance()
+        n = perf["schema_pass"]["total"]
+        manual_cents = 940  # US$9.40 per invoice, Ardent Partners 2025
+        return {
+            "invoices": n,
+            "manual_cost_cents": manual_cents,
+            "manual_batch_cents": manual_cents * n,
+            "rework_low_pct": 25,
+            "rework_high_pct": 40,
+            "agent_avg_tokens": perf["avg_tokens_per_run"],
+            "agent_cost_measured": perf["avg_tokens_per_run"] is not None,
+            "false_approve": perf["false_approve"],
         }
 
     def schedule(self, as_of: str = DEMO_AS_OF) -> dict:
@@ -418,8 +622,8 @@ class Service:
         "unexpected" (no manifest ground truth) rather than scoring them —
         the metrics stay honest.
         """
-        if len(content) > 5 * 1024 * 1024:
-            raise ValueError("PDF too large (5 MB limit)")
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise ValueError(f"PDF too large ({MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit)")
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "-", Path(filename).stem) or "upload"
         tmp_dir = Path(tempfile.mkdtemp(prefix="apagent-upload-"))
         pdf_path = tmp_dir / f"{safe_name}.pdf"
@@ -440,6 +644,29 @@ class Service:
         self.store.add_invoice(doc)
         self._uploaded.add(doc.doc_id)
         return self.run_case(doc.doc_id)
+
+    def intake(self, source: str, filename: str, content: bytes) -> dict:
+        """Land a document from an external channel into the upload pipeline,
+        tagged with where it came from.
+
+        The seam for the email / Telegram intake work: a fetcher on the other
+        side normalises whatever it received (an email attachment, a file
+        exported from a chat) into (source, filename, PDF bytes) and calls
+        this. Extraction and the agent decision are EXACTLY the upload path —
+        one intake, one set of guardrails — so a new channel adds a provenance
+        label, never a second decision path that could drift from the first.
+        Like uploads, an intake document is session state and never touches the
+        committed dataset. See docs/INTAKE.md for the full contract, including
+        why the Telegram fetcher must not open a second getUpdates consumer.
+        """
+        if source not in VALID_INTAKE_SOURCES:
+            raise ValueError(
+                f"unknown intake source {source!r} (expected one of {sorted(VALID_INTAKE_SOURCES)})"
+            )
+        bundle = self.upload_invoice(filename, content)
+        self._intake_source[bundle["invoice_id"]] = source
+        bundle["intake_source"] = source
+        return bundle
 
     def confirm_payment(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """A human confirms an APPROVEd invoice for payment.
@@ -511,6 +738,116 @@ class Service:
         self._chat_confirmed.add(invoice_id)
         return self.run_case(invoice_id)
 
+    def upload_delivery_photo(
+        self, invoice_id: str, image_bytes: bytes, media_type: str, actor: str = "reviewer"
+    ) -> dict:
+        """A reviewer uploads a photo of a delivery note; it becomes a
+        chat-tier goods receipt against this invoice's PO and re-decides it.
+
+        The console equivalent of a warehouse colleague photographing the
+        signed docket instead of typing "it came". It runs the EXACT chat
+        pipeline — extract the claim, resolve it against OUR PO, apply the same
+        grn_gate — with the image as the only new part. A signed-in reviewer
+        counts as an authorised confirmer, but the informal-ceiling and quantity
+        checks still apply, so a photo never pays a large invoice on its own.
+        Session state like every other piece of chat evidence: the receipt lives
+        in memory and never reaches data/synthetic/.
+        """
+        from apagent.chat.extract import ChatExtractionError
+        from apagent.chat.resolve import resolve_grn
+        from apagent.chat.vision import extract_delivery_claim_from_image
+
+        invoice = self.store.get_invoice(invoice_id)
+        if invoice is None:
+            raise KeyError(invoice_id)
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
+            raise ValueError(f"image too large ({MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit)")
+        # The two providers with image input take exactly these types. Checked
+        # here so an iPhone HEIC gets a clear answer instead of an opaque
+        # provider error mid-demo.
+        if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+            raise ValueError(f"unsupported image type {media_type!r} — use JPEG, PNG, WebP or GIF")
+        # This invoice's own order, resolved the way the pipeline resolves it.
+        # Computed BEFORE the model call: the photo is uploaded from one
+        # invoice's page, so it must confirm THAT invoice's order — and if an
+        # ERP receipt already exists there is nothing for a photo to add, so
+        # refuse cheaply instead of paying for a vision call the store would
+        # reject anyway (add_grn refuses the ERP -> CHAT downgrade).
+        match = match_invoice(invoice, self.store.all_pos(), self.store.all_grns())
+        if match.po_id is None:
+            raise ValueError("no purchase order is matched to this invoice")
+        existing = self.store.get_grn_for_po(match.po_id)
+        if existing is not None and existing.source == EvidenceSource.ERP:
+            raise ValueError("an ERP goods receipt already exists for this order")
+
+        try:
+            claim = extract_delivery_claim_from_image(image_bytes, media_type)
+        except ChatExtractionError as exc:
+            raise ValueError(f"could not read the delivery photo: {exc}") from exc
+
+        captured_at = datetime.now().isoformat(timespec="seconds")
+        self._photo_seq += 1
+        evidence_id = f"PHOTO-EV-{self._photo_seq:04d}"
+        receipt, reason = resolve_grn(
+            claim,
+            self.store,
+            [],
+            confirmer_label=actor,
+            captured_at=captured_at,
+            evidence_id=evidence_id,
+        )
+        if receipt is None:
+            # resolve refused: the PO reference the photo names does not match
+            # ours, an item cannot be tied to the order, or no quantity was
+            # stated. The same safe refusal a chat message gets — surfaced to
+            # the reviewer, never acted on.
+            raise ValueError(f"the photo did not confirm a delivery ({reason})")
+
+        # The docket must name the order THIS invoice bills. Without this, a
+        # photo uploaded on invoice A's page could land a receipt on some other
+        # order — confirming a delivery the reviewer never meant to vouch for,
+        # and leaving the invoices that receipt actually affects outside
+        # _chat_confirmed, where a later re-run would leak session evidence
+        # into the benchmark numbers.
+        if receipt.ref_doc_id != match.po_id:
+            raise ValueError(
+                f"the docket names order {receipt.ref_doc_id}, but this invoice bills {match.po_id}"
+            )
+
+        self.store.add_grn(receipt)
+        # Evidence for the detail page. platform="photo" so the card can say the
+        # confirmation came from an image; no verbatim messages exist to keep.
+        self._chat_evidence[receipt.doc_id] = ChatGrnEvidence(
+            evidence_id=evidence_id,
+            platform="photo",
+            chat_id="photo-upload",
+            po_id=receipt.ref_doc_id,
+            confirmed_by=actor,
+            captured_at=captured_at,
+            messages=[],
+        )
+        # Every invoice this receipt can affect is held out of the benchmark,
+        # not just the one on screen — the same PO can back more than one
+        # invoice, and _benchmark_view must serve the committed decision for
+        # all of them (parity with the chat poller, which marks invoice_ids).
+        # The scan matches on the printed ref, like the chat harvester does: a
+        # ref-less invoice that only fallback-matches this PO is not caught.
+        # Unreachable today — every such PO carries an ERP receipt, refused
+        # above — and the same known limit as the chat path.
+        self._chat_confirmed.add(invoice_id)
+        for other in self.store.invoices_for_vendor(receipt.vendor_id):
+            if other.ref_doc_id == receipt.ref_doc_id and other.doc_id != invoice_id:
+                self._chat_confirmed.add(other.doc_id)
+                # And re-decide them (parity with on_chat_receipt): their proof
+                # of delivery just changed, and a stale cached HOLD next to
+                # passing gates reads as a broken console. One bad sibling must
+                # not fail the upload.
+                try:
+                    self.run_case(other.doc_id)
+                except Exception:
+                    continue
+        return self.run_case(invoice_id)
+
     def _chat_grn_view(self, grn, po) -> dict | None:
         """The chat confirmation behind a receipt, for the detail page.
 
@@ -544,6 +881,7 @@ class Service:
             ],
             "unconfirmed": unconfirmed,
             "messages": [m.model_dump() for m in evidence.messages] if evidence else [],
+            "source": evidence.platform if evidence else None,
         }
 
     def on_chat_receipt(self, result) -> None:
@@ -715,6 +1053,13 @@ class Service:
         )
         self.store.add_invoice(revision)
         chain.append(revision.doc_id)
+        # main's provenance seam, populated for the channel it was built for.
+        # NOT routed through intake(): that is upload_invoice, which takes the
+        # doc_id off the printed page and sets no `replaces`. A correction has
+        # to inherit its identity from the invoice under query, which is the
+        # whole defence -- so it shares the label, not the path.
+        self._intake_source[revision.doc_id] = "email"
+
         log.info("raised %s from %s", revision.doc_id, evidence.evidence_id)
         try:
             self._withdraw(revision.replaces, revision.doc_id)
@@ -986,6 +1331,7 @@ class Service:
             "clean_approved": sum(1 for c in clean if c["action"] == "APPROVE"),
             "clean_friction": sum(1 for c in clean if c["verdict"] == "friction"),
             "vendors": vendors,
+            "performance": self.performance(report),  # reuse the report — no second evaluate()
         }
 
     def config_info(self) -> dict:

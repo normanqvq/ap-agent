@@ -491,6 +491,12 @@ class AgentDecision(BaseModel):
     tool_calls: list[ToolCall]
     rounds_used: int
 
+    # Token usage summed across the run's LLM calls, so token-cost-per-run is
+    # a real measured number, not an estimate. None when the provider did not
+    # report usage (a stubbed test) or an older cached decision predates this.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
     # The message that goes to a human (ops chase, vendor query). Filled by
     # CODE from a fixed template with slots taken from our own documents —
     # never written by the model. reasoning is internal audit text; this
