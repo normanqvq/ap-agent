@@ -96,6 +96,14 @@ class ImapAdapter:
             log.warning("imap flag failed: %s: %s", type(exc).__name__, exc)
 
 
+class MailSender(Protocol):
+    """What the dispatcher needs from a transport."""
+
+    def send(self, message) -> bool:
+        """True if the message left the building. Never raises."""
+        ...
+
+
 class SmtpSender:
     """Outbound over STARTTLS."""
 
@@ -107,8 +115,25 @@ class SmtpSender:
     def configured(self) -> bool:
         return bool(self.host and os.getenv("SMTP_USER") and _password("SMTP_PASSWORD"))
 
-    def send(self, message) -> None:
-        with smtplib.SMTP(self.host, self.port, timeout=30) as server:
-            server.starttls()
-            server.login(os.getenv("SMTP_USER", ""), _password("SMTP_PASSWORD"))
-            server.send_message(message)
+    def send(self, message) -> bool:
+        """True if the server took it. Never raises, and says so out loud.
+
+        The mirror of ImapAdapter.poll, and it was missing: this is called
+        from the web app's startup and from a daemon thread, so an
+        unreachable relay used to be a ConnectionRefusedError out of the
+        lifespan and no console at all. A mail relay being down is an outage
+        of the mail feature, never of the product.
+
+        The caller needs the boolean rather than a log line: the dispatcher
+        records a query only once it has actually gone out, or the chase
+        timer would remind a vendor about mail they never received.
+        """
+        try:
+            with smtplib.SMTP(self.host, self.port, timeout=30) as server:
+                server.starttls()
+                server.login(os.getenv("SMTP_USER", ""), _password("SMTP_PASSWORD"))
+                server.send_message(message)
+            return True
+        except Exception as exc:  # noqa: BLE001 - a send must not take the app down
+            log.warning("smtp send failed: %s: %s", type(exc).__name__, exc)
+            return False

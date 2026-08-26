@@ -6,6 +6,10 @@ pipeline._render_outbound_message, which is already code-generated from our
 own records — a caller cannot pass free text through this and put words in
 the system's mouth.
 
+Nothing is recorded until the transport says the message left: a query in
+the registry is one the vendor is believed to have, and the chase timer
+reminds them about it. The same rule holds for a reminder's own timestamp.
+
 Idempotency is a rail, not a nicety. The service re-decides invoices whenever
 evidence changes, and each re-decision produces the same EMAIL action; without
 a key on (invoice, body) a vendor gets one copy per re-decision, which is how
@@ -45,7 +49,11 @@ class MailDispatcher:
         key = (invoice_id, body)
         if key in self._sent_keys:
             return self.registry.for_invoice(invoice_id)
-        query = self.registry.register(invoice_id, self.mail_from)
+        # Minted, not yet recorded: a recorded query is one the vendor has,
+        # and the chase timer reminds them about it. Recording before the
+        # send meant an unreachable relay produced a reminder about mail
+        # that never left.
+        query = self.registry.mint(invoice_id, self.mail_from)
 
         message = EmailMessage()
         message["From"] = self.mail_from
@@ -55,7 +63,12 @@ class MailDispatcher:
         message["Reply-To"] = query.reply_to
         message.set_content(body)
 
-        self.sender.send(message)
+        if not self.sender.send(message):
+            # The transport already logged why. Nothing is recorded, so the
+            # next dispatch tries this invoice again rather than waiting for
+            # a reply to a query that does not exist.
+            return None
+        self.registry.record(query)
         self._sent_keys.add(key)
         log.info("queried %s about %s", vendor_id, invoice_id)
         return query
@@ -82,6 +95,9 @@ class MailDispatcher:
             f"We wrote about invoice {invoice_id} and have not had a reply. "
             "Please send a corrected invoice, or the agreed basis for the difference."
         )
-        self.sender.send(message)
+        if not self.sender.send(message):
+            # chased_at unset, so the timer offers this one again next tick
+            # instead of counting a reminder nobody received.
+            return None
         query.chased_at = datetime.now().isoformat(timespec="seconds")
         return query

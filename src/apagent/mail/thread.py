@@ -58,22 +58,37 @@ class ThreadRegistry:
         self._by_message_id: dict[str, SentQuery] = {}
         self._by_token: dict[str, SentQuery] = {}
 
-    def register(self, invoice_id: str, mail_from: str) -> SentQuery:
-        """Mint the Message-ID and token for a query about to be sent."""
+    def mint(self, invoice_id: str, mail_from: str) -> SentQuery:
+        """The Message-ID and token for a query about to be sent.
+
+        Minting and recording are separate steps because the transport sits
+        between them and can fail. A recorded query is one the vendor is
+        believed to have: the chase timer will remind them about it, and a
+        reply naming it correlates. Recording before the send meant a
+        refused SMTP connection produced a reminder about mail that was
+        never delivered.
+        """
         token = secrets.token_urlsafe(9)
         local, _, domain = mail_from.partition("@")
         message_id = f"<{secrets.token_hex(12)}.{invoice_id}@{domain or 'localhost'}>"
-        query = SentQuery(
+        return SentQuery(
             invoice_id=invoice_id,
             message_id=message_id,
             token=token,
             reply_to=f"{local}+{invoice_id}.{token}@{domain}",
             sent_at=datetime.now().isoformat(timespec="seconds"),
         )
-        self._by_invoice[invoice_id] = query
-        self._by_message_id[message_id] = query
-        self._by_token[token] = query
+
+    def record(self, query: SentQuery) -> SentQuery:
+        """Index a query that actually went out, every way a reply may name it."""
+        self._by_invoice[query.invoice_id] = query
+        self._by_message_id[query.message_id] = query
+        self._by_token[query.token] = query
         return query
+
+    def register(self, invoice_id: str, mail_from: str) -> SentQuery:
+        """Mint and record in one step, for a caller with no send to fail."""
+        return self.record(self.mint(invoice_id, mail_from))
 
     def outstanding(self) -> list[SentQuery]:
         return [q for q in self._by_invoice.values() if not q.answered]

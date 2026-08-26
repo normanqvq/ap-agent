@@ -10,6 +10,7 @@ invoice by anything except text the sender chose.
 
 import json
 from datetime import datetime, timedelta
+from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
@@ -314,13 +315,21 @@ body text
 
 
 class FakeSender:
-    """Records what would have gone out. The only thing tests ever send to."""
+    """Records what would have gone out. The only thing tests ever send to.
 
-    def __init__(self):
+    `refuse` is the unreachable relay: send returns False, exactly as
+    SmtpSender does when the connection is refused or the login fails.
+    """
+
+    def __init__(self, refuse=False):
         self.sent = []
+        self.refuse = refuse
 
-    def send(self, message):
+    def send(self, message) -> bool:
+        if self.refuse:
+            return False
         self.sent.append(message)
+        return True
 
 
 @pytest.fixture
@@ -674,6 +683,78 @@ def test_a_reply_never_moves_the_measured_benchmark():
 def test_a_case_with_no_replies_reports_an_empty_list():
     service = Service()
     assert service.get_case("INV-V005-3005")["vendor_replies"] == []
+
+
+# --- a relay that is down costs the mail feature, never the console -------
+
+
+def test_the_sender_returns_false_instead_of_raising(monkeypatch):
+    """SmtpSender is called from startup and from a daemon thread. Raising
+    out of either is how a mail outage became a product outage."""
+    from apagent.mail.adapters import SmtpSender
+
+    def refuse(*args, **kwargs):
+        raise ConnectionRefusedError("nothing is listening")
+
+    monkeypatch.setattr("smtplib.SMTP", refuse)
+    assert SmtpSender(host="127.0.0.1", port=2525).send(EmailMessage()) is False
+
+
+def test_a_refused_send_records_no_query(dispatcher):
+    """A recorded query is one the vendor has. Recording a refused send left
+    the chase timer ready to remind them about mail that never left."""
+    dispatcher.sender.refuse = True
+    assert dispatcher.send_query("INV-V005-3005", "V005", "please explain") is None
+    assert dispatcher.registry.for_invoice("INV-V005-3005") is None
+    assert dispatcher.registry.outstanding() == []
+
+
+def test_a_refused_send_is_tried_again_when_the_relay_comes_back(dispatcher):
+    """Idempotency must not swallow the retry: nothing went out, so the same
+    body is not 'already sent'."""
+    dispatcher.sender.refuse = True
+    dispatcher.send_query("INV-V005-3005", "V005", "please explain")
+    dispatcher.sender.refuse = False
+    query = dispatcher.send_query("INV-V005-3005", "V005", "please explain")
+    assert query is not None
+    assert len(dispatcher.sender.sent) == 1
+    assert dispatcher.registry.for_invoice("INV-V005-3005") is query
+
+
+def test_a_refused_chase_does_not_count_as_a_reminder(dispatcher):
+    query = dispatcher.registry.register("INV-V005-3005", "ap@example.test")
+    dispatcher.sender.refuse = True
+    assert dispatcher.send_chase("INV-V005-3005", "V005") is None
+    assert query.chased_at is None
+    dispatcher.sender.refuse = False
+    assert dispatcher.send_chase("INV-V005-3005", "V005") is query
+    assert query.chased_at is not None
+
+
+def test_an_unreachable_relay_does_not_stop_the_console_starting(monkeypatch):
+    """The wiring in app.py, which nothing tested at all. The lifespan used
+    to dispatch inline, so a refused SMTP connection came out of startup and
+    there was no console to demo."""
+    from fastapi.testclient import TestClient
+
+    import apagent.api.service as service_module
+    from apagent.api.app import app
+
+    def refuse(*args, **kwargs):
+        raise ConnectionRefusedError("nothing is listening")
+
+    monkeypatch.setattr("smtplib.SMTP", refuse)
+    monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
+    monkeypatch.setenv("SMTP_USER", "ap@example.test")
+    monkeypatch.setenv("SMTP_PASSWORD", "app password")
+    monkeypatch.setenv("APAGENT_MAIL_FROM", "ap@example.test")
+    # A fresh singleton, restored afterwards: the lifespan attaches the mail
+    # side to whatever get_service() returns, and that must not leak.
+    monkeypatch.setattr(service_module, "_service", None)
+
+    with TestClient(app) as client:  # entering runs the lifespan
+        assert client.post("/api/login", json={"name": "Norman"}).status_code == 200
+        assert client.get("/api/invoices").status_code == 200
 
 
 # --- the data change that makes EMAIL fire at all -------------------------

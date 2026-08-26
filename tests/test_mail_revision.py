@@ -263,8 +263,9 @@ class FakeSender:
     def __init__(self):
         self.sent = []
 
-    def send(self, message):
+    def send(self, message) -> bool:
         self.sent.append(message)
+        return True
 
 
 def _reply_with_pdf(reply_to, message_id, sender="ar-dept@pacific.example"):

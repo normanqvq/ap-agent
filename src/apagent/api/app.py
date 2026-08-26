@@ -15,8 +15,10 @@ live in memory: a restart signs everyone out, which is fine for a demo
 and means nothing secret is ever written to disk.
 """
 
+import logging
 import os
 import secrets
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -26,6 +28,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from apagent.api.service import get_service
+
+log = logging.getLogger(__name__)
 
 WEB = Path(__file__).resolve().parent / "web"
 
@@ -42,6 +46,11 @@ async def lifespan(_app: FastAPI):
 
     No TELEGRAM_BOT_TOKEN means no thread and no behaviour change at all,
     which is also what keeps the test suite offline with no special casing.
+
+    Nothing in here may prevent the console from starting. An integration
+    that cannot reach its server is an integration that is down; a console
+    that will not start is the whole product being down, and the mail side
+    used to do exactly that when the SMTP host refused the connection.
     """
     from apagent.chat.runner import start_if_configured
 
@@ -53,17 +62,30 @@ async def lifespan(_app: FastAPI):
     from apagent.mail.runner import start_if_configured as start_mail
 
     mail_runner = None
-    sender = SmtpSender()
-    mail_from = os.getenv("APAGENT_MAIL_FROM", "")
-    if sender.configured and mail_from:
-        service.attach_mail(VendorDirectory.from_file(), sender, mail_from)
-        service.dispatch_vendor_queries()
-        mail_runner = start_mail(
-            service.mail_harvester(),
-            service._dispatcher,
-            on_reply=service.on_vendor_reply,
-            config=service.config,
-        )
+    try:
+        sender = SmtpSender()
+        mail_from = os.getenv("APAGENT_MAIL_FROM", "")
+        if sender.configured and mail_from:
+            service.attach_mail(VendorDirectory.from_file(), sender, mail_from)
+            # Off the critical path. Sending survives an unreachable relay
+            # now, but a host that hangs rather than refuses still costs up
+            # to 30 s per queued query, and the console must be up before
+            # then -- a mail outage may cost the mail feature and nothing
+            # else. Catching up on what was outstanding at boot is the only
+            # job here: from now on a decision dispatches its own query.
+            threading.Thread(
+                target=service.dispatch_vendor_queries,
+                daemon=True,
+                name="apagent-mail-boot",
+            ).start()
+            mail_runner = start_mail(
+                service.mail_harvester(),
+                service._dispatcher,
+                on_reply=service.on_vendor_reply,
+                config=service.config,
+            )
+    except Exception:  # noqa: BLE001 - the console outlives its integrations
+        log.exception("mail intake did not start; the console runs without it")
     try:
         yield
     finally:
