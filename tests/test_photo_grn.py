@@ -42,6 +42,16 @@ def test_call_model_vision_refuses_a_provider_without_image_support():
         call_model_vision(b"x", "image/jpeg", "prompt", "system", provider="deepseek")
 
 
+def test_call_model_vision_refuses_a_compat_endpoint(monkeypatch):
+    """provider=anthropic pointed at a compatible endpoint is not
+    image-capable: a live probe showed DeepSeek's endpoint silently drops
+    image blocks (the model answered "NO IMAGE RECEIVED"), which would make a
+    good photo look like a bad one. Refused loudly, with the real reason."""
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
+    with pytest.raises(ValueError, match="image blocks"):
+        call_model_vision(b"x", "image/png", "prompt", "system", provider="anthropic")
+
+
 def test_extract_from_image_parses_the_same_claim_schema(monkeypatch):
     """The image reader emits the identical claim dict the text reader does, so
     resolve_grn consumes it unchanged."""

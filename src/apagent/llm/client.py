@@ -52,6 +52,7 @@ export commands.
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -429,6 +430,19 @@ def call_model_vision(
     """
     provider = provider or os.getenv("LLM_PROVIDER", "anthropic")
     if provider == "anthropic":
+        # "anthropic" pointed at a compatible endpoint is NOT image-capable:
+        # a live probe against DeepSeek's compat endpoint showed it silently
+        # DROPS image blocks — the model answered "NO IMAGE RECEIVED" — so the
+        # photo would "refuse" for the wrong reason and look like a bad photo.
+        # Loud beats quiet: refuse up front with the real explanation.
+        base_url = os.getenv("ANTHROPIC_BASE_URL")
+        host = urlparse(base_url).netloc if base_url else ""
+        if base_url and host != "api.anthropic.com":
+            raise ValueError(
+                f"ANTHROPIC_BASE_URL points at {host}, and compatible endpoints "
+                "do not deliver image blocks to the model; the photo path needs "
+                "first-party Anthropic or Bedrock"
+            )
         client, model = _anthropic_client_and_model()
     elif provider == "bedrock":
         client, model = _bedrock_client_and_model()
