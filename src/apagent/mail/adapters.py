@@ -9,19 +9,32 @@ rather than taking a webhook: nothing new has to be exposed. IDLE would hold
 a socket open for efficiency we do not need at one mailbox and a handful of
 messages.
 
-UNSEEN as the queue, but UNSEEN ALONE IS NOT A QUEUE. A real person's inbox
-holds thousands of unread messages -- 4,581 on the mailbox this was first
-run against -- and fetching all of them takes far longer than the poll
-interval, so the one reply being waited for is never reached. Three bounds
-make it a queue: a SINCE window (a reply to a query this process sent cannot
-predate the process), a cap per poll, and an in-memory record of which uids
-have already been looked at so each poll advances instead of restarting.
+THE QUEUE IS NOT THE UNREAD FLAG. That was the first design and it failed
+twice on the first real mailbox. Once because UNSEEN there meant 4,581
+messages, and fetching all of them took far longer than the poll interval,
+so the reply at the top was never reached. Then, with a date window added,
+because the person who owns the mailbox glanced at their inbox and opened
+the reply -- which cleared the flag and silently stole the message from the
+poller. A queue anyone can drain by looking at it is not a queue, and in a
+live demo the one person guaranteed to be watching that inbox is us.
 
-PEEK on the fetch, so looking does not consume. The seen flag is then set
-explicitly, and ONLY for a message that correlated to one of our own queries
--- see MailRunner.tick. Marking a stranger's newsletter read because it
-happened to be sitting in the same inbox is not ours to do; the in-memory
-record is what stops it being re-read, not the flag.
+So the window is time, not flags: SINCE a date the process could have sent a
+query on, capped per poll, with an in-memory record of which uids have
+already been looked at so each poll advances instead of restarting. On this
+mailbox that is 22 messages instead of 4,581, and it does not care what
+anybody has read.
+
+PEEK on the fetch, so looking does not consume. The seen flag is still set
+afterwards, but ONLY for a message that correlated to one of our own queries
+(see MailRunner.tick), and now it is a courtesy to whoever reads the mailbox
+rather than load-bearing state. Marking a stranger's newsletter read because
+it happened to sit in the same inbox is not ours to do.
+
+Known edge, not closed: the examined record is per process, so a restart
+re-examines the window. Harmless today -- the thread registry is in memory
+too, so a re-examined reply correlates to nothing. If the registry is ever
+persisted, the set of handled message-ids has to be persisted with it, or a
+restart raises a second correction from one reply.
 
 Real UIDs (imap.uid) rather than sequence numbers: sequence numbers shift
 when anything is expunged, so a number cached between the search and the
@@ -49,6 +62,8 @@ MAX_PER_POLL = 25
 # How far back a reply could possibly be. A query sent by this process cannot
 # be answered before this process started, so yesterday is already generous
 # -- it exists only so a run that crosses midnight does not blind itself.
+# This is the whole filter now, so it has to be a window nothing relevant
+# falls outside of, and small enough that re-examining it costs nothing.
 LOOKBACK_DAYS = 1
 
 
@@ -97,7 +112,10 @@ class ImapAdapter:
         return bool(self.host and self.user and _password("IMAP_PASSWORD"))
 
     def poll(self) -> list[tuple[bytes, bytes]]:
-        """[(uid, raw)] for unseen mail. Returns [] on any transport problem.
+        """[(uid, raw)] for recent mail this process has not examined yet.
+
+        Read or unread: see the module docstring. Returns [] on any
+        transport problem.
 
         Never raises, for the same reason TelegramAdapter.poll does not: this
         runs in a daemon thread inside the web process. But it logs, because
@@ -107,7 +125,7 @@ class ImapAdapter:
             with imaplib.IMAP4_SSL(self.host) as imap:
                 imap.login(self.user, _password("IMAP_PASSWORD"))
                 imap.select("INBOX")
-                status, data = imap.uid("SEARCH", None, "UNSEEN", "SINCE", self._since)
+                status, data = imap.uid("SEARCH", None, "SINCE", self._since)
                 if status != "OK":
                     return []
                 fresh = [uid for uid in data[0].split() if uid not in self._examined]

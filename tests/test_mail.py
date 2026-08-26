@@ -939,10 +939,11 @@ class FakeImap:
     messages, of which a handful are recent.
     """
 
-    def __init__(self, uids, recent=None, sizes=None):
+    def __init__(self, uids, recent=None, sizes=None, seen=()):
         self.uids = [str(u).encode() for u in uids]
         self.recent = [str(u).encode() for u in (uids if recent is None else recent)]
         self.sizes = sizes or {}
+        self.seen = {str(u).encode() for u in seen}
         self.fetched = []
         self.stored = []
         self.searches = []
@@ -963,6 +964,8 @@ class FakeImap:
         if command == "SEARCH":
             self.searches.append(args)
             pool = self.recent if "SINCE" in args else self.uids
+            if "UNSEEN" in args:
+                pool = [u for u in pool if u not in self.seen]
             return ("OK", [b" ".join(pool)])
         if command == "FETCH":
             uid, what = args
@@ -993,6 +996,20 @@ def test_the_poll_is_bounded_by_a_date_window(monkeypatch):
     got = adapter.poll()
     assert [uid for uid, _ in got] == [b"4998", b"4999"]
     assert "SINCE" in imap.searches[0]
+
+
+def test_a_reply_someone_already_opened_is_still_picked_up(monkeypatch):
+    """The second way the unread flag failed as a queue.
+
+    A date window fixed the volume, but the person who owns the mailbox
+    glanced at their inbox and opened the reply. That cleared the seen flag
+    and the poller never saw it again -- a queue anyone can drain by looking.
+    The window is time now, and reads nothing into who has read what.
+    """
+    imap = FakeImap(uids=[1, 2, 3], seen=[2])
+    adapter = _adapter(monkeypatch, imap)
+    assert [uid for uid, _ in adapter.poll()] == [b"1", b"2", b"3"]
+    assert "UNSEEN" not in imap.searches[0]
 
 
 def test_one_poll_takes_a_bounded_bite(monkeypatch):
