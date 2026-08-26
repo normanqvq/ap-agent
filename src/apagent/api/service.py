@@ -663,6 +663,23 @@ class Service:
             raise KeyError(invoice_id)
         if len(image_bytes) > 5 * 1024 * 1024:
             raise ValueError("image too large (5 MB limit)")
+        # The two providers with image input take exactly these types. Checked
+        # here so an iPhone HEIC gets a clear answer instead of an opaque
+        # provider error mid-demo.
+        if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+            raise ValueError(f"unsupported image type {media_type!r} — use JPEG, PNG, WebP or GIF")
+        # This invoice's own order, resolved the way the pipeline resolves it.
+        # Computed BEFORE the model call: the photo is uploaded from one
+        # invoice's page, so it must confirm THAT invoice's order — and if an
+        # ERP receipt already exists there is nothing for a photo to add, so
+        # refuse cheaply instead of paying for a vision call the store would
+        # reject anyway (add_grn refuses the ERP -> CHAT downgrade).
+        match = match_invoice(invoice, self.store.all_pos(), self.store.all_grns())
+        if match.po_id is None:
+            raise ValueError("no purchase order is matched to this invoice")
+        existing = self.store.get_grn_for_po(match.po_id)
+        if existing is not None and existing.source == EvidenceSource.ERP:
+            raise ValueError("an ERP goods receipt already exists for this order")
 
         try:
             claim = extract_delivery_claim_from_image(image_bytes, media_type)
@@ -686,6 +703,17 @@ class Service:
             # the reviewer, never acted on.
             raise ValueError(f"the photo did not confirm a delivery ({reason})")
 
+        # The docket must name the order THIS invoice bills. Without this, a
+        # photo uploaded on invoice A's page could land a receipt on some other
+        # order — confirming a delivery the reviewer never meant to vouch for,
+        # and leaving the invoices that receipt actually affects outside
+        # _chat_confirmed, where a later re-run would leak session evidence
+        # into the benchmark numbers.
+        if receipt.ref_doc_id != match.po_id:
+            raise ValueError(
+                f"the docket names order {receipt.ref_doc_id}, but this invoice bills {match.po_id}"
+            )
+
         self.store.add_grn(receipt)
         # Evidence for the detail page. platform="photo" so the card can say the
         # confirmation came from an image; no verbatim messages exist to keep.
@@ -698,7 +726,14 @@ class Service:
             captured_at=captured_at,
             messages=[],
         )
+        # Every invoice this receipt can affect is held out of the benchmark,
+        # not just the one on screen — the same PO can back more than one
+        # invoice, and _eval_view must serve the committed decision for all of
+        # them (parity with the chat poller, which marks result.invoice_ids).
         self._chat_confirmed.add(invoice_id)
+        for other in self.store.invoices_for_vendor(receipt.vendor_id):
+            if other.ref_doc_id == receipt.ref_doc_id:
+                self._chat_confirmed.add(other.doc_id)
         return self.run_case(invoice_id)
 
     def _chat_grn_view(self, grn, po) -> dict | None:

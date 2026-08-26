@@ -17,7 +17,7 @@ import apagent.pipeline as pipeline
 from apagent.api.service import Service
 from apagent.chat import vision
 from apagent.llm.client import call_model_vision
-from apagent.schemas import Action, AgentDecision
+from apagent.schemas import Action, AgentDecision, EvidenceSource
 
 
 def _approve_agent(**kwargs):
@@ -81,6 +81,61 @@ def test_photo_releases_the_missing_grn_case(monkeypatch):
     bundle = svc.upload_delivery_photo("INV-V006-3019", b"fakejpg", "image/jpeg")
     assert bundle["decision"]["action"] == "APPROVE"
     assert bundle["chat_grn"]["source"] == "photo"
+
+
+def test_photo_naming_a_different_po_is_refused(monkeypatch):
+    """The photo is uploaded from ONE invoice's page, so it must confirm that
+    invoice's order. A docket naming some other PO is refused outright —
+    otherwise a receipt would land on an order the reviewer never meant to
+    vouch for, and the invoices it actually affects would sit outside
+    _chat_confirmed, where a later re-run leaks session evidence into the
+    benchmark numbers."""
+    svc = Service()
+    other_po = svc.store.get_invoice("INV-V001-3001").ref_doc_id
+    monkeypatch.setattr(
+        vision,
+        "extract_delivery_claim_from_image",
+        lambda image_bytes, media_type, provider=None: {
+            "is_delivery_confirmation": True,
+            "po_reference": other_po,
+            "items": [],
+            "everything_arrived": True,
+            "notes": None,
+        },
+    )
+    with pytest.raises(ValueError, match="names order"):
+        svc.upload_delivery_photo("INV-V006-3019", b"fakejpg", "image/jpeg")
+    # Nothing was recorded: the other order keeps its ERP receipt, and no
+    # invoice was marked chat-confirmed.
+    assert svc.store.get_grn_for_po(other_po).source == EvidenceSource.ERP
+    assert not svc._chat_confirmed
+
+
+def test_unsupported_image_type_is_refused_before_the_model(monkeypatch):
+    """An iPhone HEIC gets a clear refusal up front, not an opaque provider
+    error after a wasted vision call."""
+    svc = Service()
+    monkeypatch.setattr(
+        vision,
+        "extract_delivery_claim_from_image",
+        lambda *a, **k: pytest.fail("the extractor must not run for a rejected type"),
+    )
+    with pytest.raises(ValueError, match="unsupported image type"):
+        svc.upload_delivery_photo("INV-V006-3019", b"heicbytes", "image/heic")
+
+
+def test_photo_cannot_shadow_an_erp_receipt(monkeypatch):
+    """When the order already has an ERP receipt there is nothing for a photo
+    to add; refused before the model call (the store would refuse the
+    ERP -> CHAT downgrade anyway — this just refuses it cheaply and clearly)."""
+    svc = Service()
+    monkeypatch.setattr(
+        vision,
+        "extract_delivery_claim_from_image",
+        lambda *a, **k: pytest.fail("the extractor must not run when an ERP receipt exists"),
+    )
+    with pytest.raises(ValueError, match="ERP goods receipt already exists"):
+        svc.upload_delivery_photo("INV-V001-3001", b"fakejpg", "image/jpeg")
 
 
 def test_photo_that_confirms_nothing_is_refused(monkeypatch):

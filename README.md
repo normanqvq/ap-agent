@@ -13,7 +13,7 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
 ![RAG](https://img.shields.io/badge/RAG-BM25-6366F1)
 ![Matching](https://img.shields.io/badge/matching-Hungarian-0EA5E9)
-![Tests](https://img.shields.io/badge/tests-287%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-290%20passing-16A34A)
 ![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-84CC16)
 
@@ -172,7 +172,7 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 287 offline tests, no API key needed
+pytest                                    # 290 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
@@ -210,7 +210,7 @@ deploy/               # optional: Bedrock AgentCore entrypoint + local-run / dep
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
 data/samples/         # three attack PDFs for the live upload demo
-tests/                # 287 offline tests
+tests/                # 290 offline tests
 docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap analysis
 ```
 

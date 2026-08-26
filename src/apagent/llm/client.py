@@ -453,7 +453,10 @@ def call_model_vision(
     ]
     response = client.messages.create(
         model=model,
-        max_tokens=1024,
+        # Same budget as the tool path: a docket with many line items must not
+        # have its JSON truncated at a smaller cap (truncation reads as
+        # "model output is not JSON" and refuses a perfectly good photo).
+        max_tokens=4096,
         system=system,
         messages=[{"role": "user", "content": content}],
     )

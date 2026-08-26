@@ -30,7 +30,7 @@ dev = [
     "pytest",
     "ruff",
     "pre-commit",
-    # so `pip install -e ".[dev]"` then `pytest` runs the FULL 287 — the
+    # so `pip install -e ".[dev]"` then `pytest` runs the FULL 290 — the
     # graph/mcp tests importorskip these and would otherwise skip 31.
     "langgraph",
     "mcp>=1.2,<2",
