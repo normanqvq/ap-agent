@@ -357,8 +357,20 @@ def _at_po_prices(svc, invoice_id="INV-V005-3005"):
     )
 
 
-def _wired(monkeypatch, corrected_total_cents=49000, extraction_raises=False, at_po_prices=False):
-    """A service with the mail side attached and extraction stubbed."""
+def _wired(
+    monkeypatch,
+    corrected_total_cents=49000,
+    extraction_raises=False,
+    at_po_prices=False,
+    cache_path=None,
+):
+    """A service with the mail side attached and extraction stubbed.
+
+    cache_path redirects the decisions cache instead of stubbing the write.
+    A test that stubs _save_cache cannot prove anything about what gets
+    written -- which is what the "the cache file is untouched" test used to
+    do, while claiming the opposite.
+    """
     # The revision runs the whole pipeline, which calls the agent. Stubbed
     # the way test_chat stubs it: this suite is about what code does with a
     # corrected document, not about the model. _save_cache is stubbed too --
@@ -373,7 +385,12 @@ def _wired(monkeypatch, corrected_total_cents=49000, extraction_raises=False, at
         },
     )
     svc = Service()
-    monkeypatch.setattr(svc, "_save_cache", lambda: None)
+    if cache_path is None:
+        monkeypatch.setattr(svc, "_save_cache", lambda: None)
+    else:
+        # After construction: __init__ reads CACHE, and redirecting it first
+        # would hand the service an empty benchmark instead of the real one.
+        monkeypatch.setattr(service_module, "CACHE", cache_path)
     svc.attach_mail(
         VendorDirectory({"V005": {"email": "billing@pacific.example"}}),
         FakeSender(),
@@ -502,24 +519,66 @@ def test_the_next_correction_supersedes_one_that_could_not_be_decided(monkeypatc
 
 
 def test_a_revision_does_not_move_the_headline_metrics(monkeypatch):
-    svc = _wired(monkeypatch)
-    before_analytics = svc.analytics()["metrics"]
-    before_metrics = svc.metrics()["false_approve"]
+    """Every tile on both pages, not just the one that cannot move.
+
+    This used to compare the whole analytics metrics dict but only
+    false_approve out of metrics() -- precisely the field a revision does
+    not touch. total, decided, pending, stp_pct and touchless_pct all moved,
+    and CI was happy.
+    """
+    svc = _wired(monkeypatch, at_po_prices=True)
+    before_analytics = svc.analytics()
+    before_metrics = svc.metrics()
     _deliver(svc, _reply_with_pdf)
-    after_analytics = svc.analytics()["metrics"]
-    after_metrics = svc.metrics()["false_approve"]
-    assert after_analytics == before_analytics
-    assert after_metrics == before_metrics
+    assert svc.metrics() == before_metrics
+    after_analytics = svc.analytics()
+    assert after_analytics["metrics"] == before_analytics["metrics"]
+    assert after_analytics["distribution"] == before_analytics["distribution"]
 
 
-def test_the_committed_decision_and_cache_file_are_untouched(monkeypatch):
+def _v005(svc):
+    return next(v for v in svc.analytics()["vendors"] if v["vendor_id"] == "V005")
+
+
+def test_a_correction_is_one_obligation_in_the_vendor_rollup(monkeypatch):
+    """The rollup is a live business view, so it SHOULD follow the
+    correction down -- what it must not do is show both documents. It did:
+    one order, billed twice on screen."""
+    svc = _wired(monkeypatch, at_po_prices=True)
+    before = _v005(svc)
+    original = svc.store.get_invoice("INV-V005-3005").total_cents
+    _deliver(svc, _reply_with_pdf)
+    corrected = svc.store.get_invoice("INV-V005-3005-R1").total_cents
+
+    after = _v005(svc)
+    assert after["invoice_count"] == before["invoice_count"]
+    assert after["billed_totals"]["USD"] == before["billed_totals"]["USD"] - original + corrected
+
+
+def test_a_revision_is_reported_as_an_unmeasured_decision(monkeypatch):
+    """The other half of holding it out. Dropping it from the scored rates is
+    honest; dropping it from the harness's view of what was decided is how
+    three approvals hid behind "false approvals: 0"."""
+    svc = _wired(monkeypatch, at_po_prices=True)
+    assert svc.analytics()["unexpected"] == []
+    _deliver(svc, _reply_with_pdf)
+    assert svc.analytics()["unexpected"] == ["INV-V005-3005-R1"]
+    assert svc.metrics()["false_approve"] == 0
+
+
+def test_the_committed_decision_and_cache_file_are_untouched(monkeypatch, tmp_path):
+    """With the write LIVE and the cache redirected. Stubbing _save_cache and
+    then hashing the file it never wrote proved nothing at all."""
     before_hash = hashlib.sha256(DECISIONS_CACHE.read_bytes()).hexdigest()
-    svc = _wired(monkeypatch)
+    written = tmp_path / "decisions.json"
+    svc = _wired(monkeypatch, at_po_prices=True, cache_path=written)
     _deliver(svc, _reply_with_pdf)
-    on_disk = json.loads(DECISIONS_CACHE.read_text(encoding="utf-8"))
+
+    assert written.exists()  # the write really happened
+    on_disk = json.loads(written.read_text(encoding="utf-8"))
     assert on_disk["INV-V005-3005"]["action"] == "EMAIL"
-    after_hash = hashlib.sha256(DECISIONS_CACHE.read_bytes()).hexdigest()
-    assert after_hash == before_hash
+    assert [k for k in on_disk if k.startswith("INV-V005-3005-R")] == []
+    assert hashlib.sha256(DECISIONS_CACHE.read_bytes()).hexdigest() == before_hash
 
 
 # --- one obligation, one payable document --------------------------------

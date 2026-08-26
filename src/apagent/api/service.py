@@ -94,10 +94,10 @@ class Service:
         self._uploaded: set[str] = set()
         # Invoices whose decision this session used chat evidence for. Session
         # state like the two above, but held out of the eval differently — see
-        # _eval_view for why dropping them would be wrong.
+        # _benchmark_view for why dropping them would be wrong.
         self._chat_confirmed: set[str] = set()
         # The decisions as committed, before this session touched anything.
-        # _eval_view serves these for chat-confirmed invoices so the measured
+        # _benchmark_view serves these for chat-confirmed invoices so the measured
         # benchmark stays the benchmark.
         self._committed: dict[str, dict] = dict(self._cache)
         # Every message the system "sent" this session. Demo build: recorded
@@ -130,15 +130,43 @@ class Service:
 
     # --- decisions cache ---------------------------------------------------
 
-    def _eval_view(self) -> dict[str, dict]:
-        """The decisions the eval harness scores: the committed benchmark,
-        with this session's own evidence held out.
+    def _session_documents(self) -> set[str]:
+        """Documents that did not come from the ERP dataset: this session's
+        uploads, and the corrections vendors mailed in.
+
+        The manifest has no entry for any of them, so the harness cannot
+        score them either way and they stay out of every rate. They do not
+        stay out of the harness's INPUT -- see _harness_input.
+        """
+        return self._uploaded | {doc_id for ids in self._revisions.values() for doc_id in ids}
+
+    def _harness_input(self) -> dict[str, dict]:
+        """Everything evaluate() is shown: the benchmark, plus this session's
+        own documents so they surface under `unexpected`.
+
+        Holding them out of the scored RATES is honest -- there is no ground
+        truth for them. Holding them out of the harness entirely is merely
+        convenient, and it is what this code did. harness.py says plainly why
+        `unexpected` exists ("an approval hiding here would be an unmeasured
+        payment"), the Analytics page has a slot for exactly that sentence,
+        and dropping these decisions before evaluate() saw them guaranteed
+        the slot stayed empty while approvals were being made. They cost
+        nothing to include: `unexpected` is derived from keys with no
+        manifest entry, and not one rate is computed from it.
+        """
+        session = {k: v for k, v in self._cache.items() if k in self._session_documents()}
+        return {**self._benchmark_view(), **session}
+
+    def _benchmark_view(self) -> dict[str, dict]:
+        """The ERP dataset's decisions: the population every rate is measured
+        over, and the file that goes to disk.
 
         The two kinds of session evidence need OPPOSITE treatment, which is
         the whole reason this helper exists:
 
-        - An uploaded invoice has no manifest entry, so the harness cannot
-          score it either way. Dropping it is invisible and correct.
+        - An uploaded invoice or a mailed-in correction has no manifest
+          entry, so the harness cannot score it either way. Keeping it out
+          of the rates is invisible and correct.
         - A chat-confirmed invoice DOES have a manifest entry (INV-V006-3019
           is planted as `missing_grn`). Drop its key and the harness reports
           it under `missing`, which fails the committed assertions and drags
@@ -153,15 +181,10 @@ class Service:
         Used by _save_cache, metrics and analytics, so the file on disk and
         the two on-screen scorecards can never disagree.
         """
-        # A revision raised from a vendor's reply is the first case, exactly
-        # like an upload: it has no manifest entry, so the harness cannot
-        # score it either way and dropping it is invisible. The invoice it
-        # corrects keeps its own committed decision, which is what stops a
-        # correction from quietly improving the benchmark.
-        revisions = {doc_id for ids in self._revisions.values() for doc_id in ids}
+        held_out = self._session_documents()
         view = {}
         for invoice_id, decision in self._cache.items():
-            if invoice_id in self._uploaded or invoice_id in revisions:
+            if invoice_id in held_out:
                 continue
             if invoice_id in self._chat_confirmed and invoice_id in self._committed:
                 view[invoice_id] = self._committed[invoice_id]
@@ -171,7 +194,8 @@ class Service:
 
     def _save_cache(self) -> None:
         CACHE.write_text(
-            json.dumps(self._eval_view(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+            json.dumps(self._benchmark_view(), indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
         )
 
     def cached_decision(self, invoice_id: str) -> dict | None:
@@ -304,7 +328,7 @@ class Service:
     def metrics(self) -> dict:
         """The dashboard's headline numbers, all measured over the same set.
 
-        Every number here reads _eval_view, not the live cache. They used to
+        Every number here reads _benchmark_view, not the live cache. They used to
         disagree: STP counted this session's decisions while false approvals
         were scored against the committed benchmark, so a chat confirmation
         flipping an invoice pushed STP up without the defect it cleared ever
@@ -318,8 +342,16 @@ class Service:
         it is shown on the invoice's own page, where the conversation behind
         it is visible too, rather than folded into a rate.
         """
-        decided = list(self._eval_view().values())
-        total = len(self._ordered_invoices())
+        decided = list(self._benchmark_view().values())
+        # The SAME population `decided` comes from. This used to count every
+        # invoice in the store, so the moment a correction arrived the tiles
+        # read 23/22 with a phantom "Pending 1", and every rate quietly
+        # divided by a denominator one larger than its numerator's world:
+        # STP 68 -> 65 and touchless 82 -> 78, live, because the feature
+        # fired. A document with no ground truth is not pending; it is not
+        # part of this measurement at all.
+        held_out = self._session_documents()
+        total = sum(1 for inv in self._ordered_invoices() if inv.doc_id not in held_out)
         counts = {a.value: 0 for a in Action}
         for d in decided:
             counts[d["action"]] = counts.get(d["action"], 0) + 1
@@ -335,7 +367,7 @@ class Service:
         n = total or 1
         # Measured, not asserted: the eval harness scores every decision
         # against the manifest ground truth and counts wrong approvals.
-        report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), self._eval_view())
+        report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), self._harness_input())
         return {
             "total": total,
             "decided": len(decided),
@@ -800,14 +832,21 @@ class Service:
         measured numbers, not a separate hand-maintained copy of them.
         """
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        report = evaluate(manifest, self._eval_view())
+        report = evaluate(manifest, self._harness_input())
         defects = [c for c in report["cases"] if c["defect"] != "clean"]
         clean = [c for c in report["cases"] if c["defect"] == "clean"]
 
         vendors = []
         names = self.store.vendors()
         for vendor_id in sorted(names):
-            invs = self.store.invoices_for_vendor(vendor_id)
+            # Superseded documents are dropped: a corrected invoice and the
+            # invoice it corrects are one obligation, and adding both billed
+            # the vendor twice on screen for a single order.
+            invs = [
+                inv
+                for inv in self.store.invoices_for_vendor(vendor_id)
+                if superseded_by(inv, self.store) is None
+            ]
             approved = [
                 i for i in invs if (self._cache.get(i.doc_id) or {}).get("action") == "APPROVE"
             ]
@@ -830,9 +869,12 @@ class Service:
             )
 
         # Distribution counted inline — calling self.metrics() here would
-        # run evaluate() a second time just to throw most of it away.
+        # run evaluate() a second time just to throw most of it away. Over
+        # _benchmark_view, not the live cache: this and the Dashboard's mix
+        # are the same chart on two pages, and reading different populations
+        # made them disagree the moment a correction arrived.
         distribution = {a.value: 0 for a in Action}
-        for d in self._cache.values():
+        for d in self._benchmark_view().values():
             distribution[d["action"]] = distribution.get(d["action"], 0) + 1
         return {
             "metrics": report["metrics"],
