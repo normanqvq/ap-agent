@@ -21,6 +21,11 @@ from email import message_from_bytes
 
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024  # matches the console's upload limit
 MAX_ATTACHMENTS = 3
+# base64 costs 4 bytes per 3, plus line breaks. Checked against the ENCODED
+# part before decoding, so an oversized attachment is refused without a
+# decoded copy of it ever existing. The decoded check below still stands --
+# this one only stops the biggest waste.
+MAX_ENCODED_BYTES = MAX_ATTACHMENT_BYTES * 2
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +51,10 @@ def pdf_attachments(raw: bytes) -> list[tuple[str, bytes]]:
         if not filename:
             continue
         try:
+            encoded = part.get_payload()
+            if isinstance(encoded, str) and len(encoded) > MAX_ENCODED_BYTES:
+                log.info("attachment %r is over the size limit; ignoring it", filename)
+                continue
             payload = part.get_payload(decode=True) or b""
         except Exception:  # noqa: BLE001 - a broken part is not a broken message
             continue

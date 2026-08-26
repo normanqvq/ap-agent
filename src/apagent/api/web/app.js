@@ -515,6 +515,8 @@ async function settings() {
       ${setting("Quantity", t.qty_exact ? "exact match" : "tolerance", "quantity gaps are never noise — they mean goods did not arrive")}
       ${setting("Manual-review threshold", (t.manual_review_threshold_cents / 100).toLocaleString("en", { minimumFractionDigits: 2 }), "in the invoice's own currency; at or above it a human signs off, even on a clean match")}
       ${setting("Informal-receipt ceiling", (t.informal_grn_ceiling_cents / 100).toLocaleString("en", { minimumFractionDigits: 2 }), "the most we pay on a delivery confirmed in chat rather than recorded in the system")}
+      ${setting("Vendor reminder after", `${t.vendor_chase_after_hours} h`, "one reminder on a query the vendor has not answered — never a second")}
+      ${setting("Hand to a human after", `${t.vendor_escalate_after_hours} h`, "silence this long means email was the wrong channel; a person picks it up")}
     </div>
     <div class="card">
       <div class="card-h"><h3>Chat-confirmed deliveries</h3><span class="runtotal">how much a colleague's word is worth here</span></div>
@@ -815,7 +817,11 @@ function renderDetail(c) {
   const vendorBtn = document.getElementById("email-vendor");
   if (vendorBtn) vendorBtn.addEventListener("click", () => composer({
     to: c.outbound_to || "operations",
-    subject: c.outbound_to && c.outbound_to.startsWith("billing@") ? `Query on invoice ${c.invoice_id}` : `[${c.invoice_id}] Action needed`,
+    // Both fields come from service.outbound_route. Telling a vendor query
+    // from an operations note used to be done here by testing the address
+    // for "billing@" — business logic in the frontend, and wrong the moment
+    // a vendor's real address does not look like the placeholder.
+    subject: c.outbound_subject || `[${c.invoice_id}] Action needed`,
     body: dec.outbound_message,
     onSend: async () => {
       renderDetail(await api(`/api/invoices/${c.invoice_id}/send-message`, { method: "POST" }));

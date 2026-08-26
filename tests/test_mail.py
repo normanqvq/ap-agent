@@ -468,6 +468,31 @@ def _aged(registry, invoice_id, hours):
     return query
 
 
+def test_a_vendors_own_windows_are_used_when_one_has_them():
+    """Both windows live in ToleranceConfig, which carries
+    per_vendor_overrides -- and these two functions read the base config and
+    ignored it, so the override was silently a lie for the only two fields
+    in the model that are about time rather than money."""
+    registry = ThreadRegistry()
+    registry.register("INV-V005-3005", "ap@example.test")
+    _aged(registry, "INV-V005-3005", 30)  # inside the default 72 h
+    config = ToleranceConfig(
+        per_vendor_overrides={"V005": ToleranceConfig(vendor_chase_after_hours=24)}
+    )
+    now = datetime.now()
+    assert due_for_chase(registry, config, now) == []  # no lookup: defaults
+    chased = due_for_chase(registry, config, now, lambda _: "V005")
+    assert [q.invoice_id for q in chased] == ["INV-V005-3005"]
+
+
+def test_the_settings_page_shows_both_silence_windows():
+    """Same claim the informal-receipt ceiling is on this page for: a limit
+    that decides an invoice goes to a human belongs where it can be read."""
+    t = Service().config_info()["tolerances"]
+    assert t["vendor_chase_after_hours"] == 72
+    assert t["vendor_escalate_after_hours"] == 168
+
+
 def test_a_fresh_query_is_left_alone():
     registry = ThreadRegistry()
     registry.register("INV-V005-3005", "ap@example.test")
@@ -710,6 +735,23 @@ def test_the_query_view_never_leaks_the_correlation_token():
     view = service.get_case("INV-V005-3005")["vendor_query"]
     assert set(view) == {"sent_at", "chased_at", "escalated", "answered"}
     assert query.token not in json.dumps(view)
+
+
+def test_the_composer_shows_the_address_a_query_really_goes_to():
+    """The preview fabricated billing@{vendor}.example.com while the
+    dispatcher mailed the directory address, so the invoice page and the
+    outbox named different recipients for the same message."""
+    service = _wired_service(FakeSender())
+    case = service.get_case("INV-V005-3005")
+    assert case["outbound_to"] == "billing@pacific.example"
+    assert case["outbound_subject"] == "Query on invoice INV-V005-3005"
+
+
+def test_with_no_directory_the_composer_falls_back_to_the_placeholder():
+    """An install with no mailbox still previews something, and it is never
+    mailed: dispatch refuses a vendor with no registered address."""
+    case = Service().get_case("INV-V005-3005")
+    assert case["outbound_to"] == "billing@v005.example.com"
 
 
 def test_a_case_with_no_query_reports_none():

@@ -120,6 +120,10 @@ class Service:
         # what keeps the test suite offline.
         self._mail_harvester = None
         self._dispatcher = None
+        # The vendor address book, once a mailbox is attached. Read by the
+        # composer preview as well as the dispatcher, so the address a
+        # reviewer is shown is the one a query would really go to.
+        self._directory = None
         # invoice_id -> the replies received this session. Session state like
         # _chat_evidence: verbatim vendor text never reaches disk.
         self._vendor_replies: dict[str, list] = {}
@@ -317,7 +321,8 @@ class Service:
                 invoice.doc_id, decision.get("action") if decision else None
             ),
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
-            "outbound_to": self.outbound_recipient(invoice.doc_id),
+            "outbound_to": (route := self.outbound_route(invoice.doc_id)) and route["to"],
+            "outbound_subject": route["subject"] if route else None,
             # The successor document, if a correction withdrew this one. The
             # gate strip carries the same fact as a label; the page needs the
             # id itself to link to it.
@@ -581,6 +586,7 @@ class Service:
         from apagent.mail.thread import ThreadRegistry
 
         registry = ThreadRegistry()
+        self._directory = directory
         self._mail_harvester = MailHarvester(
             directory=directory, registry=registry, vendor_of=self._vendor_of
         )
@@ -690,25 +696,9 @@ class Service:
         original = self.store.get_invoice(evidence.invoice_id)
         if not attachments or original is None:
             return
-        _, payload = attachments[0]
-        # Same temp-file dance as upload_invoice: extraction takes a Path,
-        # and nothing a vendor sent is ever written inside the repo.
-        tmp_dir = Path(tempfile.mkdtemp(prefix="apagent-revision-"))
-        pdf_path = tmp_dir / "corrected.pdf"
-        pdf_path.write_bytes(payload)
-        try:
-            extracted = extract_invoice(pdf_path, self.store.vendors())
-        except Exception as exc:  # noqa: BLE001 - see the docstring
-            log.warning(
-                "could not read the correction on %s: %s: %s",
-                evidence.invoice_id,
-                type(exc).__name__,
-                exc,
-            )
+        extracted = self._extract_correction(evidence, attachments)
+        if extracted is None:
             return
-        finally:
-            pdf_path.unlink(missing_ok=True)
-            tmp_dir.rmdir()
 
         # The chain, oldest first. A second correction supersedes the FIRST
         # correction, not the original invoice -- see make_revision: pointing
@@ -802,6 +792,41 @@ class Service:
             "answered": query.answered,
         }
 
+    def _extract_correction(self, evidence, attachments) -> Document | None:
+        """The first attachment that reads as an invoice, or None.
+
+        attach.py collects up to MAX_ATTACHMENTS and justifies the cap by the
+        cost of "extracting each one" -- a loop that did not exist. Only the
+        first was ever tried, so a reply that led with a signature graphic or
+        a scanned remittance slip lost its correction entirely. Bounded by
+        that same cap, which is what makes trying them affordable.
+
+        At most one revision comes out of a reply. The first readable
+        attachment is the correction; anything after it is evidence a
+        reviewer can open, and guessing between two candidate invoices is
+        not a guess code should make.
+        """
+        for filename, payload in attachments:
+            # Same temp-file dance as upload_invoice: extraction takes a
+            # Path, and nothing a vendor sent is ever written in the repo.
+            tmp_dir = Path(tempfile.mkdtemp(prefix="apagent-revision-"))
+            pdf_path = tmp_dir / "corrected.pdf"
+            pdf_path.write_bytes(payload)
+            try:
+                return extract_invoice(pdf_path, self.store.vendors())
+            except Exception as exc:  # noqa: BLE001 - see _revise_from
+                log.warning(
+                    "could not read %r on %s: %s: %s",
+                    filename,
+                    evidence.invoice_id,
+                    type(exc).__name__,
+                    exc,
+                )
+            finally:
+                pdf_path.unlink(missing_ok=True)
+                tmp_dir.rmdir()
+        return None
+
     def send_to_human(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """Route an invoice to a human reviewer and record the hand-off
         email in the outbox. The body comes from the code template in
@@ -825,36 +850,64 @@ class Service:
         invoice = self.store.get_invoice(invoice_id)
         if invoice is None:
             raise KeyError(invoice_id)
-        decision = self._cache.get(invoice_id) or {}
-        message = decision.get("outbound_message")
-        if not message:
+        route = self.outbound_route(invoice_id)
+        if route is None:
             raise ValueError("this invoice has no system-generated message")
-        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
-        if decision.get("action") == Action.EMAIL:
-            to, kind, subject = (
-                f"billing@{invoice.vendor_id.lower()}.example.com",
-                "vendor_query",
-                f"Query on invoice {invoice_id}",
-            )
-        else:  # internal operations note (HOLD)
-            to, kind, subject = (
-                "ap-supervisor@demo.local",
-                "ops_note",
-                f"[{invoice_id}] Action needed — {vendor_name}",
-            )
-        self._record_sent(invoice_id, kind, {"to": to, "subject": subject, "body": message}, actor)
+        message = (self._cache.get(invoice_id) or {})["outbound_message"]
+        self._record_sent(
+            invoice_id,
+            route["kind"],
+            {"to": route["to"], "subject": route["subject"], "body": message},
+            actor,
+        )
         return self.get_case(invoice_id)
 
-    def outbound_recipient(self, invoice_id: str) -> str | None:
-        """Where the decision's outbound message would go — for the composer
-        preview. Same code path that send_outbound enforces."""
+    def outbound_route(self, invoice_id: str) -> dict | None:
+        """Where the decision's outbound message goes, and under what subject.
+
+        One function for the composer preview and for the send, because the
+        two disagreed: the preview showed a fabricated
+        billing@{vendor}.example.com while the dispatcher mailed the address
+        in the vendor directory, so the invoice page and the outbox named
+        different recipients for the same message. Where a directory is
+        attached, its address is the real one and wins here too.
+
+        The subject and the kind are decided here rather than in the browser
+        for the reason CLAUDE.md gives: app.js used to tell a vendor query
+        from an operations note by testing whether the address started with
+        "billing@", which is business logic in the frontend and wrong the
+        moment a vendor's real address does not.
+        """
         invoice = self.store.get_invoice(invoice_id)
         decision = self._cache.get(invoice_id) or {}
         if invoice is None or not decision.get("outbound_message"):
             return None
         if decision.get("action") == Action.EMAIL:
-            return f"billing@{invoice.vendor_id.lower()}.example.com"
-        return "ap-supervisor@demo.local"
+            return {
+                "to": self._vendor_address(invoice.vendor_id),
+                "kind": "vendor_query",
+                "subject": f"Query on invoice {invoice_id}",
+            }
+        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
+        return {  # internal operations note (HOLD)
+            "to": "ap-supervisor@demo.local",
+            "kind": "ops_note",
+            "subject": f"[{invoice_id}] Action needed — {vendor_name}",
+        }
+
+    def _vendor_address(self, vendor_id: str) -> str:
+        """The address a query to this vendor would actually reach.
+
+        The placeholder is what an install with no vendor directory shows;
+        it is never mailed, because dispatch refuses a vendor with no
+        registered address rather than guessing at one.
+        """
+        registered = self._directory.address_for(vendor_id) if self._directory else None
+        return registered or f"billing@{vendor_id.lower()}.example.com"
+
+    def outbound_recipient(self, invoice_id: str) -> str | None:
+        route = self.outbound_route(invoice_id)
+        return route["to"] if route else None
 
     def _record_sent(self, invoice_id: str, kind: str, draft: dict, actor: str) -> dict:
         entry = {
@@ -979,6 +1032,11 @@ class Service:
                 # such limit belongs on this page rather than buried in code
                 # nobody reads. Read-only like the rest of it.
                 "informal_grn_ceiling_cents": c.informal_grn_ceiling_cents,
+                # The two limits that are about time rather than money. Same
+                # rule as the ceiling above: a limit that decides an invoice
+                # goes to a human belongs on this page, not only in code.
+                "vendor_chase_after_hours": c.vendor_chase_after_hours,
+                "vendor_escalate_after_hours": c.vendor_escalate_after_hours,
             },
             "chat_grn": {
                 "policy": c.chat_grn_policy.value,

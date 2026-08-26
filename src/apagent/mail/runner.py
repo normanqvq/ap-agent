@@ -115,8 +115,7 @@ class MailRunner:
                     self.on_reply(evidence, raw)
                 except Exception:
                     log.exception(
-                        "could not handle the reply on %s; the reply is lost, "
-                        "the tick is not",
+                        "could not handle the reply on %s; the reply is lost, the tick is not",
                         evidence.invoice_id,
                     )
         self._run_timers()
@@ -125,9 +124,10 @@ class MailRunner:
         if self.dispatcher is None or self.config is None:
             return
         now = datetime.now()
-        for query in due_for_chase(self.harvester.registry, self.config, now):
-            self.dispatcher.send_chase(query.invoice_id, self.harvester.vendor_of(query.invoice_id))
-        for query in due_for_escalation(self.harvester.registry, self.config, now):
+        vendor_of = self.harvester.vendor_of
+        for query in due_for_chase(self.harvester.registry, self.config, now, vendor_of):
+            self.dispatcher.send_chase(query.invoice_id, vendor_of(query.invoice_id))
+        for query in due_for_escalation(self.harvester.registry, self.config, now, vendor_of):
             query.escalated = True
             log.info("no reply on %s; escalating", query.invoice_id)
             if self.on_silence is not None:

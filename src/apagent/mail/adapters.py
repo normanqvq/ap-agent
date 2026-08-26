@@ -17,10 +17,17 @@ crash mid-handling costs a re-read rather than a silently dropped reply.
 import imaplib
 import logging
 import os
+import re
 import smtplib
 from typing import Protocol
 
 log = logging.getLogger(__name__)
+
+# A vendor reply is a page of text and at most a few invoices. Anything past
+# this is not one, and fetching it would pull the whole thing into the web
+# process's memory before anything had a chance to refuse it. Asked for with
+# RFC822.SIZE first, which costs one small round trip per message.
+MAX_MESSAGE_BYTES = 25 * 1024 * 1024
 
 
 def _password(name: str) -> str:
@@ -78,6 +85,8 @@ class ImapAdapter:
                     return []
                 out = []
                 for uid in data[0].split():
+                    if self._too_big(imap, uid):
+                        continue
                     status, fetched = imap.fetch(uid, "(BODY.PEEK[])")
                     if status == "OK" and fetched and fetched[0]:
                         out.append((uid, fetched[0][1]))
@@ -85,6 +94,25 @@ class ImapAdapter:
         except Exception as exc:  # noqa: BLE001 - a poller must not die
             log.warning("imap poll failed: %s: %s", type(exc).__name__, exc)
             return []
+
+    def _too_big(self, imap, uid: bytes) -> bool:
+        """True for a message we will not pull into memory.
+
+        Left UNSEEN on purpose: it is not handled, and a person should find
+        it in the mailbox rather than discover that the system silently ate
+        it. A size the server will not tell us is not a reason to refuse.
+        """
+        status, data = imap.fetch(uid, "(RFC822.SIZE)")
+        if status != "OK" or not data or not data[0]:
+            return False
+        line = data[0]
+        if isinstance(line, tuple):  # some servers answer with a literal
+            line = b" ".join(x for x in line if isinstance(x, bytes))
+        found = re.search(rb"RFC822.SIZE\s+(\d+)", line)
+        if found and int(found.group(1)) > MAX_MESSAGE_BYTES:
+            log.warning("message uid=%s is %s bytes; leaving it unread", uid, found.group(1))
+            return True
+        return False
 
     def mark_handled(self, uid: bytes) -> None:
         try:

@@ -13,6 +13,8 @@ pick up a phone. A third reminder would add no information.
 
 from datetime import datetime
 
+from apagent.rules.tolerance import resolve_config
+
 
 def _hours_since(stamp: str, now: datetime) -> float:
     try:
@@ -24,22 +26,42 @@ def _hours_since(stamp: str, now: datetime) -> float:
         return 0.0
 
 
-def due_for_chase(registry, config, now: datetime) -> list:
+def _config_for(query, config, vendor_of):
+    """This vendor's windows, not just the defaults.
+
+    Both windows sit in ToleranceConfig alongside every other limit, and
+    ToleranceConfig carries per_vendor_overrides -- so a vendor who is known
+    to answer in a day, or one who never answers at all, can have their own.
+    These two functions read the base config and ignored that, which made
+    the override silently a lie for the only two fields in the model that
+    are about time rather than money.
+
+    vendor_of is optional so a caller with no vendor lookup (a test over the
+    registry alone) still gets the defaults rather than an error.
+    """
+    if vendor_of is None:
+        return config
+    return resolve_config(vendor_of(query.invoice_id), config)
+
+
+def due_for_chase(registry, config, now: datetime, vendor_of=None) -> list:
     """Queries old enough to remind about, and not yet reminded."""
     return [
         query
         for query in registry.outstanding()
         if not query.chased_at
         and not query.escalated
-        and _hours_since(query.sent_at, now) >= config.vendor_chase_after_hours
+        and _hours_since(query.sent_at, now)
+        >= _config_for(query, config, vendor_of).vendor_chase_after_hours
     ]
 
 
-def due_for_escalation(registry, config, now: datetime) -> list:
+def due_for_escalation(registry, config, now: datetime, vendor_of=None) -> list:
     """Queries old enough to hand to a human, and not yet handed over."""
     return [
         query
         for query in registry.outstanding()
         if not query.escalated
-        and _hours_since(query.sent_at, now) >= config.vendor_escalate_after_hours
+        and _hours_since(query.sent_at, now)
+        >= _config_for(query, config, vendor_of).vendor_escalate_after_hours
     ]

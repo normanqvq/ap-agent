@@ -294,6 +294,32 @@ def _reply_with_pdf(reply_to, message_id, sender="ar-dept@pacific.example"):
     ).encode()
 
 
+def _reply_with_two_pdfs(reply_to, message_id, sender="ar-dept@pacific.example"):
+    """A letterhead graphic saved as a PDF, then the actual correction."""
+    parts = "".join(
+        f"--B\n"
+        f"Content-Type: application/pdf\n"
+        f"Content-Transfer-Encoding: base64\n"
+        f'Content-Disposition: attachment; filename="{name}"\n'
+        f"{base64.b64encode(_PDF + name.encode()).decode()}\n"
+        for name in ("letterhead.pdf", "corrected.pdf")
+    )
+    return (
+        f"From: AR Dept <{sender}>\n"
+        f"To: {reply_to}\n"
+        f"Subject: corrected invoice\n"
+        f"In-Reply-To: {message_id}\n"
+        f"References: {message_id}\n"
+        "Date: Mon, 25 Aug 2026 10:00:00 +0800\n"
+        'Content-Type: multipart/mixed; boundary="B"\n'
+        "\n"
+        "--B\n"
+        'Content-Type: text/plain; charset="utf-8"\n'
+        "\n"
+        "Our letterhead and the corrected invoice.\n" + parts + "--B--\n"
+    ).encode()
+
+
 def _reply_text_only(reply_to, message_id, sender="ar-dept@pacific.example"):
     return (
         f"From: AR Dept <{sender}>\n"
@@ -482,6 +508,50 @@ def test_a_pdf_that_only_looks_like_one_costs_the_reply_and_nothing_else(monkeyp
         lambda path, vendors, **kw: (_ for _ in ()).throw(PdfminerException("truncated")),
     )
     _deliver(svc, _reply_with_pdf)  # must not raise
+    assert svc.store.get_invoice("INV-V005-3005-R1") is None
+
+
+def test_a_reply_that_leads_with_an_unreadable_file_still_yields_the_correction(monkeypatch):
+    """attach.py collects three attachments and justifies the cap by the cost
+    of "extracting each one" -- a loop that did not exist. Only the first was
+    tried, so a reply that led with a signature graphic lost its correction."""
+    svc = _wired(monkeypatch, at_po_prices=True)
+    original = svc.store.get_invoice("INV-V005-3005")
+    corrected = _at_po_prices(svc)
+    tried = []
+
+    def fake_extract(path, vendors, **kw):
+        tried.append(path.read_bytes())
+        if len(tried) == 1:
+            raise service_module.ExtractionError("this is a letterhead, not an invoice")
+        return corrected
+
+    monkeypatch.setattr(service_module, "extract_invoice", fake_extract)
+    registry = svc.mail_harvester().registry
+    query = registry.register("INV-V005-3005", "ap@example.test")
+    raw = _reply_with_two_pdfs(query.reply_to, query.message_id)
+    svc.on_vendor_reply(svc.mail_harvester().on_mail(parse_mail(raw)), raw)
+
+    assert len(tried) == 2
+    revision = svc.store.get_invoice("INV-V005-3005-R1")
+    assert revision is not None
+    assert revision.total_cents == corrected.total_cents
+    assert original.total_cents != corrected.total_cents  # it really changed
+
+
+def test_a_reply_whose_every_attachment_is_unreadable_raises_nothing(monkeypatch):
+    svc = _wired(monkeypatch)
+    monkeypatch.setattr(
+        service_module,
+        "extract_invoice",
+        lambda path, vendors, **kw: (_ for _ in ()).throw(
+            service_module.ExtractionError("unreadable")
+        ),
+    )
+    registry = svc.mail_harvester().registry
+    query = registry.register("INV-V005-3005", "ap@example.test")
+    raw = _reply_with_two_pdfs(query.reply_to, query.message_id)
+    svc.on_vendor_reply(svc.mail_harvester().on_mail(parse_mail(raw)), raw)
     assert svc.store.get_invoice("INV-V005-3005-R1") is None
 
 
