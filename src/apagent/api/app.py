@@ -226,6 +226,21 @@ def accept_chat_grn(invoice_id: str, request: Request) -> dict:
         raise HTTPException(status_code=409, detail=str(e)) from None
 
 
+@app.post("/api/invoices/{invoice_id}/delivery-photo")
+def delivery_photo(invoice_id: str, file: UploadFile, request: Request) -> dict:
+    """A reviewer uploads a photo of a delivery note; it becomes a chat-tier
+    goods receipt and re-decides this invoice. Reads the image with a
+    multimodal model, then runs the exact chat resolve + grn_gate path."""
+    content = file.file.read()
+    media_type = file.content_type or "image/jpeg"
+    try:
+        return get_service().upload_delivery_photo(invoice_id, content, media_type, _actor(request))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"invoice {invoice_id} not found") from None
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+
 @app.post("/api/invoices/{invoice_id}/send-to-human")
 def send_to_human(invoice_id: str, request: Request) -> dict:
     try:

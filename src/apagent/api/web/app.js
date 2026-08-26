@@ -638,12 +638,15 @@ function chatEvidenceCard(c) {
   const endorsed = ev.endorsed_by
     ? `<span class="chip ok">✓ accepted by ${esc(ev.endorsed_by)}</span>`
     : "";
+  const isPhoto = ev.source === "photo";
   const said = ev.messages.length
     ? ev.messages.map((m) =>
         `<div class="said"><div class="said-h"><b>${esc(m.sender_name)}</b>
           <span class="num">${esc(m.sent_at.replace("T", " "))}</span></div>
           <div class="said-t">${esc(m.text)}</div></div>`).join("")
-    : `<div class="said-none">The conversation is not in this session's buffer.</div>`;
+    : isPhoto
+      ? `<div class="said-none">Read from a photo of the delivery note. The image was read by a multimodal model, then discarded.</div>`
+      : `<div class="said-none">The conversation is not in this session's buffer.</div>`;
   const read = ev.lines.map((l) =>
     `<li><span class="num">${l.qty}</span> × ${esc(l.sku || l.description)}</li>`).join("");
   const pending = ev.unconfirmed.length
@@ -652,16 +655,16 @@ function chatEvidenceCard(c) {
         still holds on those lines.</div></div>`
     : "";
   return `<div class="card chatev ${ev.authorised ? "" : "unauth"}">
-      <h3>Delivery confirmed in chat</h3>
+      <h3>${isPhoto ? "Delivery confirmed by photo" : "Delivery confirmed in chat"}</h3>
       <div class="chips">${who}${endorsed}
         <span class="chip">${esc(ev.receipt_id)}</span>
         <span class="chip">policy: ${esc(ev.policy)}</span></div>
       <div class="saidwrap">${said}</div>
       <div class="readas"><b>Recorded as received</b><ul>${read}</ul></div>
       ${pending}
-      <p class="evnote">Chat text is third-party data. It is evidence for you to
+      <p class="evnote">${isPhoto ? "The photo" : "Chat text"} is third-party data. It is evidence for you to
       judge — the quantities above were matched to the purchase order in code,
-      and no message can approve an invoice by itself.</p>
+      and no ${isPhoto ? "photo" : "message"} can approve an invoice by itself.</p>
     </div>`;
 }
 
@@ -710,7 +713,10 @@ function renderDetail(c) {
             : `<button class="btn primary" id="confirm">Confirm payment</button>`)
           : ""}
         ${c.chat_grn && !c.chat_grn.endorsed_by && !(dec && dec.action === "APPROVE")
-          ? `<button class="btn primary" id="accept-chat">Accept the chat confirmation</button>`
+          ? `<button class="btn primary" id="accept-chat">Accept the ${c.chat_grn.source === "photo" ? "photo" : "chat"} confirmation</button>`
+          : ""}
+        ${!c.chat_grn && !c.grn && !(dec && dec.action === "APPROVE")
+          ? `<button class="btn" id="photo-grn">Upload delivery photo</button>`
           : ""}
         ${c.human_review === "sent_to_human"
           ? `<button class="btn" disabled>✓ Sent to human</button>`
@@ -768,6 +774,47 @@ function renderDetail(c) {
         ? `Confirmation accepted — ${c.invoice_id} released`
         : `Confirmation accepted — still held by code`);
     } catch { e.target.disabled = false; e.target.textContent = "Could not accept (retry)"; }
+  });
+  // A signed-in reviewer uploads a photo of the delivery note. It runs the
+  // exact chat pipeline (extract -> resolve -> grn_gate), so a blurry photo or
+  // a short delivery leaves the invoice held; only a clean, covered receipt
+  // releases it. The image is read by a multimodal model, then discarded.
+  // Build a fresh <input> per click, so a failed upload can be retried. It is
+  // parked inside #view, not on <body>: Safari and Firefox fire no change
+  // event when the picker is cancelled, and an input the next render sweeps
+  // away cannot pile up.
+  const photoBtn = document.getElementById("photo-grn");
+  if (photoBtn) photoBtn.addEventListener("click", () => {
+    const photoInput = document.createElement("input");
+    photoInput.type = "file";
+    photoInput.accept = "image/*";
+    photoInput.hidden = true;
+    view.appendChild(photoInput);
+    photoInput.addEventListener("change", async () => {
+      const f = photoInput.files[0];
+      if (!f) { photoInput.remove(); return; }
+      photoBtn.disabled = true;
+      photoBtn.textContent = "Reading the photo…";
+      const fd = new FormData();
+      fd.append("file", f);
+      try {
+        const r = await fetch(`/api/invoices/${c.invoice_id}/delivery-photo`, { method: "POST", body: fd });
+        if (r.status === 401) { showLogin(); return; }
+        const j = await r.json();
+        if (!r.ok) { toast(j.detail || "Could not read the photo"); return; }
+        renderDetail(j);
+        toast(j.decision && j.decision.action === "APPROVE"
+          ? `Delivery confirmed by photo — ${c.invoice_id} released`
+          : `Delivery photo recorded — still held by code`);
+      } catch {
+        toast("Upload failed — network error");
+      } finally {
+        photoInput.remove();
+        const again = document.getElementById("photo-grn");
+        if (again) { again.disabled = false; again.textContent = "Upload delivery photo"; }
+      }
+    });
+    photoInput.click();
   });
   const confirmBtn = document.getElementById("confirm");
   if (confirmBtn) confirmBtn.addEventListener("click", async (e) => {

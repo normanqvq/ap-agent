@@ -29,6 +29,7 @@ from apagent.rules.tolerance import apply_tolerances, requires_manual_review, re
 from apagent.scheduling import schedule_payments
 from apagent.schemas import (
     Action,
+    ChatGrnEvidence,
     ChatGrnPolicy,
     DiscrepancyField,
     Document,
@@ -66,6 +67,9 @@ DEMO_ORDER = [
 # upload; "email" and "telegram" are the external fetchers' seam (docs/INTAKE.md).
 # A set — order carries no meaning here.
 VALID_INTAKE_SOURCES = {"upload", "email", "telegram"}
+
+# One cap for everything a browser can hand us (invoice PDFs, docket photos).
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 
 class Service:
@@ -132,6 +136,10 @@ class Service:
         # telegram). Session state like _uploaded; the seam the external
         # fetchers tag their documents with. See docs/INTAKE.md.
         self._intake_source: dict[str, str] = {}
+        # Monotonic counter for photo evidence ids. NOT len(_chat_evidence):
+        # a same-PO re-upload overwrites its dict entry, the size stalls, and
+        # the next distinct upload would reuse the previous id.
+        self._photo_seq = 0
 
     # --- decisions cache ---------------------------------------------------
 
@@ -522,8 +530,8 @@ class Service:
         "unexpected" (no manifest ground truth) rather than scoring them —
         the metrics stay honest.
         """
-        if len(content) > 5 * 1024 * 1024:
-            raise ValueError("PDF too large (5 MB limit)")
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise ValueError(f"PDF too large ({MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit)")
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "-", Path(filename).stem) or "upload"
         tmp_dir = Path(tempfile.mkdtemp(prefix="apagent-upload-"))
         pdf_path = tmp_dir / f"{safe_name}.pdf"
@@ -638,6 +646,116 @@ class Service:
         self._chat_confirmed.add(invoice_id)
         return self.run_case(invoice_id)
 
+    def upload_delivery_photo(
+        self, invoice_id: str, image_bytes: bytes, media_type: str, actor: str = "reviewer"
+    ) -> dict:
+        """A reviewer uploads a photo of a delivery note; it becomes a
+        chat-tier goods receipt against this invoice's PO and re-decides it.
+
+        The console equivalent of a warehouse colleague photographing the
+        signed docket instead of typing "it came". It runs the EXACT chat
+        pipeline — extract the claim, resolve it against OUR PO, apply the same
+        grn_gate — with the image as the only new part. A signed-in reviewer
+        counts as an authorised confirmer, but the informal-ceiling and quantity
+        checks still apply, so a photo never pays a large invoice on its own.
+        Session state like every other piece of chat evidence: the receipt lives
+        in memory and never reaches data/synthetic/.
+        """
+        from apagent.chat.extract import ChatExtractionError
+        from apagent.chat.resolve import resolve_grn
+        from apagent.chat.vision import extract_delivery_claim_from_image
+
+        invoice = self.store.get_invoice(invoice_id)
+        if invoice is None:
+            raise KeyError(invoice_id)
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
+            raise ValueError(f"image too large ({MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit)")
+        # The two providers with image input take exactly these types. Checked
+        # here so an iPhone HEIC gets a clear answer instead of an opaque
+        # provider error mid-demo.
+        if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+            raise ValueError(f"unsupported image type {media_type!r} — use JPEG, PNG, WebP or GIF")
+        # This invoice's own order, resolved the way the pipeline resolves it.
+        # Computed BEFORE the model call: the photo is uploaded from one
+        # invoice's page, so it must confirm THAT invoice's order — and if an
+        # ERP receipt already exists there is nothing for a photo to add, so
+        # refuse cheaply instead of paying for a vision call the store would
+        # reject anyway (add_grn refuses the ERP -> CHAT downgrade).
+        match = match_invoice(invoice, self.store.all_pos(), self.store.all_grns())
+        if match.po_id is None:
+            raise ValueError("no purchase order is matched to this invoice")
+        existing = self.store.get_grn_for_po(match.po_id)
+        if existing is not None and existing.source == EvidenceSource.ERP:
+            raise ValueError("an ERP goods receipt already exists for this order")
+
+        try:
+            claim = extract_delivery_claim_from_image(image_bytes, media_type)
+        except ChatExtractionError as exc:
+            raise ValueError(f"could not read the delivery photo: {exc}") from exc
+
+        captured_at = datetime.now().isoformat(timespec="seconds")
+        self._photo_seq += 1
+        evidence_id = f"PHOTO-EV-{self._photo_seq:04d}"
+        receipt, reason = resolve_grn(
+            claim,
+            self.store,
+            [],
+            confirmer_label=actor,
+            captured_at=captured_at,
+            evidence_id=evidence_id,
+        )
+        if receipt is None:
+            # resolve refused: the PO reference the photo names does not match
+            # ours, an item cannot be tied to the order, or no quantity was
+            # stated. The same safe refusal a chat message gets — surfaced to
+            # the reviewer, never acted on.
+            raise ValueError(f"the photo did not confirm a delivery ({reason})")
+
+        # The docket must name the order THIS invoice bills. Without this, a
+        # photo uploaded on invoice A's page could land a receipt on some other
+        # order — confirming a delivery the reviewer never meant to vouch for,
+        # and leaving the invoices that receipt actually affects outside
+        # _chat_confirmed, where a later re-run would leak session evidence
+        # into the benchmark numbers.
+        if receipt.ref_doc_id != match.po_id:
+            raise ValueError(
+                f"the docket names order {receipt.ref_doc_id}, but this invoice bills {match.po_id}"
+            )
+
+        self.store.add_grn(receipt)
+        # Evidence for the detail page. platform="photo" so the card can say the
+        # confirmation came from an image; no verbatim messages exist to keep.
+        self._chat_evidence[receipt.doc_id] = ChatGrnEvidence(
+            evidence_id=evidence_id,
+            platform="photo",
+            chat_id="photo-upload",
+            po_id=receipt.ref_doc_id,
+            confirmed_by=actor,
+            captured_at=captured_at,
+            messages=[],
+        )
+        # Every invoice this receipt can affect is held out of the benchmark,
+        # not just the one on screen — the same PO can back more than one
+        # invoice, and _eval_view must serve the committed decision for all of
+        # them (parity with the chat poller, which marks result.invoice_ids).
+        # The scan matches on the printed ref, like the chat harvester does: a
+        # ref-less invoice that only fallback-matches this PO is not caught.
+        # Unreachable today — every such PO carries an ERP receipt, refused
+        # above — and the same known limit as the chat path.
+        self._chat_confirmed.add(invoice_id)
+        for other in self.store.invoices_for_vendor(receipt.vendor_id):
+            if other.ref_doc_id == receipt.ref_doc_id and other.doc_id != invoice_id:
+                self._chat_confirmed.add(other.doc_id)
+                # And re-decide them (parity with on_chat_receipt): their proof
+                # of delivery just changed, and a stale cached HOLD next to
+                # passing gates reads as a broken console. One bad sibling must
+                # not fail the upload.
+                try:
+                    self.run_case(other.doc_id)
+                except Exception:
+                    continue
+        return self.run_case(invoice_id)
+
     def _chat_grn_view(self, grn, po) -> dict | None:
         """The chat confirmation behind a receipt, for the detail page.
 
@@ -671,6 +789,7 @@ class Service:
             ],
             "unconfirmed": unconfirmed,
             "messages": [m.model_dump() for m in evidence.messages] if evidence else [],
+            "source": evidence.platform if evidence else None,
         }
 
     def on_chat_receipt(self, result) -> None:
