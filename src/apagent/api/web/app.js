@@ -509,7 +509,7 @@ async function settings() {
       <div><h1>Settings</h1><div class="sub">Read-only. Every limit lives in version-controlled code — changing one is a reviewed commit, not a click.</div></div>
     </div>
     <div class="card">
-      <div class="card-h"><h3>Decision policy</h3><span class="runtotal">enforced by the six code gates, never by the prompt</span></div>
+      <div class="card-h"><h3>Decision policy</h3><span class="runtotal">enforced by the code gates, never by the prompt</span></div>
       ${setting("Unit-price tolerance", `±${t.unit_price_pct}%`, "vs the PO price; a vendor contract can widen it (below)")}
       ${setting("Invoice-total tolerance", `${(t.total_abs_cents / 100).toFixed(2)} and ${t.total_pct}%`, "in the invoice's own currency; a total must sit inside both bounds")}
       ${setting("Quantity", t.qty_exact ? "exact match" : "tolerance", "quantity gaps are never noise — they mean goods did not arrive")}

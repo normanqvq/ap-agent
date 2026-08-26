@@ -21,17 +21,23 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from apagent.agent.ap_tools import build_registry, hard_duplicates, recheck_with_contract
+from apagent.agent.ap_tools import (
+    build_registry,
+    hard_duplicates,
+    recheck_with_contract,
+    superseded_by,
+)
 from apagent.eval import evaluate
 from apagent.extraction.invoice import ExtractionError, extract_invoice
 from apagent.mail.attach import pdf_attachments
 from apagent.mail.revise import make_revision
 from apagent.matching.engine import match_invoice
-from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate
+from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate, supersede
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
 from apagent.scheduling import schedule_payments
 from apagent.schemas import (
     Action,
+    AgentDecision,
     ChatGrnPolicy,
     DiscrepancyField,
     Document,
@@ -244,7 +250,16 @@ class Service:
         po = self.store.get_po(match.po_id) if match.po_id else None
         grn = self.store.get_grn_for_po(match.po_id) if match.po_id else None
         gates = _guardrails(
-            checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config
+            checked,
+            rechecked,
+            review_gate,
+            duplicates,
+            allowance,
+            grn,
+            po,
+            invoice,
+            config,
+            superseded_by(invoice, self.store),
         )
         decision = self._cache.get(invoice.doc_id)
         vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
@@ -383,7 +398,7 @@ class Service:
         """A human confirms an APPROVEd invoice for payment.
 
         Code checks the precondition, not the frontend: only an invoice the
-        agent APPROVEd (i.e. that already passed all six gates) can be
+        agent APPROVEd (i.e. that already passed every code gate) can be
         confirmed. Anything else is refused here regardless of what the UI
         sends — same authority rule as everywhere.
         """
@@ -623,12 +638,47 @@ class Service:
             pdf_path.unlink(missing_ok=True)
             tmp_dir.rmdir()
 
-        sequence = len(self._revisions.get(original.doc_id, [])) + 1
-        revision = make_revision(original, extracted, sequence, evidence_id=evidence.evidence_id)
+        # The chain, oldest first. A second correction supersedes the FIRST
+        # correction, not the original invoice -- see make_revision: pointing
+        # them all at the original leaves three payable siblings, which is
+        # one payment per copy of a correction the vendor re-sent.
+        chain = self._revisions.setdefault(original.doc_id, [])
+        sequence = len(chain) + 1
+        revision = make_revision(
+            original,
+            extracted,
+            sequence,
+            evidence_id=evidence.evidence_id,
+            supersedes=chain[-1] if chain else original.doc_id,
+        )
         self.store.add_invoice(revision)
-        self._revisions.setdefault(original.doc_id, []).append(revision.doc_id)
+        chain.append(revision.doc_id)
         log.info("raised %s from %s", revision.doc_id, evidence.evidence_id)
+        self._withdraw(revision.replaces, revision.doc_id)
         self.run_case(revision.doc_id)
+
+    def _withdraw(self, doc_id: str, successor_id: str) -> None:
+        """Retire the decision on a document a correction just replaced.
+
+        The pipeline's supersession gate only fires when a document is
+        decided, and R1 was decided while it was still the newest in the
+        chain -- so a vendor re-sending their correction produced three
+        standing APPROVEs, one payment per copy. Applied to the cached
+        decision instead of re-running the pipeline because supersession is
+        a code fact, and re-asking the model a question code has already
+        settled is how a settled question becomes an unsettled one.
+
+        Only an APPROVE is touched, exactly as in _apply_guardrails. In
+        practice the original invoice is never one -- it is the EMAIL action
+        that sent the query in the first place -- which is also why this
+        cannot quietly move the committed benchmark.
+        """
+        cached = self._cache.get(doc_id)
+        if cached is None or cached.get("action") != Action.APPROVE:
+            return
+        self._cache[doc_id] = supersede(AgentDecision(**cached), successor_id).model_dump()
+        self._human.pop(doc_id, None)
+        self._save_cache()
 
     def send_to_human(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """Route an invoice to a human reviewer and record the hand-off
@@ -867,9 +917,9 @@ def _handoff_draft(invoice, vendor_name: str, decision: dict | None, gates: list
 
 
 def _guardrails(
-    checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config
+    checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config, superseded
 ) -> list[dict]:
-    """The six code gates as pass/fail, for the detail view. Mirrors
+    """The seven code gates as pass/fail, for the detail view. Mirrors
     pipeline._apply_guardrails so the UI shows exactly what code enforces.
 
     The GRN gate is not mirrored by hand any more — it CALLS pipeline.grn_gate,
@@ -887,6 +937,11 @@ def _guardrails(
     pct = f"{allowance[0]:g}%" if allowance else "default 2%"
     grn_passed, _ = grn_gate(checked, grn, po, invoice, config)
     return [
+        {
+            "key": "superseded",
+            "label": (f"Superseded by {superseded.doc_id}" if superseded else "Not superseded"),
+            "passed": superseded is None,
+        },
         {"key": "money", "label": "Amount within threshold", "passed": not review_gate},
         {"key": "po", "label": "PO matched", "passed": checked.po_id is not None},
         {

@@ -12,13 +12,23 @@ from pathlib import Path
 import pytest
 
 import apagent.api.service as service_module
-from apagent.agent.ap_tools import hard_duplicates
+from apagent.agent.ap_tools import hard_duplicates, superseded_by
 from apagent.api.service import Service
 from apagent.mail.attach import MAX_ATTACHMENT_BYTES, pdf_attachments
 from apagent.mail.directory import VendorDirectory
 from apagent.mail.inbound import parse_mail
 from apagent.mail.revise import make_revision
-from apagent.schemas import DocType, Document, EvidenceSource
+from apagent.matching.engine import match_invoice
+from apagent.pipeline import _apply_guardrails
+from apagent.rules.tolerance import apply_tolerances
+from apagent.schemas import (
+    Action,
+    AgentDecision,
+    DocType,
+    Document,
+    EvidenceSource,
+    ToleranceConfig,
+)
 from apagent.store import DocumentStore
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
@@ -77,9 +87,7 @@ def test_the_original_is_not_a_duplicate_of_its_revision(store):
 def test_a_second_revision_is_not_a_duplicate_of_the_first(store):
     """R2 replaces R1 replaces the original: the whole chain is one invoice."""
     original = store.get_invoice("INV-V005-3005")
-    first = original.model_copy(
-        update={"doc_id": "INV-V005-3005-R1", "replaces": "INV-V005-3005"}
-    )
+    first = original.model_copy(update={"doc_id": "INV-V005-3005-R1", "replaces": "INV-V005-3005"})
     second = original.model_copy(
         update={"doc_id": "INV-V005-3005-R2", "replaces": "INV-V005-3005-R1"}
     )
@@ -163,8 +171,7 @@ def test_only_the_first_few_attachments_are_considered():
         for i in range(10)
     )
     raw = (
-        "From: a@b.test\n"
-        'Content-Type: multipart/mixed; boundary="B"\n\n' + parts + "--B--\n"
+        'From: a@b.test\nContent-Type: multipart/mixed; boundary="B"\n\n' + parts + "--B--\n"
     ).encode()
     assert len(pdf_attachments(raw)) == 3
 
@@ -294,7 +301,30 @@ def _bounce_with_pdf(reply_to, message_id, sender="mailer-daemon@example.test"):
     ).encode()
 
 
-def _wired(monkeypatch, corrected_total_cents=49000, extraction_raises=False):
+def _at_po_prices(svc, invoice_id="INV-V005-3005"):
+    """The correction a vendor would actually send: the disputed unit price
+    dropped to the ordered one, and every total re-added. It clears all the
+    gates, which is what makes it the right document to test supersession
+    with -- three copies of a correction that HOLDs prove nothing."""
+    original = svc.store.get_invoice(invoice_id)
+    ordered = {
+        line.line_no: line.unit_price_cents for line in svc.store.get_po(original.ref_doc_id).lines
+    }
+    lines = [
+        line.model_copy(
+            update={
+                "unit_price_cents": ordered.get(line.line_no, line.unit_price_cents),
+                "line_total_cents": line.qty * ordered.get(line.line_no, line.unit_price_cents),
+            }
+        )
+        for line in original.lines
+    ]
+    return original.model_copy(
+        update={"lines": lines, "total_cents": sum(line.line_total_cents for line in lines)}
+    )
+
+
+def _wired(monkeypatch, corrected_total_cents=49000, extraction_raises=False, at_po_prices=False):
     """A service with the mail side attached and extraction stubbed."""
     # The revision runs the whole pipeline, which calls the agent. Stubbed
     # the way test_chat stubs it: this suite is about what code does with a
@@ -317,7 +347,11 @@ def _wired(monkeypatch, corrected_total_cents=49000, extraction_raises=False):
         "ap@example.test",
     )
     original = svc.store.get_invoice("INV-V005-3005")
-    corrected = original.model_copy(update={"total_cents": corrected_total_cents})
+    corrected = (
+        _at_po_prices(svc)
+        if at_po_prices
+        else original.model_copy(update={"total_cents": corrected_total_cents})
+    )
 
     def fake_extract(path, vendors, **kw):
         if extraction_raises:
@@ -403,3 +437,111 @@ def test_the_committed_decision_and_cache_file_are_untouched(monkeypatch):
     assert on_disk["INV-V005-3005"]["action"] == "EMAIL"
     after_hash = hashlib.sha256(DECISIONS_CACHE.read_bytes()).hexdigest()
     assert after_hash == before_hash
+
+
+# --- one obligation, one payable document --------------------------------
+
+
+def test_the_second_revision_supersedes_the_first_not_the_original(store):
+    """R2 withdraws R1. Pointing it at the original instead would leave two
+    live corrections, and hard_duplicates deliberately does not report one
+    against the other."""
+    original = store.get_invoice("INV-V005-3005")
+    second = make_revision(original, original, sequence=2, supersedes="INV-V005-3005-R1")
+    assert second.replaces == "INV-V005-3005-R1"
+
+
+def test_a_document_with_a_successor_is_reported_as_superseded(store):
+    original = store.get_invoice("INV-V005-3005")
+    revision = original.model_copy(
+        update={"doc_id": "INV-V005-3005-R1", "replaces": "INV-V005-3005"}
+    )
+    store.add_invoice(revision)
+    assert superseded_by(original, store).doc_id == "INV-V005-3005-R1"
+    assert superseded_by(revision, store) is None
+
+
+def test_the_gate_refuses_to_approve_a_superseded_document(store):
+    """The authority half of the chain: hard_duplicates skips inside a
+    correction chain, so something else must stop every copy being paid."""
+    original = store.get_invoice("INV-V005-3005")
+    revision = original.model_copy(
+        update={"doc_id": "INV-V005-3005-R1", "replaces": "INV-V005-3005"}
+    )
+    store.add_invoice(revision)
+    approved = AgentDecision(
+        invoice_id=original.doc_id,
+        action=Action.APPROVE,
+        hold_reason=None,
+        confidence=0.9,
+        reasoning="looks fine",
+        tool_calls=[],
+        rounds_used=1,
+    )
+    checked = apply_tolerances(
+        match_invoice(original, store.all_pos(), store.all_grns()), ToleranceConfig()
+    )
+    out = _apply_guardrails(
+        approved,
+        original,
+        checked,
+        review_gate=False,
+        duplicates=[],
+        config=ToleranceConfig(),
+        chunks=(),
+        superseded=revision,
+    )
+    assert out.action == Action.ESCALATE
+    assert "superseded by INV-V005-3005-R1" in out.reasoning
+
+
+def test_a_vendor_who_sends_the_same_correction_three_times_is_paid_once(monkeypatch):
+    """Finding 1 of the branch review, as a test. No attacker needed: a
+    vendor chasing their own correction sends it again."""
+    svc = _wired(monkeypatch, at_po_prices=True)
+    for _ in range(3):
+        _deliver(svc, _reply_with_pdf)
+    chain = svc._revisions["INV-V005-3005"]
+    assert chain == ["INV-V005-3005-R1", "INV-V005-3005-R2", "INV-V005-3005-R3"]
+    # Each revision withdraws the one before it, not the original.
+    assert [svc.store.get_invoice(doc_id).replaces for doc_id in chain] == [
+        "INV-V005-3005",
+        "INV-V005-3005-R1",
+        "INV-V005-3005-R2",
+    ]
+    approved = [doc_id for doc_id in chain if svc._cache[doc_id]["action"] == Action.APPROVE]
+    assert approved == ["INV-V005-3005-R3"]
+    # And withdrawing R1 and R2 left the invoice they correct alone: it was
+    # EMAIL (that is what sent the query), never an APPROVE, so nothing the
+    # benchmark scores moved.
+    assert svc._cache["INV-V005-3005"]["action"] == Action.EMAIL
+    scheduled = [
+        item["invoice_id"]
+        for run in svc.schedule()["runs"]
+        for payment in run["payments"]
+        for item in payment["invoices"]
+        if item["invoice_id"].startswith("INV-V005-3005")
+    ]
+    assert scheduled == ["INV-V005-3005-R3"]
+
+
+def test_the_corrected_invoice_stops_the_original_being_payable(monkeypatch):
+    """The original is not re-decided on its own, but the moment anything
+    re-runs it — a reviewer clicking Run — code must refuse it."""
+    svc = _wired(monkeypatch)
+    _deliver(svc, _reply_with_pdf)
+    case = svc.run_case("INV-V005-3005")
+    assert case["decision"]["action"] == Action.ESCALATE
+    assert "superseded by INV-V005-3005-R1" in case["decision"]["reasoning"]
+
+
+def test_the_detail_view_shows_the_supersession_gate(monkeypatch):
+    svc = _wired(monkeypatch)
+    _deliver(svc, _reply_with_pdf)
+    gate = next(g for g in svc.get_case("INV-V005-3005")["guardrails"] if g["key"] == "superseded")
+    assert gate["passed"] is False
+    assert gate["label"] == "Superseded by INV-V005-3005-R1"
+    live = next(
+        g for g in svc.get_case("INV-V005-3005-R1")["guardrails"] if g["key"] == "superseded"
+    )
+    assert live["passed"] is True

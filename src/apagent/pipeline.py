@@ -7,9 +7,10 @@ tolerance-checked and frozen into the task message. The model adds
 judgment and tool-gathered evidence on top — it cannot change the facts.
 
 And everything with AUTHORITY happens AFTER the model returns: the code
-guardrails below re-check an APPROVE against every computed fact — the
-money threshold, hard duplicates, the tolerance verdicts (contract-aware),
-unmatched lines, and proof of delivery — and override it when they
+guardrails below re-check an APPROVE against every computed fact — whether
+a later correction has superseded this document, the money threshold, hard
+duplicates, the tolerance verdicts (contract-aware), unmatched lines, the
+currency the order was placed in, and proof of delivery — and override it when they
 disagree. The prompt states the same policies so the model's reasoning
 makes sense, but telling is not enforcing: a model that ignores the policy
 (or is talked out of it by injected document text) answers into a layer
@@ -24,7 +25,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from apagent.agent.ap_tools import hard_duplicates, recheck_with_contract
+from apagent.agent.ap_tools import hard_duplicates, recheck_with_contract, superseded_by
 from apagent.agent.loop import run_agent
 from apagent.agent.prompts import AP_SYSTEM_PROMPT, build_task_message
 from apagent.agent.registry import ToolRegistry
@@ -84,6 +85,10 @@ def decide_invoice(
     # model remembers to call the duplicate tool. The tool stays available
     # for investigation; the fact does not depend on it.
     duplicates = hard_duplicates(invoice, store, config)
+    # Whether a later document has replaced this one. Deterministic and
+    # code-owned like the duplicate set, and computed here for the same
+    # reason: the guardrail must not depend on the model asking.
+    superseded = superseded_by(invoice, store)
 
     decision = run_agent(
         system_prompt=AP_SYSTEM_PROMPT,
@@ -99,7 +104,7 @@ def decide_invoice(
     grn = store.get_grn_for_po(checked.po_id) if checked.po_id else None
     po = store.get_po(checked.po_id) if checked.po_id else None
     decision = _apply_guardrails(
-        decision, invoice, checked, review_gate, duplicates, config, chunks, grn, po
+        decision, invoice, checked, review_gate, duplicates, config, chunks, grn, po, superseded
     )
 
     outbound = _render_outbound_message(decision, invoice, checked, store)
@@ -115,6 +120,31 @@ def _override(decision: AgentDecision, action: Action, hold_reason, why: str) ->
             "hold_reason": hold_reason,
             "reasoning": f"[code guardrail] {why} Model reasoning was: {decision.reasoning}",
         }
+    )
+
+
+def supersede(decision: AgentDecision, successor_id: str) -> AgentDecision:
+    """Withdraw an APPROVE because a later document replaced this invoice.
+
+    Public, and separate from the gate that calls it, because supersession
+    is the one guardrail whose trigger can arrive AFTER the decision was
+    made: R1 is decided while it is still the newest document in the chain,
+    and R2 arriving is what withdraws it. The service applies this to R1's
+    cached decision at that moment rather than re-running the pipeline --
+    the fact is deterministic, so asking the model again would only risk a
+    different answer to a question code already settled.
+
+    A non-APPROVE is returned untouched by the caller, not here: the rule is
+    the same one the whole guardrail layer obeys -- only APPROVE moves money,
+    so only APPROVE is ever overridden.
+    """
+    return _override(
+        decision,
+        Action.ESCALATE,
+        None,
+        f"This document has been superseded by {successor_id}; only "
+        "the latest document in a correction chain is payable, so code "
+        "overrides APPROVE to ESCALATE.",
     )
 
 
@@ -302,6 +332,7 @@ def _apply_guardrails(
     chunks: tuple[Chunk, ...],
     grn: Document | None = None,
     po: Document | None = None,
+    superseded: Document | None = None,
 ) -> AgentDecision:
     """The authority layer: an APPROVE must survive every code check.
 
@@ -312,7 +343,18 @@ def _apply_guardrails(
     if decision.action != Action.APPROVE:
         return decision
 
-    # 1. The money gate. Above the manual-review threshold a human signs
+    # 1. The supersession gate. A document another document replaces has
+    # been withdrawn by its own issuer -- the vendor sent a correction, and
+    # the correction is what we owe. Paying both is not a duplicate in the
+    # gate-5 sense (hard_duplicates deliberately skips inside a correction
+    # chain, so the corrected invoice is not reported against the one it
+    # corrects), so without this rule every copy of one correction clears on
+    # its own merits and each schedules its own payment. Exactly one document
+    # in a chain can be live, and it is the last one.
+    if superseded is not None:
+        return supersede(decision, superseded.doc_id)
+
+    # 2. The money gate. Above the manual-review threshold a human signs
     # off even on a perfectly clean match.
     if review_gate:
         return _override(
@@ -323,7 +365,7 @@ def _apply_guardrails(
             "so code overrides APPROVE to ESCALATE.",
         )
 
-    # 2. No purchase order at all: there is nothing to have matched against,
+    # 3. No purchase order at all: there is nothing to have matched against,
     # so an APPROVE has no factual basis whatever the model says.
     if checked.po_id is None:
         return _override(
@@ -334,7 +376,7 @@ def _apply_guardrails(
             "overrides APPROVE to ESCALATE.",
         )
 
-    # 3. Invoice lines that exist on no PO: the over-billing / wrong-customer
+    # 4. Invoice lines that exist on no PO: the over-billing / wrong-customer
     # case, and money attached to goods we never ordered.
     if checked.unmatched_inv_lines:
         return _override(
@@ -345,7 +387,7 @@ def _apply_guardrails(
             "order line, so code overrides APPROVE to ESCALATE.",
         )
 
-    # 4. The duplicate gate. If ANY hard duplicate exists, neither invoice
+    # 5. The duplicate gate. If ANY hard duplicate exists, neither invoice
     # of the pair is auto-payable — a human picks the real one. We used to
     # let the earlier-dated one through, but issue_date is printed by the
     # supplier: back-dating a resubmission walked straight past that gate
@@ -364,7 +406,7 @@ def _apply_guardrails(
             "so code overrides APPROVE to ESCALATE.",
         )
 
-    # 5. The facts gate. Re-check every tolerance verdict — with the
+    # 6. The facts gate. Re-check every tolerance verdict — with the
     # vendor's contractual price allowance re-derived IN CODE from the
     # clause text (the same computation the recheck tool showed the model).
     # An APPROVE survives only if code agrees the rows are covered. This is
@@ -409,7 +451,7 @@ def _apply_guardrails(
             "overrides APPROVE to ESCALATE.",
         )
 
-    # 6. The proof-of-delivery gate. No goods receipt means nothing confirms
+    # 7. The proof-of-delivery gate. No goods receipt means nothing confirms
     # the goods arrived; paying on the vendor's word alone is the exact risk
     # a three-way match exists to prevent. (If the business later handles
     # service invoices with no GRN concept, this gate gains an exemption —

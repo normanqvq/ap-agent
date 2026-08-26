@@ -76,6 +76,27 @@ def _revision_chain(invoice: Document, store: DocumentStore) -> set[str]:
     return chain
 
 
+def superseded_by(invoice: Document, store: DocumentStore) -> Document | None:
+    """The document that replaces this one, or None if it is still the live one.
+
+    The other half of _revision_chain, and the reason that helper is safe.
+    Skipping the duplicate check inside a correction chain is only sound if
+    exactly one document in the chain can be paid; without this, R1, R2 and
+    R3 are three invoices that duplicate-check clean against each other and
+    each APPROVE on their own merits. A vendor re-sending the same correction
+    twice is enough to trigger that -- no attacker required.
+
+    Only the direct successor is looked for, not the whole chain: a document
+    with any successor at all cannot be paid, so the first one found settles
+    it. `replaces` is set by code alone (see make_revision), so this cannot
+    be induced by anything a vendor sends.
+    """
+    for other in store.invoices_for_vendor(invoice.vendor_id):
+        if other.replaces == invoice.doc_id:
+            return other
+    return None
+
+
 def hard_duplicates(
     invoice: Document, store: DocumentStore, config: ToleranceConfig | None = None
 ) -> list[Document]:
