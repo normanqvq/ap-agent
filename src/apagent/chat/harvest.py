@@ -19,6 +19,15 @@ Refusing to look at a message from an unlisted sender would throw away the
 most useful thing on a hold screen: what was actually said, and by whom. So
 an unauthorised confirmation still becomes evidence -- it simply arrives with
 confirmed_by=None, and pipeline.grn_gate will not release money on it alone.
+
+One boundary to know when reading step 3: authorisation attaches to the
+SENDER of the @mention, while the claim is extracted from the whole window --
+other people's words included. A supplier in the group can type "all
+arrived" and a rostered colleague's casual @mention then mints an authorised
+receipt from it. The echo-back (the bot states exactly what it recorded,
+while the typist still remembers the delivery), the informal ceiling, and
+the quantity check bound the damage; the split itself is stated here rather
+than left to be discovered.
 """
 
 from datetime import datetime
