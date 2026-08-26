@@ -779,17 +779,18 @@ function renderDetail(c) {
   // exact chat pipeline (extract -> resolve -> grn_gate), so a blurry photo or
   // a short delivery leaves the invoice held; only a clean, covered receipt
   // releases it. The image is read by a multimodal model, then discarded.
+  // Build a fresh <input> per click, so a failed upload can be retried and no
+  // detached input piles up on the body across re-renders.
   const photoBtn = document.getElementById("photo-grn");
-  if (photoBtn) {
+  if (photoBtn) photoBtn.addEventListener("click", () => {
     const photoInput = document.createElement("input");
     photoInput.type = "file";
     photoInput.accept = "image/*";
     photoInput.hidden = true;
     document.body.appendChild(photoInput);
-    photoBtn.addEventListener("click", () => photoInput.click());
     photoInput.addEventListener("change", async () => {
       const f = photoInput.files[0];
-      if (!f) return;
+      if (!f) { photoInput.remove(); return; }
       photoBtn.disabled = true;
       photoBtn.textContent = "Reading the photo…";
       const fd = new FormData();
@@ -811,7 +812,8 @@ function renderDetail(c) {
         if (again) { again.disabled = false; again.textContent = "Upload delivery photo"; }
       }
     });
-  }
+    photoInput.click();
+  });
   const confirmBtn = document.getElementById("confirm");
   if (confirmBtn) confirmBtn.addEventListener("click", async (e) => {
     e.target.disabled = true;
