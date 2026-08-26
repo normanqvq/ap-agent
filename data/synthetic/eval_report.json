@@ -31,8 +31,8 @@
     {
       "invoice_id": "INV-V005-3005",
       "defect": "price_variance",
-      "action": "HOLD",
-      "hold_reason": "PRICE_VARIANCE",
+      "action": "EMAIL",
+      "hold_reason": null,
       "verdict": "pass"
     },
     {

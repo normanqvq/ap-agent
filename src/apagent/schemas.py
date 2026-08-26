@@ -45,6 +45,7 @@ class EvidenceSource(StrEnum):
 
     ERP = "ERP"
     CHAT = "CHAT"
+    EMAIL = "EMAIL"
 
 
 class ChatGrnPolicy(StrEnum):
@@ -146,6 +147,14 @@ class Document(BaseModel):
     to PO). A missing ref_doc_id is a very common defect in real documents. When
     it is missing, the only way is to search back by vendor plus amount.
 
+    replaces names the document this one supersedes -- set only by code, when a
+    vendor sends a corrected invoice in answer to a query. It is what stops the
+    duplicate gate from flagging a correction as a resubmission: same vendor,
+    same purchase order, near-identical total is exactly what a duplicate looks
+    like, and exactly what a correction looks like too. The link is the only
+    thing that distinguishes them, which is why it is never read off the
+    vendor's paper.
+
     The invoice-only fields (payment_terms, due_date, tax_cents, total_cents)
     sit directly in Document and are None when they do not apply, instead of
     living in an Invoice subclass. The matching engine handles all three
@@ -169,6 +178,8 @@ class Document(BaseModel):
     ref_doc_id: str | None
     currency: str | None
     lines: list[LineItem]
+
+    replaces: str | None = None  # the doc_id this revision supersedes, set by code
 
     # These only have a value on an Invoice. On a PO or GRN they stay None.
     payment_terms: str | None = None
@@ -381,6 +392,71 @@ class ChatGrnEvidence(BaseModel):
     refusal_reason: str | None = None
 
 
+class InboundMail(BaseModel):
+    """One message off the inbox, decoded, as the adapter saw it.
+
+    Everything here except message_id is attacker-controlled: a vendor — or
+    anyone who can guess an address — chooses the subject, the body and the
+    From line. The fields exist so code can decide what to do about that, not
+    because any of them are trusted.
+
+    subject is stored DECODED. A real reply from an Outlook client came back
+    as `=?gb2312?B?...?=` with a localised prefix ("回复:", not "Re:"), so a
+    raw header here would surface as mojibake in the console. It is decoded
+    for display only — never for matching, see thread.py.
+
+    references is the parsed References header, oldest first. Kept whole
+    because correlate() walks it newest-first: both the immediate parent and
+    every ancestor before it are candidates for a match, not just the head
+    of the list.
+    """
+
+    message_id: str
+    in_reply_to: str | None
+    references: list[str] = []
+    to_addrs: list[str] = []
+    from_addr: str
+    subject: str
+    body_text: str
+    received_at: str  # ISO string, same rule as issue_date
+    auto_submitted: str | None = None
+    attachments: list[str] = []  # filenames only in phase 1
+
+
+class VendorReplyEvidence(BaseModel):
+    """A vendor's answer to a query we sent, tied to one invoice.
+
+    The email counterpart of ChatGrnEvidence, and deliberately the same
+    shape: no action field, no approve flag. The most a reply can be is
+    something a reviewer reads. A message saying "approve this now" has
+    nowhere to put that instruction, which is what makes the defence
+    architectural rather than a matter of prompt wording.
+
+    matched_by records WHICH check tied this to the invoice, because the two
+    are not equally strong and an auditor should not have to guess: an
+    in_reply_to match rides on a Message-ID we generated, a token match on a
+    secret we put in the reply address. Both beat the subject line, which is
+    never consulted.
+
+    from_registered_sender is False when the reply came from outside the
+    domain on file for that vendor. Such a reply is still kept — a human
+    reviewing the hold should see what arrived — but no automatic path acts
+    on it, exactly as an unauthorised chat confirmer produces evidence with
+    confirmed_by=None.
+    """
+
+    evidence_id: str  # code-generated, e.g. MAIL-EV-0001 — never text from mail
+    invoice_id: str
+    from_addr: str
+    subject: str
+    received_at: str
+    body_text: str
+    matched_by: str  # "in_reply_to" | "token"
+    from_registered_sender: bool = False
+    attachments: list[str] = []
+    is_non_delivery: bool = False
+
+
 class ToolCall(BaseModel):
     """A record of one tool call the agent made.
 
@@ -483,6 +559,13 @@ class ToleranceConfig(BaseModel):
         solve, so the rule would never have fired on its own motivating
         example. Same class of number as the one above — it moves the headline
         metric, so it is chosen, not defaulted.
+    vendor_chase_after_hours 72 and vendor_escalate_after_hours 168 (3 and 7
+        days) - how long a vendor query goes unanswered before we send one
+        reminder, and before the invoice goes to a human. In HOURS rather
+        than days so a live demo can set them to 1 without inventing a
+        second unit. Exactly one chase: a second reminder annoys the vendor
+        without adding information, and the thing that actually unblocks a
+        silent vendor is a person picking up a phone.
 
     All of these are still first guesses. Once we see the problem set on 8/14 and
     can measure the STP rate against it, tune them here, in one place.
@@ -495,4 +578,6 @@ class ToleranceConfig(BaseModel):
     manual_review_threshold_cents: int = 500_000
     informal_grn_ceiling_cents: int = 200_000
     chat_grn_policy: ChatGrnPolicy = ChatGrnPolicy.TIERED
+    vendor_chase_after_hours: int = 72
+    vendor_escalate_after_hours: int = 168
     per_vendor_overrides: dict[str, "ToleranceConfig"] | None = None

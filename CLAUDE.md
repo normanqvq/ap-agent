@@ -27,8 +27,9 @@ Agentic AP invoice matching and payment scheduling.
 ## Metrics definitions
 - STP rate = APPROVE count / total invoices. HOLD does not count — no human
   touched it, but the process is not finished.
-- Touchless rate = (APPROVE + HOLD) / total. Report both; one number alone
-  invites suspicion.
+- Touchless rate = (APPROVE + HOLD + EMAIL) / total. All three were decided
+  without a human at that moment; EMAIL is a query the system sent itself.
+  Report both this and STP; one number alone invites suspicion.
 - False-approve rate = invoices approved that should not have been. This is
   the number that matters most: the risk of automation is wrong payment,
   not slowness.

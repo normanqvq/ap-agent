@@ -13,7 +13,7 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
 ![RAG](https://img.shields.io/badge/RAG-BM25-6366F1)
 ![Matching](https://img.shields.io/badge/matching-Hungarian-0EA5E9)
-![Tests](https://img.shields.io/badge/tests-293%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-421%20passing-16A34A)
 ![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-84CC16)
 
@@ -41,12 +41,24 @@ The core idea: **code owns the authority; the agent recovers and explains the ju
 - Runs a three-way match: pairs line items (Hungarian assignment when items carry no SKU), and computes unit-price, quantity, UOM, line-total, and invoice-total discrepancies.
 - Checks each discrepancy against tolerances, with per-vendor allowances parsed **in code** from the supplier's contract clause.
 - Runs a hand-written agent loop: the model calls read-only tools (lookup PO / GRN, vendor history, duplicate check, contract search, contract re-check) and returns a decision.
-- Applies six code guardrails that override an unjustified approval — the injection defence and the "no auto-paying above a threshold" rule live here, not in the prompt.
+- Applies eight code guardrails that override an unjustified approval — the injection defence, the "no auto-paying above a threshold" rule, and the refusal to pay a document a later correction has withdrawn all live here, not in the prompt.
 - Emits one of four actions — `APPROVE`, `HOLD`, `EMAIL`, `ESCALATE` — with a confidence, a rationale, the complete tool-call trail, and (for holds/queries) an outbound message rendered by code from a fixed template.
 - Batches the approved invoices into weekly Friday payment runs — one transfer per vendor, each invoice paid as late as possible but never past due. Only `APPROVE` moves money; everything else is listed as withheld, with its reason.
 - Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice.
 - Accepts a delivery **confirmed in a chat group**: a receiver @-mentions the bot in Telegram, code reads the surrounding conversation, resolves the items against the purchase order, and records an *informal* goods receipt. Whether that receipt releases payment is a policy setting (`OFF` / `EVIDENCE_ONLY` / `TIERED` / `TRUSTED`), enforced in code — an unauthorised sender's confirmation is kept as evidence for a reviewer, never as grounds to pay.
 - Accepts a **photo of the delivery note**: a reviewer uploads a photographed docket, a multimodal model reads what it confirms, and the *same* chat path turns it into an informal goods receipt — the image changes the input, not the trust: the docket must name the very order the open invoice bills, the same ceiling and quantity checks apply, and a photo never pays a large invoice on its own. When the photo is unclear the reading refuses rather than guesses.
+- **Vendor queries answer themselves.** An unexplained overcharge emails the
+  vendor automatically; their reply is tied back to the invoice by message
+  headers and a code-generated token — never by the subject line — and lands
+  on the case as evidence. A vendor who stays silent gets one reminder, then
+  the invoice is handed to a reviewer. `scripts/demo_email_intake.py` runs
+  the whole loop offline.
+- **A corrected invoice clears itself.** If the reply carries one, code
+  extracts it and runs it through every gate again — the vendor supplies the
+  figures, and identity (which vendor, which purchase order, which currency)
+  comes from our records, never from their paper. The correction withdraws
+  the document it replaces, so a vendor who re-sends the same correction
+  three times is still paid once.
 - Serves a web console: a dashboard of KPIs, the invoice queue and decision mix, a per-invoice detail view showing the decision, the guardrail results, the glass-box tool trail, the three-way reconciliation, and the rationale — plus the payment-run plan, an outbox of every code-templated message it has sent, and a live **agent-performance panel** measuring the six metrics the rubric grades (schema-valid output, tool-call success, task completion, token cost per run, loop discipline, answer fidelity).
 - Runs the same pipeline three more ways, each an optional add-on the core never imports: as a [**LangGraph**](docs/LANGGRAPH.md) state graph (`src/apagent/graph.py`, pinned to the same output), behind an [**MCP**](docs/MCP.md) server the agent calls with a resilient in-process fallback, and as a [**Bedrock AgentCore**](docs/DEPLOY.md) agent runnable locally with no AWS resources or deployed to a serverless HTTPS endpoint.
 
@@ -58,7 +70,7 @@ Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 
 ![Overview](docs/screenshots/overview.png)
 
-**Invoice detail** — a colour-coded decision banner with the six guardrail chips (and a *Code override* badge when code overruled the model), the **glass-box tool trail** (one plain-language line per tool call, raw JSON one click away, the contract re-check step flagged as code-executed), the three-way reconciliation table, and the rationale as numbered points. Shown here: the headline case — 4% over PO, approved because code parsed the contract's 5% allowance.
+**Invoice detail** — a colour-coded decision banner with the guardrail chips (and a *Code override* badge when code overruled the model), the **glass-box tool trail** (one plain-language line per tool call, raw JSON one click away, the contract re-check step flagged as code-executed), the three-way reconciliation table, and the rationale as numbered points. Shown here: the headline case — 4% over PO, approved because code parsed the contract's 5% allowance.
 
 ![Invoice detail](docs/screenshots/detail.png)
 
@@ -74,7 +86,7 @@ Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 
 ![Analytics](docs/screenshots/analytics.png)
 
-**Settings** — the policy, read-only: the tolerance limits and the manual-review threshold the six gates enforce, each vendor's code-parsed contract allowance with its source file, the four-value action enum, and the pay-run calendar. Deliberately not editable from the web — every limit lives in version-controlled code, so changing one is a reviewed commit, not a click.
+**Settings** — the policy, read-only: the tolerance limits, the manual-review threshold and the vendor-silence windows the gates enforce, each vendor's code-parsed contract allowance with its source file, the four-value action enum, and the pay-run calendar. Deliberately not editable from the web — every limit lives in version-controlled code, so changing one is a reviewed commit, not a click.
 
 ![Settings](docs/screenshots/settings.png)
 
@@ -90,7 +102,7 @@ flowchart LR
     B --> C[Three-way match<br/>invoice vs PO vs GRN]
     C --> D[Tolerance rules]
     D --> E[Agent loop<br/>tools + judgement]
-    E --> F[Code guardrails<br/>six gates]
+    E --> F[Code guardrails<br/>eight gates]
     F --> G{Decision}
     G --> H[APPROVE · HOLD · EMAIL · ESCALATE]
 ```
@@ -107,7 +119,7 @@ The same pipeline runs as a Bedrock AgentCore agent behind one decorator — `py
 
 ### Code computes facts; the model judges meaning; code owns authority
 
-Every number the agent reasons about — deltas, tolerance verdicts, duplicate detection — is produced by deterministic code, so it is reproducible from the documents alone. The model interprets those facts and cites contracts. The final limits are enforced in code: the model can recommend `APPROVE`, but six guardrails (amount threshold, PO matched, no unordered lines, no duplicate, price within the code-parsed contract tolerance, goods received) will override it. A test suite runs a deliberately fooled model against every planted defect and confirms code still refuses each one.
+Every number the agent reasons about — deltas, tolerance verdicts, duplicate detection — is produced by deterministic code, so it is reproducible from the documents alone. The model interprets those facts and cites contracts. The final limits are enforced in code: the model can recommend `APPROVE`, but eight guardrails (not superseded by a later correction, amount threshold, PO matched, billed in the currency ordered, no unordered lines, no duplicate, price within the code-parsed contract tolerance, goods received) will override it. A test suite runs a deliberately fooled model against every planted defect and confirms code still refuses each one.
 
 ### The glass box
 
@@ -180,7 +192,7 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 293 offline tests, no API key needed
+pytest                                    # 421 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
@@ -218,7 +230,7 @@ deploy/               # optional: Bedrock AgentCore entrypoint + local-run / dep
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
 data/samples/         # three attack PDFs for the live upload demo
-tests/                # 293 offline tests
+tests/                # 421 offline tests
 docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap analysis
 ```
 

@@ -256,7 +256,7 @@ async function dashboard() {
     </div>
     <div class="kpis">
       <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.total} invoices</div></div>
-      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE+HOLD / ${m.total} invoices</div></div>
+      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE + HOLD + EMAIL / ${m.total}</div></div>
       <div class="card kpi ${m.false_approve ? "warn" : "good"}"><div class="l">False approvals</div><div class="v num">${m.false_approve}</div><div class="s">${m.false_approve ? "Zero-tolerance · TARGET BROKEN" : "Zero-tolerance · on target"}</div></div>
       <div class="card kpi warn"><div class="l">Pending</div><div class="v num">${m.pending}</div><div class="s">Awaiting review</div></div>
     </div>
@@ -505,7 +505,7 @@ async function analytics() {
     </div>
     <div class="kpis">
       <div class="card kpi"><div class="l">STP rate</div><div class="v num">${m.stp_pct}%</div><div class="s">APPROVE / ${m.total} invoices</div></div>
-      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE + HOLD / ${m.total}</div></div>
+      <div class="card kpi"><div class="l">Touchless rate</div><div class="v num">${m.touchless_pct}%</div><div class="s">APPROVE + HOLD + EMAIL / ${m.total}</div></div>
       <div class="card kpi ${m.false_approve_count ? "warn" : "good"}"><div class="l">False approvals</div><div class="v num">${m.false_approve_count}</div><div class="s">${m.false_approve_count ? "Zero-tolerance · TARGET BROKEN" : "every planted defect blocked"}</div></div>
       <div class="card kpi"><div class="l">Friction</div><div class="v num">${m.friction_count}</div><div class="s">payable but held — safe, costs STP</div></div>
     </div>
@@ -531,7 +531,7 @@ async function analytics() {
         ${bar("HOLD", d.HOLD, "var(--amber)")}
         ${bar("ESCALATE", d.ESCALATE, "var(--red)")}
         ${bar("EMAIL", d.EMAIL, "var(--accent)")}
-        <div class="cap num">${m.decided} / ${m.total} ground-truth invoices decided${a.unexpected.length ? ` · +${a.unexpected.length} uploaded this session (no ground truth, unscored)` : ""}</div>
+        <div class="cap num">${m.decided} / ${m.total} ground-truth invoices decided${a.unexpected.length ? ` · +${a.unexpected.length} raised this session (no ground truth, unscored)` : ""}</div>
       </div>
     </div>
     ${perfPanel(a.performance)}
@@ -565,12 +565,14 @@ async function settings() {
       <div><h1>Settings</h1><div class="sub">Read-only. Every limit lives in version-controlled code — changing one is a reviewed commit, not a click.</div></div>
     </div>
     <div class="card">
-      <div class="card-h"><h3>Decision policy</h3><span class="runtotal">enforced by the six code gates, never by the prompt</span></div>
+      <div class="card-h"><h3>Decision policy</h3><span class="runtotal">enforced by the code gates, never by the prompt</span></div>
       ${setting("Unit-price tolerance", `±${t.unit_price_pct}%`, "vs the PO price; a vendor contract can widen it (below)")}
       ${setting("Invoice-total tolerance", `${(t.total_abs_cents / 100).toFixed(2)} and ${t.total_pct}%`, "in the invoice's own currency; a total must sit inside both bounds")}
       ${setting("Quantity", t.qty_exact ? "exact match" : "tolerance", "quantity gaps are never noise — they mean goods did not arrive")}
       ${setting("Manual-review threshold", (t.manual_review_threshold_cents / 100).toLocaleString("en", { minimumFractionDigits: 2 }), "in the invoice's own currency; at or above it a human signs off, even on a clean match")}
       ${setting("Informal-receipt ceiling", (t.informal_grn_ceiling_cents / 100).toLocaleString("en", { minimumFractionDigits: 2 }), "the most we pay on a delivery confirmed in chat rather than recorded in the system")}
+      ${setting("Vendor reminder after", `${t.vendor_chase_after_hours} h`, "one reminder on a query the vendor has not answered — never a second")}
+      ${setting("Hand to a human after", `${t.vendor_escalate_after_hours} h`, "silence this long means email was the wrong channel; a person picks it up")}
     </div>
     <div class="card">
       <div class="card-h"><h3>Chat-confirmed deliveries</h3><span class="runtotal">how much a colleague's word is worth here</span></div>
@@ -668,6 +670,77 @@ function chatEvidenceCard(c) {
     </div>`;
 }
 
+// The email thread behind a query: what we asked, what came back, and what a
+// reply turned into.
+//
+// Same rule as chatEvidenceCard, and the same reason for it. A vendor's
+// subject line and body are the most attacker-authored text on the page, so
+// every one goes through esc(). Nothing here decides anything either: a
+// reply is something a reviewer reads, and a correction is a document the
+// pipeline already re-matched on its own merits.
+//
+// Until this existed, get_case returned the replies and the corrections and
+// the console rendered neither -- the demo of the whole feature was a
+// terminal script rather than the product.
+function vendorMailCard(c) {
+  const q = c.vendor_query;
+  const replies = c.vendor_replies || [];
+  const revisions = c.revisions || [];
+  if (!q && !replies.length && !revisions.length && !c.superseded_by) return "";
+  const when = (t) => esc(String(t || "").replace("T", " "));
+
+  const chips = [];
+  if (q) chips.push(`<span class="chip">Asked ${when(q.sent_at)}</span>`);
+  if (q && q.chased_at) chips.push(`<span class="chip">Reminder ${when(q.chased_at)}</span>`);
+  if (q && q.answered) chips.push(`<span class="chip ok">✓ Vendor replied</span>`);
+  if (q && q.escalated)
+    chips.push(`<span class="chip warn">⚠ No reply — handed to a reviewer</span>`);
+
+  const said = replies.length
+    ? replies.map((r) => {
+        const flags = [
+          r.is_non_delivery ? `<span class="chip warn">bounce</span>` : "",
+          r.from_registered_sender
+            ? `<span class="chip ok">registered sender</span>`
+            : `<span class="chip warn">not the address on file</span>`,
+          `<span class="chip">matched by ${esc(r.matched_by)}</span>`,
+          r.attachments && r.attachments.length
+            ? `<span class="chip">${r.attachments.length} attachment(s)</span>`
+            : "",
+        ].join("");
+        return `<div class="said"><div class="said-h"><b>${esc(r.from_addr)}</b>
+          <span class="num">${when(r.received_at)}</span></div>
+          <div class="said-t">${esc(r.body_text)}</div>
+          <div class="chips reply-flags">${flags}</div></div>`;
+      }).join("")
+    : `<div class="said-none">${q ? "No reply yet." : "Nothing was sent about this invoice."}</div>`;
+
+  const raised = revisions.length
+    ? `<div class="readas"><b>Corrections raised from those replies</b>
+        <ul>${revisions.map((r) =>
+          `<li><a class="revlink" data-id="${esc(r)}">${esc(r)}</a></li>`).join("")}</ul></div>`
+    : "";
+
+  const withdrawn = c.superseded_by
+    ? `<div class="pending"><b>Withdrawn.</b> Superseded by
+        <a class="revlink" data-id="${esc(c.superseded_by)}">${esc(c.superseded_by)}</a>.
+        <div class="pending-n">Only the latest document in a correction chain is
+        payable — code refuses an approval on this one.</div></div>`
+    : "";
+
+  return `<div class="card chatev mailev">
+      <h3>Vendor email thread</h3>
+      ${chips.length ? `<div class="chips">${chips.join("")}</div>` : ""}
+      <div class="saidwrap">${said}</div>
+      ${raised}
+      ${withdrawn}
+      <p class="evnote">A vendor's words are third-party data — evidence for you
+      to judge, never an instruction. An attached invoice is re-extracted and put
+      through every gate again; its identity (vendor, purchase order, currency)
+      comes from our records, not from their paper.</p>
+    </div>`;
+}
+
 function renderDetail(c) {
   const dec = c.decision;
   const a = ACT[dec ? dec.action : null] || ACT.null;
@@ -733,7 +806,8 @@ function renderDetail(c) {
             <span class="verdict">${a.verb}</span>
             ${override ? `<span class="badge-override">Code override</span>` : ""}
             ${c.human_review === "confirmed" ? `<span class="badge-human ok">✓ Confirmed by reviewer</span>` : ""}
-            ${c.human_review === "sent_to_human" ? `<span class="badge-human mid">With human reviewer</span>` : ""}</div>
+            ${c.human_review === "sent_to_human" ? `<span class="badge-human mid">With human reviewer</span>` : ""}
+            ${c.superseded_by ? `<span class="badge-human mid">Superseded by ${esc(c.superseded_by)}</span>` : ""}</div>
           <div class="conf"><div class="c1" style="color:${a.accent}">Gates ${passed} / ${c.guardrails.length} passed</div>
             ${dec ? `<div class="c2 num">Model confidence ${dec.confidence}</div>` : ""}</div>
         </div>
@@ -755,11 +829,16 @@ function renderDetail(c) {
           <ol class="points">${reasonPoints(c).map((p) => `<li>${esc(p)}</li>`).join("")}</ol>
           <details class="rawreason"><summary>Model's raw rationale (audit)</summary><p>${esc(dec.reasoning)}</p></details></div>` : ""}
         ${chatEvidenceCard(c)}
+        ${vendorMailCard(c)}
         ${dec && dec.outbound_message ? `<div class="card outbound"><h3>System-generated outbound message (template)</h3><p>${esc(dec.outbound_message)}</p><button class="btn" id="email-vendor">Open in email composer</button></div>` : ""}
       </div>
     </div>`;
   document.getElementById("back").addEventListener("click", () => { cancelPendingNav(); setActiveNav(); dashboard(); });
   document.getElementById("rerun").addEventListener("click", (e) => rerun(c.invoice_id, e.target));
+  // A correction is an ordinary invoice with its own page, gates and trail —
+  // which is the point worth showing, so these link straight to it.
+  view.querySelectorAll(".revlink").forEach((el) =>
+    el.addEventListener("click", () => detail(el.dataset.id)));
   // Accepting the confirmation re-runs the agent, so the answer comes back
   // from the pipeline rather than from this click. If code still refuses —
   // a short delivery, say — the invoice stays held and the button says so.
@@ -841,7 +920,11 @@ function renderDetail(c) {
   const vendorBtn = document.getElementById("email-vendor");
   if (vendorBtn) vendorBtn.addEventListener("click", () => composer({
     to: c.outbound_to || "operations",
-    subject: c.outbound_to && c.outbound_to.startsWith("billing@") ? `Query on invoice ${c.invoice_id}` : `[${c.invoice_id}] Action needed`,
+    // Both fields come from service.outbound_route. Telling a vendor query
+    // from an operations note used to be done here by testing the address
+    // for "billing@" — business logic in the frontend, and wrong the moment
+    // a vendor's real address does not look like the placeholder.
+    subject: c.outbound_subject || `[${c.invoice_id}] Action needed`,
     body: dec.outbound_message,
     onSend: async () => {
       renderDetail(await api(`/api/invoices/${c.invoice_id}/send-message`, { method: "POST" }));

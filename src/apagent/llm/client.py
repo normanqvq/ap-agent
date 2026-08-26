@@ -80,7 +80,12 @@ _OPENAI_COMPAT_PROVIDERS = {
         "GROQ_API_KEY",
         "https://api.groq.com/openai/v1",
         "GROQ_MODEL",
-        "llama-3.3-70b-versatile",
+        # Groq retired llama-3.3-70b-versatile; the old default 404s with a
+        # message that reads like a key problem. Groq's catalogue moves fast,
+        # so when this one goes too, GET /openai/v1/models lists what a key
+        # can actually reach. groq/compound is deliberately not the default:
+        # it runs its own built-in tools, and this app supplies the tools.
+        "openai/gpt-oss-120b",
     ),
     "openai": ("OPENAI_API_KEY", None, "LLM_MODEL", "gpt-4o"),
 }
@@ -332,7 +337,11 @@ def _call_openai_compat(
         raise ValueError(f"{key_env} environment variable not set (required for {provider})")
 
     base_url = os.getenv("LLM_BASE_URL") or default_base_url
-    model = os.getenv(model_env, default_model)
+    # `or` rather than getenv's default, because .env.example ships every model
+    # override as a PRESENT but EMPTY line (GROQ_MODEL=). getenv only falls back
+    # when the name is absent, so anyone who copies the example file asks the
+    # provider for the model named "" and gets a 404 that blames their key.
+    model = os.getenv(model_env) or default_model
 
     client = OpenAI(api_key=api_key, base_url=base_url)
 

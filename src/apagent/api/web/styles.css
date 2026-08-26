@@ -331,6 +331,14 @@ body {
   background: var(--amber-bg); color: var(--amber); font-size: 13px; }
 .chatev .pending-n { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .chatev .evnote { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+/* The mail thread reuses the chat card wholesale -- same shape of claim, same
+   "this is evidence, not authority" framing -- and differs only in the accent
+   and the two things chat has no equivalent of: per-reply flags, and a link
+   to the correction a reply turned into. */
+.card.chatev.mailev { border-left-color: var(--accent-border); }
+.mailev .reply-flags { margin: 6px 0 0; }
+.mailev .revlink { color: var(--accent); cursor: pointer; font-weight: 600; }
+.mailev .revlink:hover { text-decoration: underline; }
 
 /* --- read-only policy block (Settings) ---------------------------------- */
 /* Deliberately does NOT look like a control. This page's claim is that every

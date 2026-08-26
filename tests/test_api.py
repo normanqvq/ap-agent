@@ -89,9 +89,9 @@ def test_performance_metrics_can_show_a_failure():
     assert p["tool_success_pct"] < 100  # the Error: result counts
 
 
-def test_performance_scores_the_eval_view_not_the_raw_cache():
+def test_performance_scores_the_benchmark_view_not_the_raw_cache():
     """An uploaded (session) invoice must not inflate the panel's population —
-    performance() scores _eval_view(), same as the other scorecards."""
+    performance() scores _benchmark_view(), same as the other scorecards."""
     svc = Service()
     base_total = svc.performance()["schema_pass"]["total"]
     svc._cache["INV-UPLOAD-1"] = {

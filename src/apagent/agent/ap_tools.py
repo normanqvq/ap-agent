@@ -37,6 +37,66 @@ def _totals_duplicate(a: int | None, b: int | None, config: ToleranceConfig) -> 
     return abs(a - b) <= config.total_abs_cents
 
 
+def _revision_chain(invoice: Document, store: DocumentStore) -> set[str]:
+    """Every doc_id in this invoice's correction chain, both directions.
+
+    A corrected invoice is indistinguishable from a resubmission by the
+    duplicate key alone -- same vendor, same purchase order, near-identical
+    total is the definition of both. What separates them is the `replaces`
+    link, which only code sets, and only when the document arrived as an
+    answer to a query we ourselves sent.
+
+    Walked in both directions, and transitively, because which end of the
+    chain is being decided is an accident of timing: the revision is scored
+    when it arrives, and the original is re-scored whenever anything else
+    about it changes.
+
+    A `replaces` naming a document we do not hold is ignored rather than
+    trusted -- it buys an attacker nothing, which is the point of checking
+    against the store instead of against the field alone.
+    """
+    chain = {invoice.doc_id}
+    frontier = [invoice]
+    while frontier:
+        current = frontier.pop()
+        candidates = []
+        if current.replaces:
+            older = store.get_invoice(current.replaces)
+            if older is not None:
+                candidates.append(older)
+        candidates.extend(
+            other
+            for other in store.invoices_for_vendor(invoice.vendor_id)
+            if other.replaces == current.doc_id
+        )
+        for doc in candidates:
+            if doc.doc_id not in chain:
+                chain.add(doc.doc_id)
+                frontier.append(doc)
+    return chain
+
+
+def superseded_by(invoice: Document, store: DocumentStore) -> Document | None:
+    """The document that replaces this one, or None if it is still the live one.
+
+    The other half of _revision_chain, and the reason that helper is safe.
+    Skipping the duplicate check inside a correction chain is only sound if
+    exactly one document in the chain can be paid; without this, R1, R2 and
+    R3 are three invoices that duplicate-check clean against each other and
+    each APPROVE on their own merits. A vendor re-sending the same correction
+    twice is enough to trigger that -- no attacker required.
+
+    Only the direct successor is looked for, not the whole chain: a document
+    with any successor at all cannot be paid, so the first one found settles
+    it. `replaces` is set by code alone (see make_revision), so this cannot
+    be induced by anything a vendor sends.
+    """
+    for other in store.invoices_for_vendor(invoice.vendor_id):
+        if other.replaces == invoice.doc_id:
+            return other
+    return None
+
+
 def hard_duplicates(
     invoice: Document, store: DocumentStore, config: ToleranceConfig | None = None
 ) -> list[Document]:
@@ -56,6 +116,15 @@ def hard_duplicates(
     deterministic fact, and facts must not depend on whether the model
     remembered to call a tool.
 
+    A document in the invoice's own revision chain (see _revision_chain) is
+    never reported against it: a corrected invoice and the invoice it
+    corrects share vendor, PO and near-identical total by construction, and
+    without the chain check that is exactly a hard-duplicate match. The
+    chain is populated only by the code-set `replaces` link, verified
+    against the store, so this does NOT make an unlinked copy safe — an
+    invoice with no `replaces` (or a forged one naming a document we do not
+    hold) still hits the ordinary comparison below and is still caught.
+
     Residual (documented, not closed here): a resubmission that changes the
     amount via a WITHIN-tolerance price bump, kept internally consistent, is
     indistinguishable from a genuine slightly-different invoice without a
@@ -69,9 +138,10 @@ def hard_duplicates(
         # No resolvable PO. The no-PO guardrail already escalates these, and
         # with nothing to key on we cannot claim a duplicate.
         return []
+    chain = _revision_chain(invoice, store)
     out = []
     for other in store.invoices_for_vendor(invoice.vendor_id):
-        if other.doc_id == invoice.doc_id:
+        if other.doc_id in chain:
             continue
         other_po, _ = find_po(other, store.all_pos())
         if other_po is None or other_po.doc_id != inv_po.doc_id:

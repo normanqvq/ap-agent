@@ -7,6 +7,7 @@ data/*.db
 data/generated/
 .DS_Store
 data/chat/roster.json
+data/email/vendors.json
 
 # Bedrock AgentCore deploy artifacts (contain AWS account id / IAM role ARN)
 /.bedrock_agentcore.yaml

@@ -104,52 +104,11 @@
   },
   "INV-V005-3005": {
     "invoice_id": "INV-V005-3005",
-    "action": "HOLD",
-    "hold_reason": "PRICE_VARIANCE",
+    "action": "EMAIL",
+    "hold_reason": null,
     "confidence": 0.95,
-    "reasoning": "Invoice INV-V005-3005 from Pacific Circuit Components Inc. (V005) against PO-2026-1005: all three lines match PO and GRN-2005 (qty 50/5/24 received), no unmatched lines, no duplicates (check_duplicate_invoice returned no likely duplicates, known_duplicates empty), manual_review_required=false. However, line 1 (PCC-ESP32) is billed at $9.18 vs PO price $8.50 — an 8.0% unit-price overage, out of the default tolerance. I ran recheck_against_contract: the V005 supply agreement (V005_supply_agreement.pdf, section 2 'Pricing and Price Variance') allows unit prices to vary up to 5% above PO price, and the code-computed verdict is within_contract_tolerance=false for the 8.0% delta. The clause itself states variances above 5% require the Buyer's written approval before payment. Since the contract grants no allowance covering this 8% overage, the invoice cannot be approved; holding for price variance pending written approval/explanation.",
+    "reasoning": "Unit price discrepancy on line 1 (PO 850¢ vs invoice 918¢, 8% delta) is out of default tolerance and rechecked against vendor contract V005_supply_agreement.pdf section 2, which permits up to 5% variance. The recheck reports within_contract_tolerance = false, so the overcharge is not covered by the contract. No manual review, duplicates, unmatched lines, or missing GRN. Policy step 4 requires emailing the vendor for an unexplained overcharge.",
     "tool_calls": [
-      {
-        "round": 1,
-        "tool_name": "lookup_po",
-        "args": {
-          "po_id": "PO-2026-1005"
-        },
-        "result": "{\"doc_id\": \"PO-2026-1005\", \"doc_type\": \"PO\", \"vendor_id\": \"V005\", \"vendor_name\": \"Pacific Circuit Components Inc\", \"issue_date\": \"2026-07-18\", \"ref_doc_id\": null, \"currency\": \"USD\", \"lines\": [{\"line_no\": 1, \"sku\": \"PCC-ESP32\", \"description\": \"ESP32 dev board\", \"qty\": 50, \"uom\": \"PCS\", \"unit_price_cents\": 850, \"line_total_cents\": 42500}, {\"line_no\": 2, \"sku\": \"PCC-R10K\", \"description\": \"Resistor 10k ohm 1/4W, strip of 100\", \"qty\": 5, \"uom\": \"STRIP\", \"unit_price_cents\": 180, \"line_total_cents\": 900}, {\"line_no\": 3, \"sku\": \"PCC-C100N\", \"description\": \"Ceramic capacitor 100nF, strip of 100\", \"qty\": 24, \"uom\": \"STRIP\", \"unit_price_cents\": 260, \"line_total_cents\": 6240}], \"payment_terms\": null, \"due_date\": null, \"tax_cents\": null, \"total_cents\": null}"
-      },
-      {
-        "round": 1,
-        "tool_name": "lookup_grn",
-        "args": {
-          "po_id": "PO-2026-1005"
-        },
-        "result": "{\"doc_id\": \"GRN-2005\", \"doc_type\": \"GRN\", \"vendor_id\": \"V005\", \"vendor_name\": \"Pacific Circuit Components Inc\", \"issue_date\": \"2026-07-22\", \"ref_doc_id\": \"PO-2026-1005\", \"currency\": \"USD\", \"lines\": [{\"line_no\": 1, \"sku\": \"PCC-ESP32\", \"description\": \"ESP32 dev board\", \"qty\": 50, \"uom\": \"PCS\", \"unit_price_cents\": 850, \"line_total_cents\": 42500}, {\"line_no\": 2, \"sku\": \"PCC-R10K\", \"description\": \"Resistor 10k ohm 1/4W, strip of 100\", \"qty\": 5, \"uom\": \"STRIP\", \"unit_price_cents\": 180, \"line_total_cents\": 900}, {\"line_no\": 3, \"sku\": \"PCC-C100N\", \"description\": \"Ceramic capacitor 100nF, strip of 100\", \"qty\": 24, \"uom\": \"STRIP\", \"unit_price_cents\": 260, \"line_total_cents\": 6240}], \"payment_terms\": null, \"due_date\": null, \"tax_cents\": null, \"total_cents\": null}"
-      },
-      {
-        "round": 1,
-        "tool_name": "get_vendor_history",
-        "args": {
-          "vendor_id": "V005"
-        },
-        "result": "{\"vendor_id\": \"V005\", \"invoice_count\": 4, \"invoices\": [{\"doc_id\": \"INV-V005-3018\", \"issue_date\": \"2026-07-12\", \"po_reference\": \"PO-2026-1018\", \"total_cents\": 18065, \"currency\": \"USD\"}, {\"doc_id\": \"INV-V005-3011\", \"issue_date\": \"2026-07-18\", \"po_reference\": \"PO-2026-1011\", \"total_cents\": 92820, \"currency\": \"USD\"}, {\"doc_id\": \"INV-V005-3005\", \"issue_date\": \"2026-07-24\", \"po_reference\": \"PO-2026-1005\", \"total_cents\": 53040, \"currency\": \"USD\"}, {\"doc_id\": \"INV-V005-3017\", \"issue_date\": \"2026-07-29\", \"po_reference\": \"PO-2026-1017\", \"total_cents\": 34320, \"currency\": \"USD\"}]}"
-      },
-      {
-        "round": 1,
-        "tool_name": "check_duplicate_invoice",
-        "args": {
-          "invoice_id": "INV-V005-3005"
-        },
-        "result": "{\"invoice_id\": \"INV-V005-3005\", \"likely_duplicates\": [], \"same_amount_only\": []}"
-      },
-      {
-        "round": 1,
-        "tool_name": "search_vendor_contract",
-        "args": {
-          "query": "unit price variance tolerance",
-          "vendor_id": "V005"
-        },
-        "result": "[{\"vendor_id\": \"V005\", \"source\": \"V005_supply_agreement.pdf\", \"section\": \"2. Pricing and Price Variance\", \"text\": \"Unit prices are as stated in each purchase order. The parties agree that invoiced unit prices may vary by up to 5 percent (5%) above the purchase order price to reflect raw material cost movements. Invoices within this variance are payable in full and shall not be treated as discrepant. Variances above 5% require the Buyer's written approval before payment.\", \"score\": 5.36}]"
-      },
       {
         "round": 1,
         "tool_name": "recheck_against_contract",
@@ -160,7 +119,7 @@
       }
     ],
     "rounds_used": 2,
-    "outbound_message": null
+    "outbound_message": "To Pacific Circuit Components Inc: our records show invoice INV-V005-3005 (USD 530.40) does not match purchase order PO-2026-1005. Please send a corrected invoice, or the agreed basis for the difference, quoting the PO number."
   },
   "INV-V006-3019": {
     "invoice_id": "INV-V006-3019",

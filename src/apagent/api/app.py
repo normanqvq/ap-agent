@@ -15,7 +15,10 @@ live in memory: a restart signs everyone out, which is fine for a demo
 and means nothing secret is ever written to disk.
 """
 
+import logging
+import os
 import secrets
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -25,6 +28,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from apagent.api.service import get_service
+
+log = logging.getLogger(__name__)
 
 WEB = Path(__file__).resolve().parent / "web"
 
@@ -41,16 +46,61 @@ async def lifespan(_app: FastAPI):
 
     No TELEGRAM_BOT_TOKEN means no thread and no behaviour change at all,
     which is also what keeps the test suite offline with no special casing.
+
+    Nothing in here may prevent the console from starting. An integration
+    that cannot reach its server is an integration that is down; a console
+    that will not start is the whole product being down, and the mail side
+    used to do exactly that when the SMTP host refused the connection.
     """
     from apagent.chat.runner import start_if_configured
 
     service = get_service()
     runner = start_if_configured(service.chat_harvester(), on_receipt=service.on_chat_receipt)
+
+    from apagent.mail.adapters import SmtpSender
+    from apagent.mail.directory import VendorDirectory
+    from apagent.mail.runner import start_if_configured as start_mail
+
+    mail_runner = None
+    try:
+        sender = SmtpSender()
+        mail_from = os.getenv("APAGENT_MAIL_FROM", "")
+        if sender.configured and mail_from:
+            service.attach_mail(VendorDirectory.from_file(), sender, mail_from)
+            # Off by default, and this is the honest way round. Idempotency
+            # is per-process (the key set and the thread registry both live
+            # in memory), so a catch-up at every boot mails the same vendor
+            # the same query once per restart -- five restarts during an
+            # afternoon of demoing is five identical emails to a real
+            # address. Nothing is lost by skipping it: run_case dispatches
+            # its own query, so anything decided from now on still asks.
+            # Set APAGENT_MAIL_DISPATCH_AT_BOOT=1 to re-send whatever the
+            # committed cache already had at EMAIL.
+            if os.getenv("APAGENT_MAIL_DISPATCH_AT_BOOT") == "1":
+                # In a thread: sending survives an unreachable relay now, but
+                # a host that hangs rather than refuses still costs up to
+                # 30 s per queued query, and the console must be up first.
+                threading.Thread(
+                    target=service.dispatch_vendor_queries,
+                    daemon=True,
+                    name="apagent-mail-boot",
+                ).start()
+            mail_runner = start_mail(
+                service.mail_harvester(),
+                service._dispatcher,
+                on_reply=service.on_vendor_reply,
+                config=service.config,
+                on_silence=service.on_vendor_silence,
+            )
+    except Exception:  # noqa: BLE001 - the console outlives its integrations
+        log.exception("mail intake did not start; the console runs without it")
     try:
         yield
     finally:
         if runner is not None:
             runner.stop()
+        if mail_runner is not None:
+            mail_runner.stop()
 
 
 app = FastAPI(title="AP Agent", version="0.1.0", lifespan=lifespan)

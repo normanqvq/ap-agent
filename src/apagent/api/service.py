@@ -13,6 +13,7 @@ moment.
 """
 
 import json
+import logging
 import os
 import re
 import tempfile
@@ -20,15 +21,23 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from apagent.agent.ap_tools import build_registry, hard_duplicates, recheck_with_contract
+from apagent.agent.ap_tools import (
+    build_registry,
+    hard_duplicates,
+    recheck_with_contract,
+    superseded_by,
+)
 from apagent.eval import evaluate
 from apagent.extraction.invoice import ExtractionError, extract_invoice
+from apagent.mail.attach import pdf_attachments
+from apagent.mail.revise import make_revision
 from apagent.matching.engine import match_invoice
-from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate
+from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate, supersede
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
 from apagent.scheduling import schedule_payments
 from apagent.schemas import (
     Action,
+    AgentDecision,
     ChatGrnEvidence,
     ChatGrnPolicy,
     DiscrepancyField,
@@ -37,6 +46,8 @@ from apagent.schemas import (
     ToleranceConfig,
 )
 from apagent.store import DocumentStore
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA = ROOT / "data" / "synthetic"
@@ -111,10 +122,10 @@ class Service:
         self._uploaded: set[str] = set()
         # Invoices whose decision this session used chat evidence for. Session
         # state like the two above, but held out of the eval differently — see
-        # _eval_view for why dropping them would be wrong.
+        # _benchmark_view for why dropping them would be wrong.
         self._chat_confirmed: set[str] = set()
         # The decisions as committed, before this session touched anything.
-        # _eval_view serves these for chat-confirmed invoices so the measured
+        # _benchmark_view serves these for chat-confirmed invoices so the measured
         # benchmark stays the benchmark.
         self._committed: dict[str, dict] = dict(self._cache)
         # Every message the system "sent" this session. Demo build: recorded
@@ -132,6 +143,22 @@ class Service:
         # can show the conversation. Session state: the verbatim messages
         # are never written to disk.
         self._chat_evidence: dict = {}
+        # The mail side, built only when a mailbox is configured. None here
+        # means the app runs exactly as it did before this feature, which is
+        # what keeps the test suite offline.
+        self._mail_harvester = None
+        self._dispatcher = None
+        # The vendor address book, once a mailbox is attached. Read by the
+        # composer preview as well as the dispatcher, so the address a
+        # reviewer is shown is the one a query would really go to.
+        self._directory = None
+        # invoice_id -> the replies received this session. Session state like
+        # _chat_evidence: verbatim vendor text never reaches disk.
+        self._vendor_replies: dict[str, list] = {}
+        # invoice_id -> the revisions raised from vendor replies this session.
+        # Session state like _uploaded: a corrected invoice never joins the
+        # committed dataset or the decisions cache on disk.
+        self._revisions: dict[str, list[str]] = {}
         # invoice id -> the channel it arrived through (upload / email /
         # telegram). Session state like _uploaded; the seam the external
         # fetchers tag their documents with. See docs/INTAKE.md.
@@ -143,15 +170,43 @@ class Service:
 
     # --- decisions cache ---------------------------------------------------
 
-    def _eval_view(self) -> dict[str, dict]:
-        """The decisions the eval harness scores: the committed benchmark,
-        with this session's own evidence held out.
+    def _session_documents(self) -> set[str]:
+        """Documents that did not come from the ERP dataset: this session's
+        uploads, and the corrections vendors mailed in.
+
+        The manifest has no entry for any of them, so the harness cannot
+        score them either way and they stay out of every rate. They do not
+        stay out of the harness's INPUT -- see _harness_input.
+        """
+        return self._uploaded | {doc_id for ids in self._revisions.values() for doc_id in ids}
+
+    def _harness_input(self) -> dict[str, dict]:
+        """Everything evaluate() is shown: the benchmark, plus this session's
+        own documents so they surface under `unexpected`.
+
+        Holding them out of the scored RATES is honest -- there is no ground
+        truth for them. Holding them out of the harness entirely is merely
+        convenient, and it is what this code did. harness.py says plainly why
+        `unexpected` exists ("an approval hiding here would be an unmeasured
+        payment"), the Analytics page has a slot for exactly that sentence,
+        and dropping these decisions before evaluate() saw them guaranteed
+        the slot stayed empty while approvals were being made. They cost
+        nothing to include: `unexpected` is derived from keys with no
+        manifest entry, and not one rate is computed from it.
+        """
+        session = {k: v for k, v in self._cache.items() if k in self._session_documents()}
+        return {**self._benchmark_view(), **session}
+
+    def _benchmark_view(self) -> dict[str, dict]:
+        """The ERP dataset's decisions: the population every rate is measured
+        over, and the file that goes to disk.
 
         The two kinds of session evidence need OPPOSITE treatment, which is
         the whole reason this helper exists:
 
-        - An uploaded invoice has no manifest entry, so the harness cannot
-          score it either way. Dropping it is invisible and correct.
+        - An uploaded invoice or a mailed-in correction has no manifest
+          entry, so the harness cannot score it either way. Keeping it out
+          of the rates is invisible and correct.
         - A chat-confirmed invoice DOES have a manifest entry (INV-V006-3019
           is planted as `missing_grn`). Drop its key and the harness reports
           it under `missing`, which fails the committed assertions and drags
@@ -166,9 +221,10 @@ class Service:
         Used by _save_cache, metrics and analytics, so the file on disk and
         the two on-screen scorecards can never disagree.
         """
+        held_out = self._session_documents()
         view = {}
         for invoice_id, decision in self._cache.items():
-            if invoice_id in self._uploaded:
+            if invoice_id in held_out:
                 continue
             if invoice_id in self._chat_confirmed and invoice_id in self._committed:
                 view[invoice_id] = self._committed[invoice_id]
@@ -181,7 +237,7 @@ class Service:
         # re-run that produced no counts leaves the committed cache byte-for-byte
         # unchanged instead of adding `input_tokens: null` noise.
         view = {}
-        for doc_id, decision in self._eval_view().items():
+        for doc_id, decision in self._benchmark_view().items():
             view[doc_id] = {
                 k: v
                 for k, v in decision.items()
@@ -219,6 +275,10 @@ class Service:
                     entry["voided"] = True
                     break
         self._save_cache()
+        # A decision that asks the vendor a question sends it. This is the
+        # only place ongoing dispatch happens, so it must sit after the
+        # cache write and before the bundle the caller renders.
+        self._dispatch_query(invoice_id)
         return self.get_case(invoice_id)
 
     def _human_state(self, invoice_id: str, action: str | None) -> str | None:
@@ -271,8 +331,18 @@ class Service:
         )
         po = self.store.get_po(match.po_id) if match.po_id else None
         grn = self.store.get_grn_for_po(match.po_id) if match.po_id else None
+        superseded = superseded_by(invoice, self.store)
         gates = _guardrails(
-            checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config
+            checked,
+            rechecked,
+            review_gate,
+            duplicates,
+            allowance,
+            grn,
+            po,
+            invoice,
+            config,
+            superseded,
         )
         decision = self._cache.get(invoice.doc_id)
         vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
@@ -301,22 +371,34 @@ class Service:
                 invoice.doc_id, decision.get("action") if decision else None
             ),
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
-            "outbound_to": self.outbound_recipient(invoice.doc_id),
+            "outbound_to": (route := self.outbound_route(invoice.doc_id)) and route["to"],
+            "outbound_subject": route["subject"] if route else None,
             # None for the committed dataset; set only for a document that came
             # in through intake() this session. Makes the provenance label
             # outlive the intake response, as docs/INTAKE.md promises.
             "intake_source": self._intake_source.get(invoice.doc_id),
+            # The successor document, if a correction withdrew this one. The
+            # gate strip carries the same fact as a label; the page needs the
+            # id itself to link to it.
+            "superseded_by": superseded.doc_id if superseded else None,
+            "vendor_query": self._vendor_query_view(invoice_id),
+            "vendor_replies": self._vendor_replies.get(invoice_id, []),
+            # Ids, not decided bundles. The console fetches each revision's
+            # own case when a reviewer opens it, and building them here would
+            # cost a full match per revision on every page load of the
+            # invoice they correct.
+            "revisions": self._revisions.get(invoice_id, []),
         }
 
     def performance(self, report: dict | None = None) -> dict:
         """The six agent-performance metrics from the training deck, MEASURED
         over the decided runs — the honest version, where a cell can show a
-        failure. Scores the same _eval_view() the other scorecards use, so the
-        panel can never disagree with the defect table above it.
+        failure. Scores the same _benchmark_view() the other scorecards use,
+        so the panel can never disagree with the defect table above it.
         """
         from apagent.agent.loop import CAP_ESCALATE_PREFIX, MAX_ROUNDS
 
-        view = self._eval_view()
+        view = self._benchmark_view()
         decided = list(view.values())
         n = len(decided) or 1
         if report is None:
@@ -374,7 +456,7 @@ class Service:
     def metrics(self) -> dict:
         """The dashboard's headline numbers, all measured over the same set.
 
-        Every number here reads _eval_view, not the live cache. They used to
+        Every number here reads _benchmark_view, not the live cache. They used to
         disagree: STP counted this session's decisions while false approvals
         were scored against the committed benchmark, so a chat confirmation
         flipping an invoice pushed STP up without the defect it cleared ever
@@ -388,29 +470,39 @@ class Service:
         it is shown on the invoice's own page, where the conversation behind
         it is visible too, rather than folded into a rate.
         """
-        decided = list(self._eval_view().values())
-        # The benchmark population excludes session uploads, matching `decided`
-        # (which reads _eval_view) — otherwise an uploaded-and-decided invoice
-        # would swell `total` and be counted as pending, dropping STP.
-        total = sum(1 for i in self._ordered_invoices() if i.doc_id not in self._uploaded)
+        decided = list(self._benchmark_view().values())
+        # The SAME population `decided` comes from. This used to count every
+        # invoice in the store, so the moment a correction arrived the tiles
+        # read 23/22 with a phantom "Pending 1", and every rate quietly
+        # divided by a denominator one larger than its numerator's world:
+        # STP 68 -> 65 and touchless 82 -> 78, live, because the feature
+        # fired. A document with no ground truth is not pending; it is not
+        # part of this measurement at all. main fixed the upload half of this
+        # in parallel; _session_documents covers corrections too.
+        held_out = self._session_documents()
+        total = sum(1 for inv in self._ordered_invoices() if inv.doc_id not in held_out)
         counts = {a.value: 0 for a in Action}
         for d in decided:
             counts[d["action"]] = counts.get(d["action"], 0) + 1
         approve = counts["APPROVE"]
-        hold = counts["HOLD"]
+        # HOLD and EMAIL alike: decided, with no human touched at that moment.
+        # Kept in step with eval.harness deliberately — test_api asserts the
+        # two agree, which is the only thing stopping this copy from drifting
+        # into a second, quieter definition of the headline number.
+        untouched = counts["HOLD"] + counts["EMAIL"]
         # Denominator is ALL invoices (CLAUDE.md metric definitions): an
         # undecided invoice is not straight-through, so missing decisions
         # lower STP instead of inflating it.
         n = total or 1
         # Measured, not asserted: the eval harness scores every decision
         # against the manifest ground truth and counts wrong approvals.
-        report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), self._eval_view())
+        report = evaluate(json.loads(MANIFEST.read_text(encoding="utf-8")), self._harness_input())
         return {
             "total": total,
             "decided": len(decided),
             "pending": total - len(decided),
             "stp_pct": round(approve / n * 100),
-            "touchless_pct": round((approve + hold) / n * 100),
+            "touchless_pct": round((approve + untouched) / n * 100),
             "false_approve": report["metrics"]["false_approve_count"],
             "distribution": counts,
         }
@@ -427,7 +519,7 @@ class Service:
         """
         from apagent.pipeline import decide_invoice_rules_only
 
-        view = self._eval_view()
+        view = self._benchmark_view()
         baseline_decisions: dict[str, dict] = {}
         for invoice_id in view:
             invoice = self.store.get_invoice(invoice_id)
@@ -580,7 +672,7 @@ class Service:
         """A human confirms an APPROVEd invoice for payment.
 
         Code checks the precondition, not the frontend: only an invoice the
-        agent APPROVEd (i.e. that already passed all six gates) can be
+        agent APPROVEd (i.e. that already passed every code gate) can be
         confirmed. Anything else is refused here regardless of what the UI
         sends — same authority rule as everywhere.
         """
@@ -736,8 +828,8 @@ class Service:
         )
         # Every invoice this receipt can affect is held out of the benchmark,
         # not just the one on screen — the same PO can back more than one
-        # invoice, and _eval_view must serve the committed decision for all of
-        # them (parity with the chat poller, which marks result.invoice_ids).
+        # invoice, and _benchmark_view must serve the committed decision for
+        # all of them (parity with the chat poller, which marks invoice_ids).
         # The scan matches on the printed ref, like the chat harvester does: a
         # ref-less invoice that only fallback-matches this PO is not caught.
         # Unreachable today — every such PO carries an ERP receipt, refused
@@ -820,6 +912,266 @@ class Service:
             self._harvester = ChatHarvester(self.store)
         return self._harvester
 
+    def attach_mail(self, directory, sender, mail_from: str) -> None:
+        """Build the mail side against THIS service's store.
+
+        Injected rather than constructed from the environment so a test can
+        hand in a fake sender — the same reason the chat harvester takes its
+        store instead of loading one.
+        """
+        from apagent.mail.dispatch import MailDispatcher
+        from apagent.mail.harvest import MailHarvester
+        from apagent.mail.thread import ThreadRegistry
+
+        registry = ThreadRegistry()
+        self._directory = directory
+        self._mail_harvester = MailHarvester(
+            directory=directory, registry=registry, vendor_of=self._vendor_of
+        )
+        self._dispatcher = MailDispatcher(
+            directory=directory, registry=registry, sender=sender, mail_from=mail_from
+        )
+
+    def mail_harvester(self):
+        return self._mail_harvester
+
+    def _vendor_of(self, invoice_id: str) -> str | None:
+        invoice = self.store.get_invoice(invoice_id)
+        return invoice.vendor_id if invoice else None
+
+    def dispatch_vendor_queries(self) -> list[str]:
+        """Send the queries every outstanding EMAIL decision asks for.
+
+        The catch-up, run once at boot for whatever the cache already held.
+        Ongoing dispatch is run_case's job -- this used to be the only call
+        site in the whole product, so uploading the overcharge PDF, or
+        clicking Run on an invoice that flipped to EMAIL, sent nothing at
+        all, and the one query that ever went out was for the invoice that
+        was already EMAIL in the committed cache when the process started.
+        """
+        return [invoice_id for invoice_id in list(self._cache) if self._dispatch_query(invoice_id)]
+
+    def _dispatch_query(self, invoice_id: str) -> bool:
+        """Send the query this invoice's decision asks for. True if one went.
+
+        Called from run_case, so every path that changes a decision --
+        upload, re-run, an accepted chat receipt, a correction that is still
+        wrong -- asks the vendor by itself. Not called from inside the
+        pipeline: pipeline.py is pure functions the offline suite runs
+        constantly, and a send in there would mean pytest mails vendors.
+        Repeats are the dispatcher's problem, and it refuses them on
+        (invoice, body), so clicking Run twice does not query twice.
+        """
+        if self._dispatcher is None:
+            return False
+        decision = self._cache.get(invoice_id) or {}
+        if decision.get("action") != Action.EMAIL:
+            return False
+        body = decision.get("outbound_message")
+        vendor_id = self._vendor_of(invoice_id)
+        if not body or not vendor_id:
+            return False
+        query = self._dispatcher.send_query(invoice_id, vendor_id, body)
+        if query is None:
+            return False
+        # The same outbox the console already renders, so an automatic
+        # send is as visible as one a reviewer triggered. Recorded here
+        # rather than inside the dispatcher: the outbox is a console
+        # concern, and the dispatcher must stay usable without a Service.
+        self._record_sent(
+            invoice_id,
+            "vendor_query",
+            {
+                "to": self._dispatcher.directory.address_for(vendor_id),
+                "subject": f"Query on invoice {invoice_id}",
+                "body": body,
+            },
+            "system",
+        )
+        return True
+
+    def on_vendor_reply(self, evidence, raw: bytes | None = None) -> None:
+        """File a reply, and raise a revision if it carried a corrected invoice.
+
+        The two halves are deliberately independent, and in this order: the
+        evidence is filed first and unconditionally, so a reviewer sees what
+        the vendor said even when the attachment turns out to be unreadable.
+        """
+        if evidence is None:
+            return
+        self._vendor_replies.setdefault(evidence.invoice_id, []).append(evidence.model_dump())
+        if raw is None or evidence.is_non_delivery or not evidence.from_registered_sender:
+            # An unregistered sender's attachment is evidence, never an
+            # automatic path — the same rail the rest of the feature uses.
+            # A bounce carries our OWN attachment back, which must never be
+            # read as the vendor correcting themselves.
+            return
+        self._revise_from(evidence, raw)
+
+    def _revise_from(self, evidence, raw: bytes) -> None:
+        """A corrected invoice out of a reply, re-matched on its own merits.
+
+        Does not raise, and this time means it: reached from the mail
+        poller's daemon thread, where anything escaping costs the rest of
+        the batch and the silence timers with it. The old clause named
+        ExtractionError and ValueError, and neither is what actually
+        happens -- a truncated file that still starts with %PDF raises out
+        of pdfminer, and any LLM failure raises RuntimeError from inside
+        run_case.
+
+        The two failures are handled differently on purpose. A correction we
+        cannot READ is not a document, so nothing is recorded. A correction
+        we cannot DECIDE is a document the vendor really sent: it stays in
+        the store, undecided, where the console lists it and a reviewer can
+        run it -- and if the vendor sends another, it supersedes this one.
+
+        The revision runs the whole pipeline afterwards — our purchase order,
+        our goods receipt, our tolerances. That is what makes it safe to
+        accept a document from the counterparty at all: they supply the
+        figures, code decides whether the figures clear.
+        """
+        attachments = pdf_attachments(raw)
+        original = self.store.get_invoice(evidence.invoice_id)
+        if not attachments or original is None:
+            return
+        extracted = self._extract_correction(evidence, attachments)
+        if extracted is None:
+            return
+
+        # The chain, oldest first. A second correction supersedes the FIRST
+        # correction, not the original invoice -- see make_revision: pointing
+        # them all at the original leaves three payable siblings, which is
+        # one payment per copy of a correction the vendor re-sent.
+        chain = self._revisions.setdefault(original.doc_id, [])
+        sequence = len(chain) + 1
+        revision = make_revision(
+            original,
+            extracted,
+            sequence,
+            evidence_id=evidence.evidence_id,
+            supersedes=chain[-1] if chain else original.doc_id,
+        )
+        self.store.add_invoice(revision)
+        chain.append(revision.doc_id)
+        # main's provenance seam, populated for the channel it was built for.
+        # NOT routed through intake(): that is upload_invoice, which takes the
+        # doc_id off the printed page and sets no `replaces`. A correction has
+        # to inherit its identity from the invoice under query, which is the
+        # whole defence -- so it shares the label, not the path.
+        self._intake_source[revision.doc_id] = "email"
+
+        log.info("raised %s from %s", revision.doc_id, evidence.evidence_id)
+        try:
+            self._withdraw(revision.replaces, revision.doc_id)
+            self.run_case(revision.doc_id)
+        except Exception:  # noqa: BLE001 - see the docstring
+            log.exception(
+                "%s was raised from %s but could not be decided; it is in the "
+                "store undecided and a reviewer can run it",
+                revision.doc_id,
+                evidence.evidence_id,
+            )
+
+    def _withdraw(self, doc_id: str, successor_id: str) -> None:
+        """Retire the decision on a document a correction just replaced.
+
+        The pipeline's supersession gate only fires when a document is
+        decided, and R1 was decided while it was still the newest in the
+        chain -- so a vendor re-sending their correction produced three
+        standing APPROVEs, one payment per copy. Applied to the cached
+        decision instead of re-running the pipeline because supersession is
+        a code fact, and re-asking the model a question code has already
+        settled is how a settled question becomes an unsettled one.
+
+        Only an APPROVE is touched, exactly as in _apply_guardrails. In
+        practice the original invoice is never one -- it is the EMAIL action
+        that sent the query in the first place -- which is also why this
+        cannot quietly move the committed benchmark.
+        """
+        cached = self._cache.get(doc_id)
+        if cached is None or cached.get("action") != Action.APPROVE:
+            return
+        self._cache[doc_id] = supersede(AgentDecision(**cached), successor_id).model_dump()
+        self._human.pop(doc_id, None)
+        self._save_cache()
+
+    def on_vendor_silence(self, invoice_id: str) -> None:
+        """A vendor never answered. Stop waiting and hand it to a person.
+
+        "We ask the vendor once, chase once, then a human takes it" was true
+        of the first two thirds. The third was a boolean with two writers and
+        two readers, both of them filters inside the mail package: after
+        eight days of silence the chasing stopped, a log line was printed,
+        and a reviewer opening that invoice saw exactly what they saw on day
+        one. The only observable effect of escalating was that the system
+        gave up quietly.
+
+        The consequence is the one the console already knows how to show,
+        rather than a new state nobody renders: the same hand-off a reviewer
+        triggers by hand, recorded in the same outbox, credited to "system"
+        so it is clear nobody clicked it.
+        """
+        if self.store.get_invoice(invoice_id) is None:
+            return
+        if self._human.get(invoice_id) == "sent_to_human":
+            return
+        self.send_to_human(invoice_id, actor="system")
+        log.info("no reply on %s; handed to a reviewer", invoice_id)
+
+    def _vendor_query_view(self, invoice_id: str) -> dict | None:
+        """What we asked this vendor and how long ago, for the detail page.
+
+        Deliberately not the whole SentQuery: the token and the reply address
+        that carries it are the secret a reply is correlated by, and there is
+        no reason for them to reach a browser.
+        """
+        if self._mail_harvester is None:
+            return None
+        query = self._mail_harvester.registry.for_invoice(invoice_id)
+        if query is None:
+            return None
+        return {
+            "sent_at": query.sent_at,
+            "chased_at": query.chased_at,
+            "escalated": query.escalated,
+            "answered": query.answered,
+        }
+
+    def _extract_correction(self, evidence, attachments) -> Document | None:
+        """The first attachment that reads as an invoice, or None.
+
+        attach.py collects up to MAX_ATTACHMENTS and justifies the cap by the
+        cost of "extracting each one" -- a loop that did not exist. Only the
+        first was ever tried, so a reply that led with a signature graphic or
+        a scanned remittance slip lost its correction entirely. Bounded by
+        that same cap, which is what makes trying them affordable.
+
+        At most one revision comes out of a reply. The first readable
+        attachment is the correction; anything after it is evidence a
+        reviewer can open, and guessing between two candidate invoices is
+        not a guess code should make.
+        """
+        for filename, payload in attachments:
+            # Same temp-file dance as upload_invoice: extraction takes a
+            # Path, and nothing a vendor sent is ever written in the repo.
+            tmp_dir = Path(tempfile.mkdtemp(prefix="apagent-revision-"))
+            pdf_path = tmp_dir / "corrected.pdf"
+            pdf_path.write_bytes(payload)
+            try:
+                return extract_invoice(pdf_path, self.store.vendors())
+            except Exception as exc:  # noqa: BLE001 - see _revise_from
+                log.warning(
+                    "could not read %r on %s: %s: %s",
+                    filename,
+                    evidence.invoice_id,
+                    type(exc).__name__,
+                    exc,
+                )
+            finally:
+                pdf_path.unlink(missing_ok=True)
+                tmp_dir.rmdir()
+        return None
+
     def send_to_human(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """Route an invoice to a human reviewer and record the hand-off
         email in the outbox. The body comes from the code template in
@@ -843,36 +1195,64 @@ class Service:
         invoice = self.store.get_invoice(invoice_id)
         if invoice is None:
             raise KeyError(invoice_id)
-        decision = self._cache.get(invoice_id) or {}
-        message = decision.get("outbound_message")
-        if not message:
+        route = self.outbound_route(invoice_id)
+        if route is None:
             raise ValueError("this invoice has no system-generated message")
-        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
-        if decision.get("action") == Action.EMAIL:
-            to, kind, subject = (
-                f"billing@{invoice.vendor_id.lower()}.example.com",
-                "vendor_query",
-                f"Query on invoice {invoice_id}",
-            )
-        else:  # internal operations note (HOLD)
-            to, kind, subject = (
-                "ap-supervisor@demo.local",
-                "ops_note",
-                f"[{invoice_id}] Action needed — {vendor_name}",
-            )
-        self._record_sent(invoice_id, kind, {"to": to, "subject": subject, "body": message}, actor)
+        message = (self._cache.get(invoice_id) or {})["outbound_message"]
+        self._record_sent(
+            invoice_id,
+            route["kind"],
+            {"to": route["to"], "subject": route["subject"], "body": message},
+            actor,
+        )
         return self.get_case(invoice_id)
 
-    def outbound_recipient(self, invoice_id: str) -> str | None:
-        """Where the decision's outbound message would go — for the composer
-        preview. Same code path that send_outbound enforces."""
+    def outbound_route(self, invoice_id: str) -> dict | None:
+        """Where the decision's outbound message goes, and under what subject.
+
+        One function for the composer preview and for the send, because the
+        two disagreed: the preview showed a fabricated
+        billing@{vendor}.example.com while the dispatcher mailed the address
+        in the vendor directory, so the invoice page and the outbox named
+        different recipients for the same message. Where a directory is
+        attached, its address is the real one and wins here too.
+
+        The subject and the kind are decided here rather than in the browser
+        for the reason CLAUDE.md gives: app.js used to tell a vendor query
+        from an operations note by testing whether the address started with
+        "billing@", which is business logic in the frontend and wrong the
+        moment a vendor's real address does not.
+        """
         invoice = self.store.get_invoice(invoice_id)
         decision = self._cache.get(invoice_id) or {}
         if invoice is None or not decision.get("outbound_message"):
             return None
         if decision.get("action") == Action.EMAIL:
-            return f"billing@{invoice.vendor_id.lower()}.example.com"
-        return "ap-supervisor@demo.local"
+            return {
+                "to": self._vendor_address(invoice.vendor_id),
+                "kind": "vendor_query",
+                "subject": f"Query on invoice {invoice_id}",
+            }
+        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
+        return {  # internal operations note (HOLD)
+            "to": "ap-supervisor@demo.local",
+            "kind": "ops_note",
+            "subject": f"[{invoice_id}] Action needed — {vendor_name}",
+        }
+
+    def _vendor_address(self, vendor_id: str) -> str:
+        """The address a query to this vendor would actually reach.
+
+        The placeholder is what an install with no vendor directory shows;
+        it is never mailed, because dispatch refuses a vendor with no
+        registered address rather than guessing at one.
+        """
+        registered = self._directory.address_for(vendor_id) if self._directory else None
+        return registered or f"billing@{vendor_id.lower()}.example.com"
+
+    def outbound_recipient(self, invoice_id: str) -> str | None:
+        route = self.outbound_route(invoice_id)
+        return route["to"] if route else None
 
     def _record_sent(self, invoice_id: str, kind: str, draft: dict, actor: str) -> dict:
         entry = {
@@ -898,14 +1278,21 @@ class Service:
         measured numbers, not a separate hand-maintained copy of them.
         """
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        report = evaluate(manifest, self._eval_view())
+        report = evaluate(manifest, self._harness_input())
         defects = [c for c in report["cases"] if c["defect"] != "clean"]
         clean = [c for c in report["cases"] if c["defect"] == "clean"]
 
         vendors = []
         names = self.store.vendors()
         for vendor_id in sorted(names):
-            invs = self.store.invoices_for_vendor(vendor_id)
+            # Superseded documents are dropped: a corrected invoice and the
+            # invoice it corrects are one obligation, and adding both billed
+            # the vendor twice on screen for a single order.
+            invs = [
+                inv
+                for inv in self.store.invoices_for_vendor(vendor_id)
+                if superseded_by(inv, self.store) is None
+            ]
             approved = [
                 i for i in invs if (self._cache.get(i.doc_id) or {}).get("action") == "APPROVE"
             ]
@@ -927,11 +1314,13 @@ class Service:
                 }
             )
 
-        # Distribution over the SAME eval view every other number uses, so the
-        # decision mix agrees with the dashboard and does not swell when an
-        # invoice is uploaded this session.
+        # Distribution counted inline — calling self.metrics() here would
+        # run evaluate() a second time just to throw most of it away. Over
+        # _benchmark_view, not the live cache: this and the Dashboard's mix
+        # are the same chart on two pages, and reading different populations
+        # made them disagree the moment a correction arrived.
         distribution = {a.value: 0 for a in Action}
-        for d in self._eval_view().values():
+        for d in self._benchmark_view().values():
             distribution[d["action"]] = distribution.get(d["action"], 0) + 1
         return {
             "metrics": report["metrics"],
@@ -989,6 +1378,11 @@ class Service:
                 # such limit belongs on this page rather than buried in code
                 # nobody reads. Read-only like the rest of it.
                 "informal_grn_ceiling_cents": c.informal_grn_ceiling_cents,
+                # The two limits that are about time rather than money. Same
+                # rule as the ceiling above: a limit that decides an invoice
+                # goes to a human belongs on this page, not only in code.
+                "vendor_chase_after_hours": c.vendor_chase_after_hours,
+                "vendor_escalate_after_hours": c.vendor_escalate_after_hours,
             },
             "chat_grn": {
                 "policy": c.chat_grn_policy.value,
@@ -1059,9 +1453,9 @@ def _handoff_draft(invoice, vendor_name: str, decision: dict | None, gates: list
 
 
 def _guardrails(
-    checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config
+    checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config, superseded
 ) -> list[dict]:
-    """The six code gates as pass/fail, for the detail view. Mirrors
+    """The eight code gates as pass/fail, for the detail view. Mirrors
     pipeline._apply_guardrails so the UI shows exactly what code enforces.
 
     The GRN gate is not mirrored by hand any more — it CALLS pipeline.grn_gate,
@@ -1079,8 +1473,21 @@ def _guardrails(
     pct = f"{allowance[0]:g}%" if allowance else "default 2%"
     grn_passed, _ = grn_gate(checked, grn, po, invoice, config)
     return [
+        {
+            "key": "superseded",
+            "label": (f"Superseded by {superseded.doc_id}" if superseded else "Not superseded"),
+            "passed": superseded is None,
+        },
         {"key": "money", "label": "Amount within threshold", "passed": not review_gate},
         {"key": "po", "label": "PO matched", "passed": checked.po_id is not None},
+        {
+            # Passes with no PO to compare against: the PO chip above already
+            # reports that, and the pipeline never reaches the currency gate
+            # without one.
+            "key": "currency",
+            "label": f"Billed in the currency ordered ({po.currency})" if po else "Currency",
+            "passed": po is None or invoice.currency == po.currency,
+        },
         {
             "key": "unmatched",
             "label": "No unordered lines",

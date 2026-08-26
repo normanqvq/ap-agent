@@ -85,7 +85,18 @@ def evaluate(manifest: list[dict], decisions: dict[str, dict]) -> dict:
     # lower STP rather than inflating it.
     n = len(cases) or 1
     approve = sum(1 for c in decided if c["action"] == Action.APPROVE)
-    hold = sum(1 for c in decided if c["action"] == Action.HOLD)
+    # HOLD and EMAIL both mean "decided, and no human was touched at that
+    # moment". EMAIL joins the numerator now that queries are actually sent
+    # — before this release the action never fired, so its absence here was
+    # untested rather than deliberate. STP is unaffected: only APPROVE moves
+    # money, and only APPROVE counts there.
+    #
+    # Worth stating plainly, because "touchless 82% is unchanged" reads like
+    # evidence and is not: the one invoice this widening covers moved
+    # HOLD -> EMAIL in the same release, so the numerator gained a case at
+    # the exact moment the definition gained a category. No number moved,
+    # which means the benchmark does not test this change either way.
+    untouched = sum(1 for c in decided if c["action"] in (Action.HOLD, Action.EMAIL))
 
     return {
         "cases": cases,
@@ -97,7 +108,7 @@ def evaluate(manifest: list[dict], decisions: dict[str, dict]) -> dict:
             "total": len(cases),
             "decided": len(decided),
             "stp_pct": round(approve / n * 100),
-            "touchless_pct": round((approve + hold) / n * 100),
+            "touchless_pct": round((approve + untouched) / n * 100),
             "false_approve_count": len(false_approves),
             "friction_count": len(friction),
         },

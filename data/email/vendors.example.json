@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "vendor_id -> where we may write, and who may write back.",
+    "Copy this file to vendors.json and put real addresses in it. vendors.json",
+    "is gitignored for the same reason data/chat/roster.json is: it names real",
+    "people at real companies.",
+    "",
+    "This one file does both jobs. Outbound, it is the allowlist -- an invoice",
+    "whose vendor is absent is never mailed, it goes to a human. Inbound, the",
+    "domain here is what an incoming reply's sender is checked against; a reply",
+    "from anywhere else is kept as evidence but takes no automatic action."
+  ],
+  "V001": { "name": "Tan Hardware Supplies Pte Ltd", "email": "billing@example.invalid" },
+  "V005": { "name": "Pacific Circuit Components Inc", "email": "billing@example.invalid" }
+}

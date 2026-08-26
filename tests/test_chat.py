@@ -384,7 +384,7 @@ def test_a_flipped_invoice_never_moves_the_measured_benchmark(monkeypatch, roste
     assert svc.analytics()["metrics"]["false_approve_count"] == 0
     # Present with its committed value, NOT dropped: it has a manifest entry,
     # and a missing key would make the harness report it under `missing`.
-    assert svc._eval_view()["INV-V006-3019"]["action"] == "HOLD"
+    assert svc._benchmark_view()["INV-V006-3019"]["action"] == "HOLD"
 
 
 def test_the_poller_survives_a_platform_outage(roster, store):
