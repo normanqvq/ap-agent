@@ -12,6 +12,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from apagent.agent.ap_tools import superseded_by
 from apagent.mail.attach import pdf_attachments
 from apagent.mail.chase import due_for_chase
 from apagent.mail.directory import VendorDirectory
@@ -49,10 +50,15 @@ A corrected invoice follows.
 
 
 class PrintingSender:
-    """Stands in for SMTP. Prints what would have gone out."""
+    """Stands in for SMTP. Prints what would have gone out.
 
-    def send(self, message):
+    Returns True, as a real sender does: nothing is recorded in the thread
+    registry until the transport says the message left the building.
+    """
+
+    def send(self, message) -> bool:
         print(f"    -> {message['To']}  |  {message['Subject']}")
+        return True
 
 
 def _console_safe(text: str) -> str:
@@ -148,6 +154,7 @@ def main() -> None:
             "vendor_id": "V001",
             "vendor_name": "Someone Else Pte Ltd",
             "ref_doc_id": "PO-2026-1001",
+            "currency": "EUR",
             "total_cents": 49000,
         }
     )
@@ -156,9 +163,29 @@ def main() -> None:
     print(f"    doc_id         {revision.doc_id}   <- ours, not the number on their paper")
     print(f"    vendor         {revision.vendor_id}   <- ours, though the paper said V001")
     print(f"    purchase order {revision.ref_doc_id}   <- ours, though the paper said PO-2026-1001")
+    # Currency belongs on this list for a different reason from the three
+    # above: it is not identity, it is the unit every other figure is
+    # counted in, and nothing in matching or tolerance reads it. A
+    # correction at the exact ordered prices, relabelled EUR, would clear
+    # every arithmetic check and ask for a different amount of money.
+    print(f"    currency       {revision.currency}   <- ours, though the paper said EUR")
     print(f"    replaces       {revision.replaces}")
     print(f"    total          {original.total_cents} -> {revision.total_cents} cents   <- theirs")
-    print("    the revision runs the same gates as any other invoice.\n")
+    print("    the revision runs the same gates as any other invoice.")
+
+    print("\n8. The vendor chases their own correction and sends it again:")
+    second = make_revision(
+        original, extracted, sequence=2, supersedes=revision.doc_id, evidence_id="MAIL-EV-0002"
+    )
+    store = DocumentStore.from_dir(DATA)
+    store.add_invoice(revision)
+    store.add_invoice(second)
+    print(f"    {second.doc_id} replaces {second.replaces}   <- the newest, not the original")
+    for doc in (original, revision, second):
+        successor = superseded_by(doc, store)
+        verdict = f"withdrawn by {successor.doc_id}" if successor else "the one that can be paid"
+        print(f"    {doc.doc_id:<22} {verdict}")
+    print("    one obligation, one payable document -- code refuses the rest.\n")
 
 
 if __name__ == "__main__":
