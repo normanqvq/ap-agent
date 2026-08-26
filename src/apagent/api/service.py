@@ -33,7 +33,7 @@ from apagent.extraction.invoice import ExtractionError, extract_invoice
 from apagent.mail.attach import pdf_attachments
 from apagent.mail.revise import make_revision
 from apagent.matching.engine import match_invoice
-from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate, supersede
+from apagent.pipeline import _blocking_rows, _safe_doc_id, decide_invoice, grn_gate, supersede
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
 from apagent.scheduling import schedule_payments
 from apagent.schemas import (
@@ -1004,7 +1004,7 @@ class Service:
             "vendor_query",
             {
                 "to": self._dispatcher.directory.address_for(vendor_id),
-                "subject": f"Query on invoice {invoice_id}",
+                "subject": f"Query on invoice {_safe_doc_id(invoice_id)}",
                 "body": body,
             },
             "system",
@@ -1252,13 +1252,15 @@ class Service:
             return {
                 "to": self._vendor_address(invoice.vendor_id),
                 "kind": "vendor_query",
-                "subject": f"Query on invoice {invoice_id}",
+                "subject": f"Query on invoice {_safe_doc_id(invoice_id)}",
             }
-        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
+        # Canonical name or the vendor id — never the name printed on the
+        # invoice, which is supplier text riding into a subject line.
+        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_id)
         return {  # internal operations note (HOLD)
             "to": "ap-supervisor@demo.local",
             "kind": "ops_note",
-            "subject": f"[{invoice_id}] Action needed — {vendor_name}",
+            "subject": f"[{_safe_doc_id(invoice_id)}] Action needed — {vendor_name}",
         }
 
     def _vendor_address(self, vendor_id: str) -> str:
