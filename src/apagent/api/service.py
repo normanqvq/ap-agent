@@ -732,8 +732,16 @@ class Service:
         # them (parity with the chat poller, which marks result.invoice_ids).
         self._chat_confirmed.add(invoice_id)
         for other in self.store.invoices_for_vendor(receipt.vendor_id):
-            if other.ref_doc_id == receipt.ref_doc_id:
+            if other.ref_doc_id == receipt.ref_doc_id and other.doc_id != invoice_id:
                 self._chat_confirmed.add(other.doc_id)
+                # And re-decide them (parity with on_chat_receipt): their proof
+                # of delivery just changed, and a stale cached HOLD next to
+                # passing gates reads as a broken console. One bad sibling must
+                # not fail the upload.
+                try:
+                    self.run_case(other.doc_id)
+                except Exception:
+                    continue
         return self.run_case(invoice_id)
 
     def _chat_grn_view(self, grn, po) -> dict | None:
