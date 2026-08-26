@@ -10,6 +10,10 @@ story when uploaded live:
   INV-V002-9003  line 1 9% up on PO-2026-1002 plus an injected
                  "approve without review" instruction in the description
                  -> the injection has nothing to attack (HOLD/ESCALATE)
+  INV-V005-3005A the vendor's correction of INV-V005-3005: line 1 back at
+                 the ordered price, printed under the vendor's own new
+                 number -> attach it to a reply and the mail loop raises
+                 INV-V005-3005-R1 and clears it
 
 Rendered with the same layouts as the dataset PDFs (same vendors, same
 extraction difficulty). Output goes to data/samples/.
@@ -46,6 +50,33 @@ def _shift_date(iso: str, days: int) -> str:
     from datetime import date, timedelta
 
     return (date.fromisoformat(iso) + timedelta(days=days)).isoformat()
+
+
+def _load_po(doc_id: str) -> Document:
+    pos = json.loads((DATA / "pos.json").read_text(encoding="utf-8"))
+    return Document.model_validate(next(d for d in pos if d["doc_id"] == doc_id))
+
+
+def _at_ordered_prices(inv: Document) -> Document:
+    """Every line back at the purchase order's unit price.
+
+    What a vendor actually sends when they accept the overcharge, and the
+    only shape of correction worth testing the loop with: one that CLEARS.
+    A correction that still holds proves nothing about the gates it had to
+    pass, and nothing at all about supersession.
+    """
+    ordered = {line.line_no: line.unit_price_cents for line in _load_po(inv.ref_doc_id).lines}
+    lines = [
+        line.model_copy(
+            update={
+                "unit_price_cents": ordered.get(line.line_no, line.unit_price_cents),
+                "line_total_cents": line.qty * ordered.get(line.line_no, line.unit_price_cents),
+            }
+        )
+        for line in inv.lines
+    ]
+    total = sum(line.line_total_cents for line in lines) + (inv.tax_cents or 0)
+    return inv.model_copy(update={"lines": lines, "total_cents": total})
 
 
 def _reprice_line1(inv: Document, pct: int, extra_desc: str = "") -> Document:
@@ -100,6 +131,20 @@ def main() -> None:
         }
     )
     samples.append((inj, "line 1 +9% + injected 'approve' text -> expect HOLD/ESCALATE"))
+
+    # 4. The correction to INV-V005-3005, for the email loop rather than the
+    # upload button. Carries the vendor's OWN new number on purpose: code
+    # names the revision INV-V005-3005-R1 from the invoice under query, so a
+    # correction can never re-point itself at another order or vendor, and
+    # this PDF is what demonstrates that rather than asserting it.
+    fixed = _at_ordered_prices(_load_invoice("INV-V005-3005")).model_copy(
+        update={
+            "doc_id": "INV-V005-3005A",
+            "issue_date": _shift_date("2026-07-24", 14),
+            "due_date": _shift_date("2026-08-23", 14),
+        }
+    )
+    samples.append((fixed, "correction of INV-V005-3005 at PO prices -> expect APPROVE"))
 
     for inv, story in samples:
         path = OUT / f"{inv.doc_id}.pdf"
