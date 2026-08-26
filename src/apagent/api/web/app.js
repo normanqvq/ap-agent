@@ -713,7 +713,7 @@ function renderDetail(c) {
             : `<button class="btn primary" id="confirm">Confirm payment</button>`)
           : ""}
         ${c.chat_grn && !c.chat_grn.endorsed_by && !(dec && dec.action === "APPROVE")
-          ? `<button class="btn primary" id="accept-chat">Accept the chat confirmation</button>`
+          ? `<button class="btn primary" id="accept-chat">Accept the ${c.chat_grn.source === "photo" ? "photo" : "chat"} confirmation</button>`
           : ""}
         ${!c.chat_grn && !c.grn && !(dec && dec.action === "APPROVE")
           ? `<button class="btn" id="photo-grn">Upload delivery photo</button>`
