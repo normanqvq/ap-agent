@@ -67,17 +67,24 @@ async def lifespan(_app: FastAPI):
         mail_from = os.getenv("APAGENT_MAIL_FROM", "")
         if sender.configured and mail_from:
             service.attach_mail(VendorDirectory.from_file(), sender, mail_from)
-            # Off the critical path. Sending survives an unreachable relay
-            # now, but a host that hangs rather than refuses still costs up
-            # to 30 s per queued query, and the console must be up before
-            # then -- a mail outage may cost the mail feature and nothing
-            # else. Catching up on what was outstanding at boot is the only
-            # job here: from now on a decision dispatches its own query.
-            threading.Thread(
-                target=service.dispatch_vendor_queries,
-                daemon=True,
-                name="apagent-mail-boot",
-            ).start()
+            # Off by default, and this is the honest way round. Idempotency
+            # is per-process (the key set and the thread registry both live
+            # in memory), so a catch-up at every boot mails the same vendor
+            # the same query once per restart -- five restarts during an
+            # afternoon of demoing is five identical emails to a real
+            # address. Nothing is lost by skipping it: run_case dispatches
+            # its own query, so anything decided from now on still asks.
+            # Set APAGENT_MAIL_DISPATCH_AT_BOOT=1 to re-send whatever the
+            # committed cache already had at EMAIL.
+            if os.getenv("APAGENT_MAIL_DISPATCH_AT_BOOT") == "1":
+                # In a thread: sending survives an unreachable relay now, but
+                # a host that hangs rather than refuses still costs up to
+                # 30 s per queued query, and the console must be up first.
+                threading.Thread(
+                    target=service.dispatch_vendor_queries,
+                    daemon=True,
+                    name="apagent-mail-boot",
+                ).start()
             mail_runner = start_mail(
                 service.mail_harvester(),
                 service._dispatcher,

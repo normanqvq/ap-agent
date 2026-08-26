@@ -15,6 +15,15 @@ evidence changes, and each re-decision produces the same EMAIL action; without
 a key on (invoice, body) a vendor gets one copy per re-decision, which is how
 an automated system becomes a spammer.
 
+The rail is PER PROCESS, and deliberately so rather than by omission. The key
+set and the thread registry are both in memory, and they have to agree: a
+restart that remembered "already asked" but forgot the Message-ID and token
+would leave a query nobody could correlate a reply to, which is worse than
+asking again. What follows from that is that a restart re-asks, so the boot
+catch-up in app.py is off unless APAGENT_MAIL_DISPATCH_AT_BOOT=1 -- ongoing
+dispatch happens per decision, and needs no catch-up. Persisting both halves
+is the real answer and it is a table, not a set.
+
 Sending happens here rather than in pipeline.py because that module is pure
 functions the offline test suite runs constantly — a send in there would mean
 pytest mails vendors.

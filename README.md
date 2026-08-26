@@ -40,7 +40,7 @@ The core idea is **code owns the authority; the model explains the judgement.**
 - Runs a three-way match: pairs line items (Hungarian assignment when items carry no SKU), and computes unit-price, quantity, UOM, line-total, and invoice-total discrepancies.
 - Checks each discrepancy against tolerances, with per-vendor allowances parsed **in code** from the supplier's contract clause.
 - Runs a hand-written agent loop: the model calls read-only tools (lookup PO / GRN, vendor history, duplicate check, contract search, contract re-check) and returns a decision.
-- Applies six code guardrails that override an unjustified approval — the injection defence and the "no auto-paying above a threshold" rule live here, not in the prompt.
+- Applies eight code guardrails that override an unjustified approval — the injection defence, the "no auto-paying above a threshold" rule, and the refusal to pay a document a later correction has withdrawn all live here, not in the prompt.
 - Emits one of four actions — `APPROVE`, `HOLD`, `EMAIL`, `ESCALATE` — with a confidence, a rationale, the complete tool-call trail, and (for holds/queries) an outbound message rendered by code from a fixed template.
 - Batches the approved invoices into weekly Friday payment runs — one transfer per vendor, each invoice paid as late as possible but never past due. Only `APPROVE` moves money; everything else is listed as withheld, with its reason.
 - Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice.
@@ -49,7 +49,14 @@ The core idea is **code owns the authority; the model explains the judgement.**
   vendor automatically; their reply is tied back to the invoice by message
   headers and a code-generated token — never by the subject line — and lands
   on the case as evidence. A vendor who stays silent gets one reminder, then
-  a human. `scripts/demo_email_intake.py` runs the whole loop offline.
+  the invoice is handed to a reviewer. `scripts/demo_email_intake.py` runs
+  the whole loop offline.
+- **A corrected invoice clears itself.** If the reply carries one, code
+  extracts it and runs it through every gate again — the vendor supplies the
+  figures, and identity (which vendor, which purchase order, which currency)
+  comes from our records, never from their paper. The correction withdraws
+  the document it replaces, so a vendor who re-sends the same correction
+  three times is still paid once.
 - Serves a web console: a dashboard of KPIs, the invoice queue and decision mix, a per-invoice detail view showing the decision, the guardrail results, the glass-box tool trail, the three-way reconciliation, and the rationale — plus the payment-run plan.
 
 ## Product Tour
@@ -60,7 +67,7 @@ Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 
 ![Overview](docs/screenshots/overview.png)
 
-**Invoice detail** — a colour-coded decision banner with the six guardrail chips (and a *Code override* badge when code overruled the model), the **glass-box tool trail** (one plain-language line per tool call, raw JSON one click away, the contract re-check step flagged as code-executed), the three-way reconciliation table, and the rationale as numbered points. Shown here: the headline case — 4% over PO, approved because code parsed the contract's 5% allowance.
+**Invoice detail** — a colour-coded decision banner with the guardrail chips (and a *Code override* badge when code overruled the model), the **glass-box tool trail** (one plain-language line per tool call, raw JSON one click away, the contract re-check step flagged as code-executed), the three-way reconciliation table, and the rationale as numbered points. Shown here: the headline case — 4% over PO, approved because code parsed the contract's 5% allowance.
 
 ![Invoice detail](docs/screenshots/detail.png)
 
@@ -76,7 +83,7 @@ Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 
 ![Analytics](docs/screenshots/analytics.png)
 
-**Settings** — the policy, read-only: the tolerance limits and the manual-review threshold the six gates enforce, each vendor's code-parsed contract allowance with its source file, the four-value action enum, and the pay-run calendar. Deliberately not editable from the web — every limit lives in version-controlled code, so changing one is a reviewed commit, not a click.
+**Settings** — the policy, read-only: the tolerance limits, the manual-review threshold and the vendor-silence windows the gates enforce, each vendor's code-parsed contract allowance with its source file, the four-value action enum, and the pay-run calendar. Deliberately not editable from the web — every limit lives in version-controlled code, so changing one is a reviewed commit, not a click.
 
 ![Settings](docs/screenshots/settings.png)
 
@@ -92,7 +99,7 @@ flowchart LR
     B --> C[Three-way match<br/>invoice vs PO vs GRN]
     C --> D[Tolerance rules]
     D --> E[Agent loop<br/>tools + judgement]
-    E --> F[Code guardrails<br/>six gates]
+    E --> F[Code guardrails<br/>eight gates]
     F --> G{Decision}
     G --> H[APPROVE · HOLD · EMAIL · ESCALATE]
 ```
@@ -107,7 +114,7 @@ flowchart LR
 
 ### Code computes facts; the model judges meaning; code owns authority
 
-Every number the agent reasons about — deltas, tolerance verdicts, duplicate detection — is produced by deterministic code, so it is reproducible from the documents alone. The model interprets those facts and cites contracts. The final limits are enforced in code: the model can recommend `APPROVE`, but six guardrails (amount threshold, PO matched, no unordered lines, no duplicate, price within the code-parsed contract tolerance, goods received) will override it. A test suite runs a deliberately fooled model against every planted defect and confirms code still refuses each one.
+Every number the agent reasons about — deltas, tolerance verdicts, duplicate detection — is produced by deterministic code, so it is reproducible from the documents alone. The model interprets those facts and cites contracts. The final limits are enforced in code: the model can recommend `APPROVE`, but eight guardrails (not superseded by a later correction, amount threshold, PO matched, billed in the currency ordered, no unordered lines, no duplicate, price within the code-parsed contract tolerance, goods received) will override it. A test suite runs a deliberately fooled model against every planted defect and confirms code still refuses each one.
 
 ### The glass box
 

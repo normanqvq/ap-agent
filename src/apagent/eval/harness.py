@@ -90,6 +90,12 @@ def evaluate(manifest: list[dict], decisions: dict[str, dict]) -> dict:
     # — before this release the action never fired, so its absence here was
     # untested rather than deliberate. STP is unaffected: only APPROVE moves
     # money, and only APPROVE counts there.
+    #
+    # Worth stating plainly, because "touchless 82% is unchanged" reads like
+    # evidence and is not: the one invoice this widening covers moved
+    # HOLD -> EMAIL in the same release, so the numerator gained a case at
+    # the exact moment the definition gained a category. No number moved,
+    # which means the benchmark does not test this change either way.
     untouched = sum(1 for c in decided if c["action"] in (Action.HOLD, Action.EMAIL))
 
     return {
