@@ -436,7 +436,10 @@ def call_model_vision(
         # photo would "refuse" for the wrong reason and look like a bad photo.
         # Loud beats quiet: refuse up front with the real explanation.
         base_url = os.getenv("ANTHROPIC_BASE_URL")
-        host = urlparse(base_url).netloc if base_url else ""
+        # hostname, not netloc: it lowercases, strips a :443, and — the part
+        # that matters for the error message below — strips URL userinfo, so
+        # a user:password@ credential in the URL can never ride into the text.
+        host = (urlparse(base_url).hostname or "") if base_url else ""
         if base_url and host != "api.anthropic.com":
             raise ValueError(
                 f"ANTHROPIC_BASE_URL points at {host}, and compatible endpoints "

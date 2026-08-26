@@ -50,6 +50,12 @@ def test_call_model_vision_refuses_a_compat_endpoint(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
     with pytest.raises(ValueError, match="image blocks"):
         call_model_vision(b"x", "image/png", "prompt", "system", provider="anthropic")
+    # The host in the message is the normalised hostname: lowercased, port and
+    # any user:password@ userinfo stripped — never raw netloc.
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://u:pw@API.DeepSeek.com:443/anthropic")
+    with pytest.raises(ValueError, match="api.deepseek.com") as exc_info:
+        call_model_vision(b"x", "image/png", "prompt", "system", provider="anthropic")
+    assert "pw" not in str(exc_info.value)
 
 
 def test_extract_from_image_parses_the_same_claim_schema(monkeypatch):
