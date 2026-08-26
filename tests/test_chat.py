@@ -134,6 +134,28 @@ def test_confirming_an_order_with_an_erp_receipt_gets_a_reply_not_a_crash(
     assert store.get_grn_for_po("PO-2026-1001").source == EvidenceSource.ERP
 
 
+def test_console_starts_when_the_chat_side_cannot(monkeypatch):
+    """A corrupt roster file used to escape the lifespan and take the whole
+    console down — exactly the failure the lifespan's own docstring forbids
+    ("Nothing in here may prevent the console from starting"). The chat side
+    now starts under the same try the mail side already had."""
+    from fastapi.testclient import TestClient
+
+    import apagent.api.service as service_module
+    from apagent.api.app import app
+    from apagent.api.service import Service
+
+    def explode(self):
+        raise RuntimeError("roster.json is corrupt")
+
+    monkeypatch.setattr(Service, "chat_harvester", explode)
+    # A fresh singleton, restored afterwards, same as the mail lifespan test.
+    monkeypatch.setattr(service_module, "_service", None)
+    with TestClient(app) as client:  # entering runs the lifespan
+        assert client.post("/api/login", json={"name": "Norman"}).status_code == 200
+        assert client.get("/api/invoices").status_code == 200
+
+
 # --- resolution fails closed ----------------------------------------------
 
 

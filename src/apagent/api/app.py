@@ -55,7 +55,14 @@ async def lifespan(_app: FastAPI):
     from apagent.chat.runner import start_if_configured
 
     service = get_service()
-    runner = start_if_configured(service.chat_harvester(), on_receipt=service.on_chat_receipt)
+    # Same try the mail side already sits under, for the same reason the
+    # docstring above states: a corrupt roster.json (chat_harvester builds the
+    # roster) must cost the chat integration, never the console.
+    runner = None
+    try:
+        runner = start_if_configured(service.chat_harvester(), on_receipt=service.on_chat_receipt)
+    except Exception:  # noqa: BLE001 - the console outlives its integrations
+        log.exception("chat intake did not start; the console runs without it")
 
     from apagent.mail.adapters import SmtpSender
     from apagent.mail.directory import VendorDirectory
