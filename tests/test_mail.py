@@ -611,6 +611,37 @@ def test_an_unparseable_message_costs_one_message_not_the_tick(monkeypatch, disp
     assert len(dispatcher.sender.sent) == 1  # the due chase still went out
 
 
+def test_a_reply_that_cannot_be_handled_costs_the_reply_not_the_timers(dispatcher):
+    """Finding 4 of the branch review. on_reply was the one call in tick not
+    wrapped, and it runs the most code -- extraction, the pipeline, the
+    model. Under a sustained failure (expired key, provider outage) it
+    raised on every reply, so the rest of the batch was dropped and
+    silent-vendor escalation simply stopped."""
+    dispatcher.registry.register("INV-V005-3005", "ap@example.test")
+    # A second invoice, silent and past the chase window. The one that got a
+    # reply is answered and rightly not chased -- this is the one that proves
+    # the timers ran at all.
+    dispatcher.registry.register("INV-V001-3001", "ap@example.test")
+    _aged(dispatcher.registry, "INV-V001-3001", 80)
+    harvester = MailHarvester(
+        directory=dispatcher.directory, registry=dispatcher.registry, vendor_of=lambda _: "V005"
+    )
+    adapter = FlakyAdapter(_reply_to(dispatcher.registry, "INV-V005-3005"))
+    adapter.calls = 1  # skip FlakyAdapter's built-in outage step
+
+    def explode(evidence, raw=None):
+        raise RuntimeError("the model provider is down")
+
+    runner = MailRunner(adapter, harvester, dispatcher, on_reply=explode, config=ToleranceConfig())
+
+    runner.tick()  # must not raise
+
+    assert adapter.flagged == [b"1"]
+    assert [m["Subject"] for m in dispatcher.sender.sent] == [
+        "Reminder: query on invoice INV-V001-3001"
+    ]
+
+
 def _wired_service(sender):
     service = Service()
     service.attach_mail(

@@ -13,7 +13,6 @@ what keeps the test suite offline without special-casing anything.
 
 import logging
 import threading
-import time
 from datetime import datetime
 
 from apagent.mail.adapters import ImapAdapter
@@ -53,22 +52,33 @@ class MailRunner:
                 # but log it, because "carry on quietly" is how a broken
                 # integration looks identical to an idle one.
                 log.exception("mail poll failed; retrying")
-                time.sleep(_BACKOFF_SECONDS)
+                # wait(), not sleep(): stop() must be heard during a backoff
+                # too, or shutting the app down hangs for up to 30 s.
+                self._stop.wait(_BACKOFF_SECONDS)
             else:
                 self._stop.wait(_POLL_SECONDS)
 
     def tick(self) -> None:
         """One poll: file every reply, then run the timers.
 
-        self.adapter.poll() is deliberately left to propagate -- a mailbox
-        outage should surface, and the caller (run_forever) already backs
-        off and retries on any exception. Everything below it is wrapped
-        per-message instead: a message that fails to parse or harvest must
-        cost exactly that message, not the whole tick. Without the wrapping,
-        one unreadable message never gets mark_handled and is re-read (and
-        re-fails) on every subsequent poll, forever -- and because it never
-        reaches _run_timers, it takes the chase and escalation timers down
-        with it too.
+        self.adapter.poll() is left to propagate so that an adapter which
+        does raise surfaces the outage; ImapAdapter is not one -- it logs and
+        returns [] -- and run_forever backs off and retries either way.
+
+        Everything below it is wrapped per-message: a message that fails to
+        parse, to harvest, or to handle must cost exactly that message and
+        not the whole tick. Without the wrapping, one unreadable message
+        never gets mark_handled and is re-read (and re-fails) on every
+        subsequent poll, forever -- and because it never reaches
+        _run_timers, it takes the chase and escalation timers down with it,
+        so silent-vendor escalation just stops.
+
+        on_reply is inside that wrapping and is the reason it matters. It is
+        the call that runs the most code: extraction, then the whole
+        pipeline, then the model. An expired API key or a provider outage
+        raises there on every single reply, which is exactly the sustained
+        failure that would otherwise stop the timers for the rest of the
+        process's life.
         """
         for uid, raw in self.adapter.poll():
             try:
@@ -89,10 +99,17 @@ class MailRunner:
                 evidence.matched_by,
             )
             if self.on_reply is not None:
-                # The raw message goes too: a corrected invoice lives in an
-                # attachment, and re-parsing it here would mean this module
-                # knowing what an attachment is worth. It does not.
-                self.on_reply(evidence, raw)
+                try:
+                    # The raw message goes too: a corrected invoice lives in
+                    # an attachment, and re-parsing it here would mean this
+                    # module knowing what an attachment is worth. It does not.
+                    self.on_reply(evidence, raw)
+                except Exception:
+                    log.exception(
+                        "could not handle the reply on %s; the reply is lost, "
+                        "the tick is not",
+                        evidence.invoice_id,
+                    )
         self._run_timers()
 
     def _run_timers(self) -> None:

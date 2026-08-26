@@ -629,8 +629,19 @@ class Service:
     def _revise_from(self, evidence, raw: bytes) -> None:
         """A corrected invoice out of a reply, re-matched on its own merits.
 
-        Never raises: this is reached from the mail poller's daemon thread,
-        and a reply we cannot read must cost that reply and nothing else.
+        Does not raise, and this time means it: reached from the mail
+        poller's daemon thread, where anything escaping costs the rest of
+        the batch and the silence timers with it. The old clause named
+        ExtractionError and ValueError, and neither is what actually
+        happens -- a truncated file that still starts with %PDF raises out
+        of pdfminer, and any LLM failure raises RuntimeError from inside
+        run_case.
+
+        The two failures are handled differently on purpose. A correction we
+        cannot READ is not a document, so nothing is recorded. A correction
+        we cannot DECIDE is a document the vendor really sent: it stays in
+        the store, undecided, where the console lists it and a reviewer can
+        run it -- and if the vendor sends another, it supersedes this one.
 
         The revision runs the whole pipeline afterwards — our purchase order,
         our goods receipt, our tolerances. That is what makes it safe to
@@ -649,8 +660,13 @@ class Service:
         pdf_path.write_bytes(payload)
         try:
             extracted = extract_invoice(pdf_path, self.store.vendors())
-        except (ExtractionError, ValueError) as exc:
-            log.warning("could not read the correction on %s: %s", evidence.invoice_id, exc)
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            log.warning(
+                "could not read the correction on %s: %s: %s",
+                evidence.invoice_id,
+                type(exc).__name__,
+                exc,
+            )
             return
         finally:
             pdf_path.unlink(missing_ok=True)
@@ -673,7 +689,15 @@ class Service:
         chain.append(revision.doc_id)
         log.info("raised %s from %s", revision.doc_id, evidence.evidence_id)
         self._withdraw(revision.replaces, revision.doc_id)
-        self.run_case(revision.doc_id)
+        try:
+            self.run_case(revision.doc_id)
+        except Exception:  # noqa: BLE001 - see the docstring
+            log.exception(
+                "%s was raised from %s but could not be decided; it is in the "
+                "store undecided and a reviewer can run it",
+                revision.doc_id,
+                evidence.evidence_id,
+            )
 
     def _withdraw(self, doc_id: str, successor_id: str) -> None:
         """Retire the decision on a document a correction just replaced.

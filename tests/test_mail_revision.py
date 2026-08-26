@@ -451,6 +451,56 @@ def test_extraction_failure_leaves_evidence_but_no_revision_and_does_not_raise(m
     assert any(r["evidence_id"] == evidence.evidence_id for r in replies)
 
 
+def test_a_pdf_that_only_looks_like_one_costs_the_reply_and_nothing_else(monkeypatch):
+    """The old clause caught ExtractionError and ValueError. A truncated file
+    that still starts with %PDF raises out of pdfminer, which is neither."""
+
+    class PdfminerException(Exception):
+        pass
+
+    svc = _wired(monkeypatch)
+    monkeypatch.setattr(
+        service_module,
+        "extract_invoice",
+        lambda path, vendors, **kw: (_ for _ in ()).throw(PdfminerException("truncated")),
+    )
+    _deliver(svc, _reply_with_pdf)  # must not raise
+    assert svc.store.get_invoice("INV-V005-3005-R1") is None
+
+
+def test_a_correction_we_cannot_decide_stays_in_the_store_undecided(monkeypatch):
+    """An LLM failure raises RuntimeError from inside run_case, after the
+    document is already in the store. The vendor really sent it, so it stays
+    -- listed, undecided, and a reviewer can run it."""
+    svc = _wired(monkeypatch)
+    monkeypatch.setattr(
+        "apagent.agent.loop.call_model",
+        lambda messages, tools, system, provider=None: (_ for _ in ()).throw(
+            RuntimeError("provider is down")
+        ),
+    )
+    _deliver(svc, _reply_with_pdf)  # must not raise
+    assert svc.store.get_invoice("INV-V005-3005-R1") is not None
+    assert svc._cache.get("INV-V005-3005-R1") is None
+    assert svc.get_case("INV-V005-3005-R1")["decision"] is None
+
+
+def test_the_next_correction_supersedes_one_that_could_not_be_decided(monkeypatch):
+    """R1 undecided must not become an orphan the chain walks past."""
+    svc = _wired(monkeypatch, at_po_prices=True)
+    with pytest.MonkeyPatch.context() as broken:
+        broken.setattr(
+            "apagent.agent.loop.call_model",
+            lambda messages, tools, system, provider=None: (_ for _ in ()).throw(
+                RuntimeError("provider is down")
+            ),
+        )
+        _deliver(svc, _reply_with_pdf)
+    _deliver(svc, _reply_with_pdf)
+    assert svc.store.get_invoice("INV-V005-3005-R2").replaces == "INV-V005-3005-R1"
+    assert svc._cache["INV-V005-3005-R2"]["action"] == Action.APPROVE
+
+
 def test_a_revision_does_not_move_the_headline_metrics(monkeypatch):
     svc = _wired(monkeypatch)
     before_analytics = svc.analytics()["metrics"]
