@@ -383,9 +383,10 @@ def _apply_guardrails(
     # USD billed as GBP is a silent ~30% overpayment that no later gate can
     # see. The currency on an invoice is the vendor's text; the currency on
     # the purchase order is ours, and they must agree. A currency we could
-    # not read is not a match either -- the strict direction, and the only
-    # one a guardrail is allowed to take.
-    if po is None or invoice.currency != po.currency:
+    # not read is not a match either -- including the case where NEITHER is
+    # readable, which compares equal and would otherwise pass. Strict is the
+    # only direction a guardrail is allowed to fail in.
+    if po is None or not invoice.currency or invoice.currency != po.currency:
         billed = invoice.currency or "a currency we could not read"
         ordered = po.currency if po is not None else "one we cannot look up"
         return _override(

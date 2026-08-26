@@ -2021,7 +2021,7 @@ git commit -m "Show the vendor loop without a mailbox"
 End to end against the live mailbox:
 
 1. `uvicorn apagent.api.app:app --reload` with IMAP and SMTP configured.
-2. `INV-V005-3005` decides `EMAIL`; a query arrives at `e1430674@u.nus.edu` within a minute.
+2. `INV-V005-3005` decides `EMAIL`; a query arrives at the address registered for V005 in `data/email/vendors.json` within a minute.
 3. **Check the Message-ID survived.** In the received message's headers, `Message-ID` must be the one the registry minted (it contains the invoice id). If Gmail rewrote it, header correlation is dead on this transport and the token path is carrying the feature — say so in the demo rather than discovering it on stage.
 4. Reply from the NUS mailbox. Within a minute the console's case view shows the reply, with `matched by: in_reply_to`.
 5. Reply from a different address. It appears as evidence with `from vendor? False`.

@@ -46,8 +46,12 @@ REQUIRED = [
 
 
 def mask(address: str) -> str:
-    """zkw2542248162@gmail.com -> zk***@gmail.com. Enough to spot a typo in
-    the domain, not enough to hand the address to anyone reading a log."""
+    """someone@example.com -> so***@example.com. Enough to spot a typo in
+    the domain, not enough to hand the address to anyone reading a log.
+
+    The example is invented on purpose: this file is committed, and
+    data/email/vendors.json is gitignored precisely because a real address
+    names a real person."""
     local, _, domain = address.partition("@")
     if not domain:
         return "***"

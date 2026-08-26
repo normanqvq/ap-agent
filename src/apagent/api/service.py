@@ -716,8 +716,8 @@ class Service:
         self.store.add_invoice(revision)
         chain.append(revision.doc_id)
         log.info("raised %s from %s", revision.doc_id, evidence.evidence_id)
-        self._withdraw(revision.replaces, revision.doc_id)
         try:
+            self._withdraw(revision.replaces, revision.doc_id)
             self.run_case(revision.doc_id)
         except Exception:  # noqa: BLE001 - see the docstring
             log.exception(

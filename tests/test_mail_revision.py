@@ -821,6 +821,23 @@ def test_an_unreadable_currency_is_not_a_match(store):
     assert _decide(unlabelled, store).action == Action.ESCALATE
 
 
+def test_two_unreadable_currencies_do_not_cancel_out(store):
+    """None == None, so a PO and an invoice both missing a currency compared
+    equal and sailed through the gate that exists to compare them."""
+    original = store.get_invoice("INV-V005-3005")
+    po = store.get_po(original.ref_doc_id)
+    blank_po = po.model_copy(update={"currency": None})
+    store._pos[blank_po.doc_id] = blank_po  # noqa: SLF001 - no setter, and none is wanted
+    unlabelled = original.model_copy(
+        update={
+            "lines": po.lines,
+            "total_cents": sum(x.line_total_cents for x in po.lines),
+            "currency": None,
+        }
+    )
+    assert _decide(unlabelled, store).action == Action.ESCALATE
+
+
 def test_the_detail_view_shows_the_currency_gate(monkeypatch):
     svc = _wired(monkeypatch)
     gate = next(g for g in svc.get_case("INV-V005-3005")["guardrails"] if g["key"] == "currency")
