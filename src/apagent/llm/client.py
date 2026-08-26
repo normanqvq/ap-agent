@@ -242,8 +242,11 @@ def _anthropic_client_and_model():
     """Construct the first-party Anthropic client and its model id.
 
     Shared by the tool-calling path (_call_anthropic) and the single-shot
-    vision path (call_model_vision), so both honour ANTHROPIC_BASE_URL (the
-    DeepSeek Anthropic-compatible endpoint) and ANTHROPIC_MODEL identically.
+    vision path (call_model_vision). Both read ANTHROPIC_BASE_URL and
+    ANTHROPIC_MODEL here — but only the TEXT path honours a compatible
+    endpoint (DeepSeek's): the vision path refuses a non-first-party host
+    before ever constructing a client, because compat endpoints drop image
+    blocks (see call_model_vision).
     """
     import anthropic
 
