@@ -779,15 +779,17 @@ function renderDetail(c) {
   // exact chat pipeline (extract -> resolve -> grn_gate), so a blurry photo or
   // a short delivery leaves the invoice held; only a clean, covered receipt
   // releases it. The image is read by a multimodal model, then discarded.
-  // Build a fresh <input> per click, so a failed upload can be retried and no
-  // detached input piles up on the body across re-renders.
+  // Build a fresh <input> per click, so a failed upload can be retried. It is
+  // parked inside #view, not on <body>: Safari and Firefox fire no change
+  // event when the picker is cancelled, and an input the next render sweeps
+  // away cannot pile up.
   const photoBtn = document.getElementById("photo-grn");
   if (photoBtn) photoBtn.addEventListener("click", () => {
     const photoInput = document.createElement("input");
     photoInput.type = "file";
     photoInput.accept = "image/*";
     photoInput.hidden = true;
-    document.body.appendChild(photoInput);
+    view.appendChild(photoInput);
     photoInput.addEventListener("change", async () => {
       const f = photoInput.files[0];
       if (!f) { photoInput.remove(); return; }
