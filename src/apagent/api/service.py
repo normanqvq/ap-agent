@@ -68,6 +68,9 @@ DEMO_ORDER = [
 # A set — order carries no meaning here.
 VALID_INTAKE_SOURCES = {"upload", "email", "telegram"}
 
+# One cap for everything a browser can hand us (invoice PDFs, docket photos).
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
 
 class Service:
     """Holds the loaded dataset and the decisions cache for the API."""
@@ -527,7 +530,7 @@ class Service:
         "unexpected" (no manifest ground truth) rather than scoring them —
         the metrics stay honest.
         """
-        if len(content) > 5 * 1024 * 1024:
+        if len(content) > MAX_UPLOAD_BYTES:
             raise ValueError("PDF too large (5 MB limit)")
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "-", Path(filename).stem) or "upload"
         tmp_dir = Path(tempfile.mkdtemp(prefix="apagent-upload-"))
@@ -665,7 +668,7 @@ class Service:
         invoice = self.store.get_invoice(invoice_id)
         if invoice is None:
             raise KeyError(invoice_id)
-        if len(image_bytes) > 5 * 1024 * 1024:
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
             raise ValueError("image too large (5 MB limit)")
         # The two providers with image input take exactly these types. Checked
         # here so an iPhone HEIC gets a clear answer instead of an opaque
