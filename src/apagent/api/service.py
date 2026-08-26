@@ -317,6 +317,7 @@ class Service:
             ),
             "handoff_draft": _handoff_draft(invoice, vendor_name, decision, gates),
             "outbound_to": self.outbound_recipient(invoice.doc_id),
+            "vendor_query": self._vendor_query_view(invoice_id),
             "vendor_replies": self._vendor_replies.get(invoice_id, []),
             # Ids, not decided bundles. The console fetches each revision's
             # own case when a reviewer opens it, and building them here would
@@ -753,6 +754,48 @@ class Service:
         self._cache[doc_id] = supersede(AgentDecision(**cached), successor_id).model_dump()
         self._human.pop(doc_id, None)
         self._save_cache()
+
+    def on_vendor_silence(self, invoice_id: str) -> None:
+        """A vendor never answered. Stop waiting and hand it to a person.
+
+        "We ask the vendor once, chase once, then a human takes it" was true
+        of the first two thirds. The third was a boolean with two writers and
+        two readers, both of them filters inside the mail package: after
+        eight days of silence the chasing stopped, a log line was printed,
+        and a reviewer opening that invoice saw exactly what they saw on day
+        one. The only observable effect of escalating was that the system
+        gave up quietly.
+
+        The consequence is the one the console already knows how to show,
+        rather than a new state nobody renders: the same hand-off a reviewer
+        triggers by hand, recorded in the same outbox, credited to "system"
+        so it is clear nobody clicked it.
+        """
+        if self.store.get_invoice(invoice_id) is None:
+            return
+        if self._human.get(invoice_id) == "sent_to_human":
+            return
+        self.send_to_human(invoice_id, actor="system")
+        log.info("no reply on %s; handed to a reviewer", invoice_id)
+
+    def _vendor_query_view(self, invoice_id: str) -> dict | None:
+        """What we asked this vendor and how long ago, for the detail page.
+
+        Deliberately not the whole SentQuery: the token and the reply address
+        that carries it are the secret a reply is correlated by, and there is
+        no reason for them to reach a browser.
+        """
+        if self._mail_harvester is None:
+            return None
+        query = self._mail_harvester.registry.for_invoice(invoice_id)
+        if query is None:
+            return None
+        return {
+            "sent_at": query.sent_at,
+            "chased_at": query.chased_at,
+            "escalated": query.escalated,
+            "answered": query.answered,
+        }
 
     def send_to_human(self, invoice_id: str, actor: str = "reviewer") -> dict:
         """Route an invoice to a human reviewer and record the hand-off

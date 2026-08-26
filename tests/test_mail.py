@@ -642,6 +642,90 @@ def test_a_reply_that_cannot_be_handled_costs_the_reply_not_the_timers(dispatche
     ]
 
 
+def test_a_silent_vendor_is_handed_to_a_person(dispatcher):
+    """Finding 6 of the branch review: escalation set a boolean two filters
+    in this package read, and nothing else in the product ever looked."""
+    service = _wired_service(dispatcher.sender)
+    registry = service.mail_harvester().registry
+    registry.register("INV-V005-3005", "ap@example.test")
+    _aged(registry, "INV-V005-3005", 24 * 9)  # past the escalation window
+    runner = MailRunner(
+        _SilentAdapter(),
+        service.mail_harvester(),
+        service._dispatcher,
+        config=ToleranceConfig(),
+        on_silence=service.on_vendor_silence,
+    )
+
+    runner.tick()
+
+    case = service.get_case("INV-V005-3005")
+    assert case["human_review"] == "sent_to_human"
+    assert case["vendor_query"]["escalated"] is True
+    handoff = [e for e in service.outbox() if e["kind"] == "handoff"]
+    assert [e["sent_by"] for e in handoff] == ["system"]
+
+
+def test_a_vendor_is_only_handed_over_once(dispatcher):
+    """The timer fires on every tick until the query is answered."""
+    service = _wired_service(dispatcher.sender)
+    registry = service.mail_harvester().registry
+    registry.register("INV-V005-3005", "ap@example.test")
+    _aged(registry, "INV-V005-3005", 24 * 9)
+    runner = MailRunner(
+        _SilentAdapter(),
+        service.mail_harvester(),
+        service._dispatcher,
+        config=ToleranceConfig(),
+        on_silence=service.on_vendor_silence,
+    )
+    runner.tick()
+    runner.tick()
+    assert len([e for e in service.outbox() if e["kind"] == "handoff"]) == 1
+
+
+def test_an_escalation_that_fails_does_not_take_the_tick_down(dispatcher, caplog):
+    registry = dispatcher.registry
+    registry.register("INV-V005-3005", "ap@example.test")
+    _aged(registry, "INV-V005-3005", 24 * 9)
+    harvester = MailHarvester(
+        directory=dispatcher.directory, registry=registry, vendor_of=lambda _: "V005"
+    )
+
+    def explode(invoice_id):
+        raise RuntimeError("the console is wedged")
+
+    runner = MailRunner(
+        _SilentAdapter(), harvester, dispatcher, config=ToleranceConfig(), on_silence=explode
+    )
+    runner.tick()  # must not raise
+    assert registry.for_invoice("INV-V005-3005").escalated is True
+
+
+def test_the_query_view_never_leaks_the_correlation_token():
+    """The token in the reply address is what a reply is recognised by.
+    Nothing in a browser needs it."""
+    service = _wired_service(FakeSender())
+    query = service.mail_harvester().registry.register("INV-V005-3005", "ap@example.test")
+    view = service.get_case("INV-V005-3005")["vendor_query"]
+    assert set(view) == {"sent_at", "chased_at", "escalated", "answered"}
+    assert query.token not in json.dumps(view)
+
+
+def test_a_case_with_no_query_reports_none():
+    assert Service().get_case("INV-V005-3005")["vendor_query"] is None
+
+
+class _SilentAdapter:
+    """An empty mailbox: the timers are the only thing under test."""
+
+    def poll(self):
+        return []
+
+    def mark_handled(self, uid):
+        raise AssertionError("nothing was delivered")
+
+
 def _wired_service(sender):
     service = Service()
     service.attach_mail(

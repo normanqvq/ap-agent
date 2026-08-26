@@ -83,6 +83,7 @@ async def lifespan(_app: FastAPI):
                 service._dispatcher,
                 on_reply=service.on_vendor_reply,
                 config=service.config,
+                on_silence=service.on_vendor_silence,
             )
     except Exception:  # noqa: BLE001 - the console outlives its integrations
         log.exception("mail intake did not start; the console runs without it")

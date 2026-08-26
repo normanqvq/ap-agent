@@ -28,7 +28,9 @@ log = logging.getLogger(__name__)
 class MailRunner:
     """Polls a mailbox, files replies, and runs the silence timers."""
 
-    def __init__(self, adapter, harvester, dispatcher, on_reply=None, config=None) -> None:
+    def __init__(
+        self, adapter, harvester, dispatcher, on_reply=None, config=None, on_silence=None
+    ) -> None:
         self.adapter = adapter
         self.harvester = harvester
         self.dispatcher = dispatcher
@@ -36,6 +38,13 @@ class MailRunner:
         # and re-decide. Injected, not imported: this module must not depend
         # on the API layer.
         self.on_reply = on_reply
+        # Called with the invoice id when a vendor has gone silent past the
+        # escalation window. Injected for the same reason as on_reply, and
+        # it is what makes "then it escalates to a human" mean anything:
+        # without a caller, escalation set a flag two filters in this package
+        # read and printed a log line, and a reviewer opening the invoice saw
+        # exactly what they saw on day one.
+        self.on_silence = on_silence
         self.config = config
         self._stop = threading.Event()
 
@@ -121,9 +130,17 @@ class MailRunner:
         for query in due_for_escalation(self.harvester.registry, self.config, now):
             query.escalated = True
             log.info("no reply on %s; escalating", query.invoice_id)
+            if self.on_silence is not None:
+                try:
+                    self.on_silence(query.invoice_id)
+                except Exception:
+                    log.exception(
+                        "could not escalate %s; the flag is set either way",
+                        query.invoice_id,
+                    )
 
 
-def start_if_configured(harvester, dispatcher, on_reply=None, config=None):
+def start_if_configured(harvester, dispatcher, on_reply=None, config=None, on_silence=None):
     """Start the poller in a daemon thread, or return None if unconfigured.
 
     Returning None rather than raising: an install with no mailbox is not
@@ -132,7 +149,14 @@ def start_if_configured(harvester, dispatcher, on_reply=None, config=None):
     adapter = ImapAdapter()
     if not adapter.configured:
         return None
-    runner = MailRunner(adapter, harvester, dispatcher, on_reply=on_reply, config=config)
+    runner = MailRunner(
+        adapter,
+        harvester,
+        dispatcher,
+        on_reply=on_reply,
+        config=config,
+        on_silence=on_silence,
+    )
     log.info("mail poller starting for %s", adapter.user)
     threading.Thread(target=runner.run_forever, daemon=True, name="apagent-mail").start()
     return runner
