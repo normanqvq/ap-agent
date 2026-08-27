@@ -32,8 +32,10 @@ from apagent.schemas import InboundMail
 
 # ap+INV-V005-3005.9tK2mQ7x@host — only the token (group 1) is ever looked
 # up; the invoice segment is matched but not captured because nothing here
-# reads it back out.
-_TOKEN_RE = re.compile(r"\+(?:[A-Za-z0-9-]+)\.([A-Za-z0-9_-]{8,})@")
+# reads it back out. The segment's class includes '.' because an uploaded
+# invoice's sanitised id may legally carry dots; the token charset has no
+# dot, so greedy backtracking still splits on the LAST one.
+_TOKEN_RE = re.compile(r"\+(?:[A-Za-z0-9.-]+)\.([A-Za-z0-9_-]{8,})@")
 
 
 @dataclass

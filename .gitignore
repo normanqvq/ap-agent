@@ -13,3 +13,7 @@ data/email/vendors.json
 /.bedrock_agentcore.yaml
 /Dockerfile
 /.dockerignore
+
+# The atomic-write staging file for the decisions cache; only ever transient,
+# but a crash between write and rename must not dirty the tree.
+/data/synthetic/decisions.json.tmp

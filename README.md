@@ -13,7 +13,7 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
 ![RAG](https://img.shields.io/badge/RAG-BM25-6366F1)
 ![Matching](https://img.shields.io/badge/matching-Hungarian-0EA5E9)
-![Tests](https://img.shields.io/badge/tests-421%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-428%20passing-16A34A)
 ![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-84CC16)
 
@@ -192,7 +192,7 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 421 offline tests, no API key needed
+pytest                                    # 428 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
@@ -230,7 +230,7 @@ deploy/               # optional: Bedrock AgentCore entrypoint + local-run / dep
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
 data/samples/         # three attack PDFs + the delivery-docket photo for the live demos
-tests/                # 421 offline tests
+tests/                # 428 offline tests
 docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap analysis
 ```
 
@@ -238,4 +238,4 @@ docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap ana
 
 All planned modules are built. Beyond the hackathon scope: reading documents from an actual ERP instead of the synthetic dataset. The other item that used to sit in this sentence — a real mailbox for the outbound messages — got built: the vendor email loop sends its queries, chases once, and reads the replies for real.
 
-On the chat-confirmation path specifically, the honest gaps: **WeCom and Slack** are documented stubs rather than implementations, and WhatsApp can only ever work one-to-one because its Business Cloud API has no group chats; a single confirmation covers **every** invoice against that purchase order, bounded only by the informal ceiling and the duplicate gate; and delivery-note **photos are read only on Anthropic/Bedrock** (DeepSeek has no image input, so that provider falls back to text confirmation). The residual risk that has no technical fix is an authorised receiver who is wrong or complicit — a forged docket is the same class of problem as a false chat message, and segregation of duties needs a PO-requester field the data model does not have.
+On the chat-confirmation path specifically, the honest gaps: **WeCom and Slack** are documented stubs rather than implementations, and WhatsApp can only ever work one-to-one because its Business Cloud API has no group chats; a single confirmation covers **every** invoice against that purchase order, bounded only by the informal ceiling and the duplicate gate; and delivery-note **photos are read only on Anthropic/Bedrock** (DeepSeek has no image input, so that provider falls back to text confirmation); and the roster authorises whoever @-mentions the bot while the claim is read from the whole window, so a colleague can vouch for words a supplier typed — bounded by the bot echoing back exactly what it recorded, the informal ceiling, and the quantity check. The residual risk that has no technical fix is an authorised receiver who is wrong or complicit — a forged docket is the same class of problem as a false chat message, and segregation of duties needs a PO-requester field the data model does not have.

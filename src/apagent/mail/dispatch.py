@@ -33,6 +33,8 @@ import logging
 from datetime import datetime
 from email.message import EmailMessage
 
+from apagent.pipeline import _safe_doc_id
+
 log = logging.getLogger(__name__)
 
 
@@ -67,7 +69,10 @@ class MailDispatcher:
         message = EmailMessage()
         message["From"] = self.mail_from
         message["To"] = to
-        message["Subject"] = f"Query on invoice {invoice_id}"
+        # The subject of a REAL email to a vendor is outsider-facing text, and
+        # the invoice number is supplier text — same rule as the body
+        # templates, enforced by the same shape check.
+        message["Subject"] = f"Query on invoice {_safe_doc_id(invoice_id)}"
         message["Message-ID"] = query.message_id
         message["Reply-To"] = query.reply_to
         message.set_content(body)
@@ -96,12 +101,13 @@ class MailDispatcher:
         message = EmailMessage()
         message["From"] = self.mail_from
         message["To"] = to
-        message["Subject"] = f"Reminder: query on invoice {invoice_id}"
+        safe_id = _safe_doc_id(invoice_id)
+        message["Subject"] = f"Reminder: query on invoice {safe_id}"
         message["In-Reply-To"] = query.message_id
         message["References"] = query.message_id
         message["Reply-To"] = query.reply_to
         message.set_content(
-            f"We wrote about invoice {invoice_id} and have not had a reply. "
+            f"We wrote about invoice {safe_id} and have not had a reply. "
             "Please send a corrected invoice, or the agreed basis for the difference."
         )
         if not self.sender.send(message):
