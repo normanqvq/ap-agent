@@ -590,12 +590,16 @@ def test_a_bot_token_never_reaches_the_logs(caplog):
     from apagent.chat.adapters import redact_tokens_from_logs
 
     redact_tokens_from_logs()
-    url = "https://api.telegram.org/bot8874647777:AAH_EmUxAJ8XGk6ss9LADjxKTn63G7lKuOY/getUpdates"
+    # A synthetic token: right SHAPE (bot<digits>:<35+ chars>) so the redactor
+    # matches it, but not a real credential. Never put a live token in a test.
+    url = (
+        "https://api.telegram.org/bot0000000000:FAKEtokenForTestsOnly_00000000000000000/getUpdates"
+    )
     with caplog.at_level(logging.INFO):
         logging.getLogger("httpx").info("HTTP Request: GET %s", url)
         logging.getLogger("httpx").info("plain message with %s inside", url)
     joined = "\n".join(r.getMessage() for r in caplog.records)
-    assert "AAH_EmU" not in joined
+    assert "FAKEtoken" not in joined
     assert "bot<REDACTED>" in joined
 
 
@@ -614,7 +618,7 @@ def test_redaction_survives_the_shapes_httpx_actually_logs(caplog):
 
     redact_tokens_from_logs()
     url = httpx.URL(
-        "https://api.telegram.org/bot8874647777:AAH_EmUxAJ8XGk6ss9LADjxKTn63G7lKuOY/getUpdates"
+        "https://api.telegram.org/bot0000000000:FAKEtokenForTestsOnly_00000000000000000/getUpdates"
     )
     with caplog.at_level(logging.INFO):
         # 1. the URL as a non-str arg, exactly httpx's own log line
@@ -629,5 +633,5 @@ def test_redaction_survives_the_shapes_httpx_actually_logs(caplog):
     rendered = "\n".join(
         r.getMessage() + (r.exc_text or "") + (r.stack_info or "") for r in caplog.records
     )
-    assert "AAH_EmU" not in rendered
+    assert "FAKEtoken" not in rendered
     assert rendered.count("bot<REDACTED>") >= 3
