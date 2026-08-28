@@ -118,10 +118,13 @@ class Service:
         # invoice aligns to was itself flagged for a possible typo. Advisory
         # only: nothing here blocks a payment or edits a number.
         self.sanity_config = SanityConfig()
-        self._po_flags: dict[str, list[dict]] = {
-            po.doc_id: [f.model_dump() for f in screen_po(po, self.sanity_config)]
-            for po in self.store.all_pos()
-        }
+        _all_pos = self.store.all_pos()
+
+        def _screen(po: Document) -> list[dict]:
+            others = [o for o in _all_pos if o.doc_id != po.doc_id]
+            return [f.model_dump() for f in screen_po(po, others, self.sanity_config)]
+
+        self._po_flags: dict[str, list[dict]] = {po.doc_id: _screen(po) for po in _all_pos}
         self._cache: dict[str, dict] = {}
         if CACHE.exists():
             self._cache = json.loads(CACHE.read_text(encoding="utf-8"))

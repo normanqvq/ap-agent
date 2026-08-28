@@ -5,26 +5,35 @@ against the PO and the GRN, so a typo in the PO ITSELF — 1000 reams of paper
 ordered when 100 was meant — makes the invoice align to the wrong number,
 matching goes green, and the mistake is rubber-stamped to payment. The one
 place with real leverage is the moment the PO enters the system, before any
-invoice exists. This module screens a PO against itself and stamps an advisory
-flag on any line that does not add up.
+invoice exists. This module screens a PO and stamps an advisory flag on any
+line that looks mistyped.
 
-One signal, on purpose. We designed three (arithmetic self-check, a history
-baseline on quantity, an intra-PO line-total outlier) and measured all three on
-the real data. The two quantity-magnitude signals could not be made clean:
-legitimate business variation there reaches 10-20x (a small prior order
-restocked; an expensive item beside cheap ones), which overlaps a genuine
-one-digit typo (10x), so any cutoff either cried wolf on real POs or missed the
-very error it was for — and false alarms are the one thing this project must not
-produce. The arithmetic check has no such overlap: it keys on a line being
-internally inconsistent (qty * unit_price far from the stored line total), and
-all 21 real POs are internally consistent, so it is a structurally
-zero-false-alarm signal. See the design doc for the numbers.
+Two signals, both deterministic:
+
+- ARITHMETIC: qty * unit_price is an order of magnitude off the stored line
+  total — "extra digit on qty, but the printed total is still the intended one".
+  Keys on internal inconsistency, not magnitude, so an expensive item or a big
+  honest order never trips it. All 21 real POs are internally consistent, so it
+  is a structurally zero-false-alarm signal.
+- HISTORY: the qty dwarfs how much of this item is normally ordered — "we
+  usually buy 500, this PO says 5000". Guarded so it does not cry wolf: it only
+  judges an item with a SETTLED norm (seen on >= history_min_pos past POs) and
+  compares against the MEDIAN of that history, not the max. A first attempt used
+  the max with no minimum sample and was dropped — on a thin history one small
+  past order reads as a 20x explosion. Median plus a minimum sample removes that.
+
+A third signal (an intra-PO line-total outlier for items with no history) stays
+dropped: line total = qty * price, so an expensive-per-unit item is
+indistinguishable from a wrong quantity. See the design doc.
 
 Advisory only. Like tolerance.py this layer computes fact and nothing more: it
 never blocks payment, edits a number, or changes an agent decision. It exists
 to make a person look twice. That is why screen_po returns flags and has no
-"reject" path. Deterministic, no LLM, no I/O.
+"reject" path. Deterministic, no LLM; history is passed in by the caller (the
+other POs), so the function stays pure and trivially testable.
 """
+
+from statistics import median
 
 from apagent.schemas import (
     Document,
@@ -61,6 +70,31 @@ def _fold(a: int, b: int) -> float:
     return hi / lo
 
 
+def _key(line: LineItem) -> str:
+    """How we identify "the same item" across POs for the history baseline.
+
+    Prefer the SKU. Fall back to the description when the SKU is missing — small
+    vendors print no item code, only text — lower-cased so trivial casing does
+    not split one item into two histories. This mirrors why matching needs text
+    similarity at all (see LineItem docstring)."""
+    if line.sku:
+        return f"sku:{line.sku}"
+    return f"desc:{line.description.strip().lower()}"
+
+
+def _history_qtys(history: list[Document]) -> dict[str, list[int]]:
+    """Every past ordered quantity, grouped by item key.
+
+    Built once per screen. A list (not just a max) because HISTORY needs the
+    median and the sample size, and one PO can carry the same item on two lines,
+    each a real data point."""
+    qtys: dict[str, list[int]] = {}
+    for doc in history:
+        for line in doc.lines:
+            qtys.setdefault(_key(line), []).append(line.qty)
+    return qtys
+
+
 def _arithmetic(line: LineItem, config: SanityConfig, currency: str | None) -> SanityFlag | None:
     """qty * unit_price is an order of magnitude off the stored line total.
 
@@ -94,19 +128,59 @@ def _arithmetic(line: LineItem, config: SanityConfig, currency: str | None) -> S
     )
 
 
-def screen_po(po: Document, config: SanityConfig) -> list[SanityFlag]:
+def _history(
+    line: LineItem, history_qtys: dict[str, list[int]], config: SanityConfig
+) -> SanityFlag | None:
+    """This line's qty dwarfs the median quantity this item is normally ordered at.
+
+    Two guards keep it quiet on honest orders: the item must appear on at least
+    history_min_pos past lines (a settled norm exists), and we compare against
+    the median of that history, not the max — so one odd past order cannot set
+    the bar. Below the sample gate, or below the ratio, it says nothing; a
+    brand-new item has no norm and is ARITHMETIC's problem, not this one's."""
+    seen = history_qtys.get(_key(line), [])
+    if len(seen) < config.history_min_pos:
+        return None
+    baseline = int(median(seen))
+    if baseline <= 0:
+        return None
+    ratio = line.qty / baseline
+    if ratio < config.history_ratio:
+        return None
+    hint = (
+        f'line {line.line_no} "{line.description}": '
+        f"qty {line.qty:,} is {ratio:.0f}x the usual order for this item "
+        f"(normally about {baseline:,}) — is that intended?"
+    )
+    return SanityFlag(
+        line_no=line.line_no,
+        signal=SanityCheck.HISTORY,
+        observed=line.qty,
+        baseline=baseline,
+        ratio=ratio,
+        hint=hint,
+    )
+
+
+def screen_po(po: Document, history: list[Document], config: SanityConfig) -> list[SanityFlag]:
     """Screen one PO for fat-finger errors, returning advisory flags.
 
-    Returns an empty list when screening is disabled for this vendor. Pure: it
-    reads only the PO passed in, so it is trivially testable and free of I/O.
+    history is the other POs, used only for the HISTORY baseline. Returns an
+    empty list when screening is disabled for this vendor. A single line can
+    raise more than one flag (a mistyped digit can trip both arithmetic and
+    history); each is reported so a reviewer sees every reason it stood out.
     """
     config = resolve_config(po.vendor_id, config)
     if not config.enabled:
         return []
 
+    history_qtys = _history_qtys(history)
     flags: list[SanityFlag] = []
     for line in po.lines:
-        flag = _arithmetic(line, config, po.currency)
-        if flag is not None:
-            flags.append(flag)
+        for flag in (
+            _arithmetic(line, config, po.currency),
+            _history(line, history_qtys, config),
+        ):
+            if flag is not None:
+                flags.append(flag)
     return flags

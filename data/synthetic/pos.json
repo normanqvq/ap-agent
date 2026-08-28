@@ -895,5 +895,203 @@
     "due_date": null,
     "tax_cents": null,
     "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1030",
+    "doc_type": "PO",
+    "vendor_id": "V006",
+    "vendor_name": "CleanPro Facilities Services",
+    "issue_date": "2026-03-09",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "TP-2PLY",
+        "description": "Toilet roll 2-ply, 10-pack",
+        "qty": 480,
+        "uom": "PACK",
+        "unit_price_cents": 120,
+        "line_total_cents": 57600
+      },
+      {
+        "line_no": 2,
+        "sku": "CLN-GLASS-1L",
+        "description": "Glass cleaner 1L",
+        "qty": 12,
+        "uom": "PCS",
+        "unit_price_cents": 380,
+        "line_total_cents": 4560
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1031",
+    "doc_type": "PO",
+    "vendor_id": "V006",
+    "vendor_name": "CleanPro Facilities Services",
+    "issue_date": "2026-04-13",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "TP-2PLY",
+        "description": "Toilet roll 2-ply, 10-pack",
+        "qty": 500,
+        "uom": "PACK",
+        "unit_price_cents": 120,
+        "line_total_cents": 60000
+      },
+      {
+        "line_no": 2,
+        "sku": "CLN-BINLINER-60",
+        "description": "Bin liner 60L, roll of 50",
+        "qty": 20,
+        "uom": "ROLL",
+        "unit_price_cents": 250,
+        "line_total_cents": 5000
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1032",
+    "doc_type": "PO",
+    "vendor_id": "V006",
+    "vendor_name": "CleanPro Facilities Services",
+    "issue_date": "2026-05-18",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "TP-2PLY",
+        "description": "Toilet roll 2-ply, 10-pack",
+        "qty": 500,
+        "uom": "PACK",
+        "unit_price_cents": 120,
+        "line_total_cents": 60000
+      },
+      {
+        "line_no": 2,
+        "sku": "CLN-CLOTH-10",
+        "description": "Microfibre cloth, pack of 10",
+        "qty": 15,
+        "uom": "PACK",
+        "unit_price_cents": 420,
+        "line_total_cents": 6300
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1033",
+    "doc_type": "PO",
+    "vendor_id": "V006",
+    "vendor_name": "CleanPro Facilities Services",
+    "issue_date": "2026-06-22",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "TP-2PLY",
+        "description": "Toilet roll 2-ply, 10-pack",
+        "qty": 520,
+        "uom": "PACK",
+        "unit_price_cents": 120,
+        "line_total_cents": 62400
+      },
+      {
+        "line_no": 2,
+        "sku": "CLN-DISINFECT-750",
+        "description": "Disinfectant spray 750ml",
+        "qty": 24,
+        "uom": "PCS",
+        "unit_price_cents": 300,
+        "line_total_cents": 7200
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-2026-1034",
+    "doc_type": "PO",
+    "vendor_id": "V006",
+    "vendor_name": "CleanPro Facilities Services",
+    "issue_date": "2026-07-27",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "TP-2PLY",
+        "description": "Toilet roll 2-ply, 10-pack",
+        "qty": 500,
+        "uom": "PACK",
+        "unit_price_cents": 120,
+        "line_total_cents": 60000
+      },
+      {
+        "line_no": 2,
+        "sku": "CLN-TOWEL-6",
+        "description": "Paper towel roll, 6-pack",
+        "qty": 30,
+        "uom": "PACK",
+        "unit_price_cents": 350,
+        "line_total_cents": 10500
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
+  },
+  {
+    "doc_id": "PO-DEMO-OVERORDER",
+    "doc_type": "PO",
+    "vendor_id": "V006",
+    "vendor_name": "CleanPro Facilities Services",
+    "issue_date": "2026-08-28",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "TP-2PLY",
+        "description": "Toilet roll 2-ply, 10-pack",
+        "qty": 5000,
+        "uom": "PACK",
+        "unit_price_cents": 120,
+        "line_total_cents": 600000
+      },
+      {
+        "line_no": 2,
+        "sku": "CLN-SANITIZER-500",
+        "description": "Hand sanitizer 500ml",
+        "qty": 10,
+        "uom": "PCS",
+        "unit_price_cents": 450,
+        "line_total_cents": 4500
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
   }
 ]

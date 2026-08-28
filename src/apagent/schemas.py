@@ -587,28 +587,37 @@ class SanityCheck(StrEnum):
     """Which fat-finger signal fired on a PO line.
 
     Orthogonal to DiscrepancyField: a Discrepancy compares an invoice against
-    its PO/GRN, whereas a SanityCheck judges a purchase order against itself,
-    before any invoice exists. Kept as a separate enum so the two never get
-    confused in a case bundle, and so a second signal can be added later without
-    reshaping the flag.
+    its PO/GRN, whereas a SanityCheck judges a purchase order against itself (and
+    for HISTORY, against how this item has been ordered before), before any
+    invoice exists. Kept as a separate enum so the two never get confused in a
+    case bundle.
 
     ARITHMETIC  qty * unit_price is an order of magnitude off the stored
                 line_total — the classic "extra digit on qty, but the printed
-                total is still the intended one". This is the whole enum on
-                purpose: two quantity-magnitude signals (a history baseline and
-                an intra-PO line-total outlier) were designed and dropped after
-                measuring them on the real data — legitimate business variation
-                there reaches 10-20x (a small prior order restocked, an
-                expensive item among cheap ones), which overlaps a genuine
-                one-digit typo (10x), so no cutoff separates signal from noise
-                without either crying wolf or missing the error. ARITHMETIC has
-                no such overlap: it keys on a document being internally
-                inconsistent, and all 21 real POs are internally consistent, so
-                it is a structurally zero-false-alarm signal. See the design
-                doc's "Signals we tried and dropped".
+                total is still the intended one". Keys on a line being internally
+                inconsistent, so an expensive item or a big honest order never
+                trips it; all 21 real POs are internally consistent, making it a
+                structurally zero-false-alarm signal.
+    HISTORY     the line's qty dwarfs how much of this item is normally ordered
+                — "we usually buy 500, this PO says 5000". Guarded two ways so it
+                does not cry wolf: it only speaks up for an item with a SETTLED
+                norm (seen on at least SanityConfig.history_min_pos past POs),
+                and it compares against the MEDIAN of that history, not the max.
+                A first attempt used the max with no minimum sample and was
+                dropped — on a thin history a single small past order (tape once
+                at 5, restocked at 100) reads as a 20x explosion. Median plus a
+                minimum sample removes that: measured on the real set, every item
+                with enough history sits within ~3x of its median, so the 10x
+                default stays clear of legitimate restocking.
+
+    A third signal, an intra-PO line-total outlier for items with no history at
+    all, stays dropped: line total = qty * price, so an expensive-per-unit item
+    (a toner cartridge among cheap stationery, ~55x on the real data) is
+    indistinguishable from a wrong quantity. See the design doc.
     """
 
     ARITHMETIC = "ARITHMETIC"
+    HISTORY = "HISTORY"
 
 
 class SanityFlag(BaseModel):
@@ -623,12 +632,16 @@ class SanityFlag(BaseModel):
     person look twice. That guarantee is why the flag has no `severity` or
     `action` field — it never drives one.
 
-    For the ARITHMETIC signal: observed = qty * unit_price_cents,
-    baseline = line_total_cents (both in cents, same money rule as everywhere).
+    observed / baseline meaning depends on the signal:
+    - ARITHMETIC: observed = qty * unit_price_cents, baseline = line_total_cents
+      (both in cents, same money rule as everywhere).
+    - HISTORY:    observed = this line's qty, baseline = the median qty this item
+      was ordered at across past POs (a count, not money).
     ratio is the fold-difference max(observed, baseline) / min(observed, baseline),
-    so it is always >= 1 and always >= the configured cutoff; either side can be
-    the larger (a printed total can be too big or too small), so max/min keeps
-    ratio meaningful in both directions.
+    so it is always >= 1 and always >= the configured cutoff. For HISTORY observed
+    is the larger by construction, so ratio == observed / baseline; for ARITHMETIC
+    either side can be the larger (a printed total can be too big or too small),
+    so max/min keeps ratio meaningful in both directions.
     """
 
     line_no: int
@@ -651,24 +664,37 @@ class SanityConfig(BaseModel):
     SanityConfig; a vendor not in it falls back to the defaults. The override is
     used whole, not merged field by field — same one-answer rule as tolerance.
 
-    UNITS: arithmetic_ratio is a plain multiplier (5.0 means "five times"), not
-    a percentage. It is deliberately NOT called a *_threshold — per CLAUDE.md
+    UNITS: every *_ratio is a plain multiplier (5.0 means "five times"), not a
+    percentage. They are deliberately NOT called *_threshold — per CLAUDE.md
     "threshold" is reserved for the manual-review money cutoff.
 
-    Why this default:
+    Why these defaults:
     arithmetic_ratio 5.0 - qty * unit_price must be at least 5x off the printed
         line total before we say anything. A genuine discount or fee moves a
         line total by a few percent; only a mistyped digit moves it by an order
         of magnitude. 5x sits safely above any real discount and below the 10x
         of a single extra digit, so it catches the typo without crying wolf on
         legitimate gaps (which tolerance.py already owns).
+    history_ratio 10.0 - a line's qty must be at least 10x the MEDIAN qty this
+        item has been ordered at before. One extra digit is exactly 10x, so this
+        is tuned to the very error we care about. Median, not max, so one odd
+        past order does not set the bar; measured on the real set every item with
+        a settled history sits within ~3x of its median, well clear of 10x.
+    history_min_pos 4 - an item must have been ordered on at least this many past
+        POs before HISTORY will judge it. Below that there is no "normal" to
+        compare against, and a thin history is exactly where a single small order
+        fakes a huge spike. Under this gate HISTORY simply stays silent — a
+        brand-new item is ARITHMETIC's job, or nobody's.
 
     enabled defaults True: the screen is on for every vendor unless a specific
     override turns it off.
 
-    A first guess, tuned against the synthetic set. Change it here, in one place.
+    First guesses, tuned against the synthetic set. Change them here, in one
+    place.
     """
 
     enabled: bool = True
     arithmetic_ratio: float = 5.0
+    history_ratio: float = 10.0
+    history_min_pos: int = 4
     per_vendor_overrides: dict[str, "SanityConfig"] | None = None
