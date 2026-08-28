@@ -198,6 +198,21 @@ def config() -> dict:
     return get_service().config_info()
 
 
+@app.get("/api/pos")
+def list_pos() -> list[dict]:
+    """The PO screening list: every PO with its fat-finger flag count."""
+    return get_service().pos()
+
+
+@app.get("/api/pos/{po_id}")
+def get_po(po_id: str) -> dict:
+    """One PO with its lines and its advisory fat-finger flags."""
+    try:
+        return get_service().po_detail(po_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"po {po_id} not found") from None
+
+
 @app.get("/api/invoices")
 def list_invoices() -> list[dict]:
     return get_service().list_cases()

@@ -853,5 +853,47 @@
     "due_date": null,
     "tax_cents": null,
     "total_cents": null
+  },
+  {
+    "doc_id": "PO-DEMO-FATFINGER",
+    "doc_type": "PO",
+    "vendor_id": "V002",
+    "vendor_name": "Mei Ling Office Solutions",
+    "issue_date": "2026-08-28",
+    "ref_doc_id": null,
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "WB-MARKER-BLK",
+        "description": "Whiteboard marker, black",
+        "qty": 5,
+        "uom": "PCS",
+        "unit_price_cents": 180,
+        "line_total_cents": 900
+      },
+      {
+        "line_no": 2,
+        "sku": "A4-80G",
+        "description": "A4 copy paper 80gsm, ream",
+        "qty": 1000,
+        "uom": "REAM",
+        "unit_price_cents": 550,
+        "line_total_cents": 55000
+      },
+      {
+        "line_no": 3,
+        "sku": "STAPLER-HD",
+        "description": "Heavy-duty stapler",
+        "qty": 2,
+        "uom": "PCS",
+        "unit_price_cents": 650,
+        "line_total_cents": 1300
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
   }
 ]

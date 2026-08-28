@@ -107,6 +107,42 @@ def test_performance_scores_the_benchmark_view_not_the_raw_cache():
     assert svc.performance()["schema_pass"]["total"] == base_total  # upload excluded
 
 
+# --- PO sanity screen surfaces --------------------------------------------
+
+DEMO_PO_ID = "PO-DEMO-FATFINGER"
+
+
+def test_pos_list_screens_everything_and_only_the_demo_is_flagged():
+    """The PO screening list carries a flag count per PO: every real PO is
+    clean (0), and the one seeded fat-finger PO is the only one flagged."""
+    rows = Service().pos()
+    by_id = {r["po_id"]: r for r in rows}
+    assert by_id[DEMO_PO_ID]["flag_count"] >= 1
+    flagged = [r["po_id"] for r in rows if r["flag_count"] > 0]
+    assert flagged == [DEMO_PO_ID], flagged
+
+
+def test_po_detail_exposes_the_flag_on_the_mistyped_line():
+    detail = Service().po_detail(DEMO_PO_ID)
+    flags = detail["sanity_flags"]
+    assert len(flags) == 1
+    assert flags[0]["signal"] == "ARITHMETIC"
+    assert flags[0]["line_no"] == 2  # the A4 paper line
+    assert flags[0]["hint"]
+
+
+def test_po_detail_unknown_id_raises_keyerror():
+    with pytest.raises(KeyError):
+        Service().po_detail("PO-DOES-NOT-EXIST")
+
+
+def test_case_bundle_carries_po_sanity_flags_field():
+    """Every case bundle exposes the matched PO's flags; a clean PO gives an
+    empty list rather than omitting the field."""
+    c = Service().get_case("INV-V005-3018")
+    assert c["po_sanity_flags"] == []
+
+
 def test_analytics_scorecard_covers_every_planted_defect():
     a = Service().analytics()
     assert len(a["defects"]) == 7

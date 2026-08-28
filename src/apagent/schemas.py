@@ -581,3 +581,94 @@ class ToleranceConfig(BaseModel):
     vendor_chase_after_hours: int = 72
     vendor_escalate_after_hours: int = 168
     per_vendor_overrides: dict[str, "ToleranceConfig"] | None = None
+
+
+class SanityCheck(StrEnum):
+    """Which fat-finger signal fired on a PO line.
+
+    Orthogonal to DiscrepancyField: a Discrepancy compares an invoice against
+    its PO/GRN, whereas a SanityCheck judges a purchase order against itself,
+    before any invoice exists. Kept as a separate enum so the two never get
+    confused in a case bundle, and so a second signal can be added later without
+    reshaping the flag.
+
+    ARITHMETIC  qty * unit_price is an order of magnitude off the stored
+                line_total — the classic "extra digit on qty, but the printed
+                total is still the intended one". This is the whole enum on
+                purpose: two quantity-magnitude signals (a history baseline and
+                an intra-PO line-total outlier) were designed and dropped after
+                measuring them on the real data — legitimate business variation
+                there reaches 10-20x (a small prior order restocked, an
+                expensive item among cheap ones), which overlaps a genuine
+                one-digit typo (10x), so no cutoff separates signal from noise
+                without either crying wolf or missing the error. ARITHMETIC has
+                no such overlap: it keys on a document being internally
+                inconsistent, and all 21 real POs are internally consistent, so
+                it is a structurally zero-false-alarm signal. See the design
+                doc's "Signals we tried and dropped".
+    """
+
+    ARITHMETIC = "ARITHMETIC"
+
+
+class SanityFlag(BaseModel):
+    """One advisory flag raised on one PO line by the sanity screen.
+
+    It carries the raw numbers behind the call (observed, baseline, ratio) so
+    the flag is auditable — a reviewer can see WHY it fired, not just that it
+    did — and a code-rendered `hint` string, the one-line human reminder.
+
+    This is advisory only. Nothing in the system reads a SanityFlag to block a
+    payment, edit a number, or change an agent decision; it exists to make a
+    person look twice. That guarantee is why the flag has no `severity` or
+    `action` field — it never drives one.
+
+    For the ARITHMETIC signal: observed = qty * unit_price_cents,
+    baseline = line_total_cents (both in cents, same money rule as everywhere).
+    ratio is the fold-difference max(observed, baseline) / min(observed, baseline),
+    so it is always >= 1 and always >= the configured cutoff; either side can be
+    the larger (a printed total can be too big or too small), so max/min keeps
+    ratio meaningful in both directions.
+    """
+
+    line_no: int
+    signal: SanityCheck
+    observed: int
+    baseline: int
+    ratio: float
+    hint: str
+
+
+class SanityConfig(BaseModel):
+    """Settings for the PO sanity screen. Mirrors ToleranceConfig's shape.
+
+    Like tolerance, these are policy, not judgement, so they live in a
+    version-controlled config object rather than as magic numbers in sanity.py,
+    and can be overridden per vendor (a vendor whose normal order really is huge
+    should not trip the history rule every time).
+
+    per_vendor_overrides is keyed by vendor_id and points to another
+    SanityConfig; a vendor not in it falls back to the defaults. The override is
+    used whole, not merged field by field — same one-answer rule as tolerance.
+
+    UNITS: arithmetic_ratio is a plain multiplier (5.0 means "five times"), not
+    a percentage. It is deliberately NOT called a *_threshold — per CLAUDE.md
+    "threshold" is reserved for the manual-review money cutoff.
+
+    Why this default:
+    arithmetic_ratio 5.0 - qty * unit_price must be at least 5x off the printed
+        line total before we say anything. A genuine discount or fee moves a
+        line total by a few percent; only a mistyped digit moves it by an order
+        of magnitude. 5x sits safely above any real discount and below the 10x
+        of a single extra digit, so it catches the typo without crying wolf on
+        legitimate gaps (which tolerance.py already owns).
+
+    enabled defaults True: the screen is on for every vendor unless a specific
+    override turns it off.
+
+    A first guess, tuned against the synthetic set. Change it here, in one place.
+    """
+
+    enabled: bool = True
+    arithmetic_ratio: float = 5.0
+    per_vendor_overrides: dict[str, "SanityConfig"] | None = None

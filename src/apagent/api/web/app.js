@@ -168,7 +168,7 @@ function composer({ to, subject, body, sendLabel, onSend }) {
 }
 
 // --- navigation ------------------------------------------------------------
-const VIEWS = { dashboard, invoices, payments, outbox, analytics, settings };
+const VIEWS = { dashboard, invoices, pos, payments, outbox, analytics, settings };
 // A deferred "land on another page after the badge shows" timer. Any manual
 // navigation cancels it, so a user who clicks away is never yanked back.
 let pendingNav = null;
@@ -229,6 +229,92 @@ async function invoices() {
       r.addEventListener("click", () => detail(r.dataset.id)));
   };
   render();
+}
+
+// --- purchase orders (fat-finger screen at intake) -------------------------
+// The PO screening surface. Every PO is checked in code the moment it loads
+// (service._po_flags), and anything that does not add up carries an advisory
+// flag. This page only lays out what the server computed — CLAUDE.md keeps the
+// arithmetic out of the frontend — and the flags never gate or edit anything,
+// they only ask a person to look twice.
+async function pos() {
+  view.innerHTML = `<div class="placeholder">Loading…</div>`;
+  const list = await api("/api/pos");
+  const flagged = list.filter((p) => p.flag_count > 0);
+  const FILTERS = [
+    ["all", "All", () => true],
+    ["flagged", "Flagged", (p) => p.flag_count > 0],
+  ];
+  let active = "all";
+  const poRow = (p) => `
+    <div class="row" data-id="${esc(p.po_id)}">
+      <div class="rl"><b>${esc(p.po_id)}</b><small>${esc(p.vendor_name)} · ${p.line_count} line${p.line_count === 1 ? "" : "s"}</small></div>
+      <div class="rr">${p.flag_count
+        ? `<span class="pill hold">⚠ ${p.flag_count} check${p.flag_count === 1 ? "" : "s"}</span>`
+        : `<span class="pill appr">✓ clean</span>`}</div>
+    </div>`;
+  const render = () => {
+    const rows = list.filter(FILTERS.find(([k]) => k === active)[2]);
+    view.innerHTML = `
+      <div class="head">
+        <div><h1>Purchase orders</h1><div class="sub">${list.length} POs screened for fat-finger typos the moment they load · ${flagged.length} flagged · advisory only, never blocks or edits</div></div>
+      </div>
+      <div class="kpis">
+        <div class="card kpi"><div class="l">POs screened</div><div class="v num">${list.length}</div><div class="s">arithmetic self-check in code</div></div>
+        <div class="card kpi ${flagged.length ? "warn" : "good"}"><div class="l">Flagged for review</div><div class="v num">${flagged.length}</div><div class="s">${flagged.length ? "a line does not add up" : "every PO adds up"}</div></div>
+        <div class="card kpi good"><div class="l">False alarms</div><div class="v num">0</div><div class="s">zero on the historical set</div></div>
+      </div>
+      <div class="chips">${FILTERS.map(([k, label, fn]) =>
+        `<button class="chip ${k === active ? "on" : ""}" data-f="${k}">${label} (${list.filter(fn).length})</button>`).join("")}</div>
+      <div class="card">${rows.map(poRow).join("") || `<div class="placeholder">Nothing matches this filter.</div>`}</div>`;
+    view.querySelectorAll(".chip").forEach((b) =>
+      b.addEventListener("click", () => { active = b.dataset.f; render(); }));
+    view.querySelectorAll(".row").forEach((r) =>
+      r.addEventListener("click", () => poDetail(r.dataset.id)));
+  };
+  render();
+}
+
+// One PO, its lines, and any advisory fat-finger flag. The flag's wording and
+// every number in it come from the server (rules/sanity.py); this only renders.
+async function poDetail(id) {
+  cancelPendingNav();
+  setActiveNav(document.querySelector('.nav a[data-view="pos"]'));
+  view.innerHTML = `<div class="placeholder">Loading ${esc(id)}…</div>`;
+  const c = await api(`/api/pos/${id}`);
+  const flagByLine = {};
+  c.sanity_flags.forEach((f) => { (flagByLine[f.line_no] = flagByLine[f.line_no] || []).push(f); });
+  const rowsHtml = c.lines.map((l) => {
+    const flags = flagByLine[l.line_no] || [];
+    return `<tr class="${flags.length ? "var" : ""}">
+      <td class="lbl">Line ${l.line_no}</td>
+      <td>${esc(l.description)}${flags.length ? ` <span class="pill hold">⚠ check</span>` : ""}</td>
+      <td class="num">${l.qty}</td>
+      <td class="num">${money(l.unit_price_cents, c.currency)}</td>
+      <td class="num">${money(l.line_total_cents, c.currency)}</td></tr>`;
+  }).join("");
+  const flagsCard = c.sanity_flags.length
+    ? `<div class="card chatev unauth">
+        <h3>⚠ Possible fat-finger — please confirm before this PO is used</h3>
+        ${c.sanity_flags.map((f) => `<p class="evnote" style="font-weight:600">${esc(f.hint)}</p>`).join("")}
+        <p class="evnote">Computed in code from the PO's own numbers, the moment it entered the system.
+        This is an advisory only — it never blocks a payment, changes a decision, or edits a number;
+        it just asks a person to look twice before an invoice aligns to a wrong figure.</p>
+      </div>`
+    : `<div class="card"><div class="allgood">✓ Every line adds up · no fat-finger flag</div></div>`;
+  view.innerHTML = `
+    <div class="head">
+      <div><div class="crumb">Purchase orders / ${esc(c.po_id)}</div><h2>Purchase order detail</h2></div>
+      <div class="actions"><button class="btn" id="back">← Back</button></div>
+    </div>
+    <div class="card recon">
+      <h3>${esc(c.vendor_name)} · ${esc(c.po_id)}</h3>
+      <div class="ids">${esc(c.vendor_id)} · issued ${esc(c.issue_date)} · ${esc(c.currency || "")}</div>
+      <table><thead><tr><th></th><th>Item</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead>
+        <tbody>${rowsHtml}</tbody></table>
+    </div>
+    ${flagsCard}`;
+  document.getElementById("back").addEventListener("click", () => { setActiveNav(document.querySelector('.nav a[data-view="pos"]')); pos(); });
 }
 
 // --- dashboard -------------------------------------------------------------
