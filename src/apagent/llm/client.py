@@ -417,9 +417,134 @@ def _call_bedrock(messages: list[dict], tools: list[dict], system: str) -> dict:
     Caveat: Bedrock does not serve every first-party feature. Prompt caching
     and tool use are supported (kept on); the server-side web-search / code-
     execution tools and the Files/Batches endpoints are not.
+
+    Sandbox exception (AP_BEDROCK_BOTO3=1): the hackathon Innovation Sandbox
+    only grants on-demand access through inference-profile ids (us.anthropic...),
+    and AnthropicBedrock rejects those with "invalid model identifier". Setting
+    AP_BEDROCK_BOTO3=1 routes through boto3's Converse API instead, which does
+    accept a profile id as its modelId. Off by default so the committed path is
+    unchanged; on only for the sandbox account.
     """
+    if os.getenv("AP_BEDROCK_BOTO3") == "1":
+        return _call_bedrock_boto3(messages, tools, system)
     client, model = _bedrock_client_and_model()
     return _anthropic_style_request(client, model, messages, tools, system)
+
+
+def _boto3_bedrock_runtime():
+    """A boto3 bedrock-runtime client + the model/profile id, for the sandbox
+    path. Region and credentials come from the standard AWS chain (env vars or
+    ~/.aws), exactly like AnthropicBedrock — nothing is read or passed here."""
+    try:
+        import boto3
+    except ImportError as exc:
+        raise ValueError("boto3 is required for AP_BEDROCK_BOTO3; pip install boto3.") from exc
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    if not region:
+        raise ValueError("Bedrock needs a region. Set AWS_REGION, e.g. us-east-1.")
+    model = os.getenv("BEDROCK_MODEL", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    return boto3.client("bedrock-runtime", region_name=region), model
+
+
+def _to_converse(messages: list[dict]) -> list[dict]:
+    """Internal messages -> Bedrock Converse `messages`. Same tool protocol as
+    the Anthropic path, in Converse's block shape: toolUse / toolResult."""
+    out = []
+    for msg in messages:
+        if msg["role"] == "assistant" and msg.get("tool_calls"):
+            blocks = []
+            if msg.get("content"):
+                blocks.append({"text": msg["content"]})
+            for tc in msg["tool_calls"]:
+                blocks.append(
+                    {"toolUse": {"toolUseId": tc["id"], "name": tc["name"], "input": tc["args"]}}
+                )
+            out.append({"role": "assistant", "content": blocks})
+        elif msg["role"] == "tool_results":
+            blocks = [
+                {"toolResult": {"toolUseId": r["id"], "content": [{"text": r["result"]}]}}
+                for r in msg["results"]
+            ]
+            out.append({"role": "user", "content": blocks})
+        else:
+            out.append({"role": msg["role"], "content": [{"text": msg["content"]}]})
+    return out
+
+
+def _call_bedrock_boto3(messages: list[dict], tools: list[dict], system: str) -> dict:
+    """The sandbox tool-calling path: boto3 Converse, returning the SAME dict
+    shape as _anthropic_style_request so the loop cannot tell the difference."""
+    client, model = _boto3_bedrock_runtime()
+    tool_config = None
+    if tools:
+        tool_config = {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "inputSchema": {"json": t["input_schema"]},
+                    }
+                }
+                for t in tools
+            ]
+        }
+    kwargs = {
+        "modelId": model,
+        "messages": _to_converse(messages),
+        "system": [{"text": system}],
+        "inferenceConfig": {"maxTokens": 4096},
+    }
+    if tool_config:
+        kwargs["toolConfig"] = tool_config
+    response = client.converse(**kwargs)
+
+    text_parts = []
+    tool_calls = []
+    for block in response["output"]["message"]["content"]:
+        if "text" in block:
+            text_parts.append(block["text"])
+        elif "toolUse" in block:
+            tu = block["toolUse"]
+            tool_calls.append({"id": tu["toolUseId"], "name": tu["name"], "args": tu["input"]})
+    usage = response.get("usage")
+    return {
+        "text": "\n".join(text_parts) if text_parts else None,
+        "tool_calls": tool_calls,
+        "stop_reason": response.get("stopReason"),
+        "usage": {"input_tokens": usage["inputTokens"], "output_tokens": usage["outputTokens"]}
+        if usage
+        else None,
+    }
+
+
+def _call_vision_boto3(image_bytes: bytes, media_type: str, prompt: str, system: str) -> dict:
+    """The sandbox photo path: boto3 Converse with an image block. Returns the
+    {"text", "usage"} shape call_model_vision promises."""
+    client, model = _boto3_bedrock_runtime()
+    fmt = media_type.split("/")[-1]  # image/jpeg -> jpeg
+    response = client.converse(
+        modelId=model,
+        system=[{"text": system}],
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"image": {"format": fmt, "source": {"bytes": image_bytes}}},
+                    {"text": prompt},
+                ],
+            }
+        ],
+        inferenceConfig={"maxTokens": 4096},
+    )
+    text_parts = [b["text"] for b in response["output"]["message"]["content"] if "text" in b]
+    usage = response.get("usage")
+    return {
+        "text": "\n".join(text_parts) if text_parts else None,
+        "usage": {"input_tokens": usage["inputTokens"], "output_tokens": usage["outputTokens"]}
+        if usage
+        else None,
+    }
 
 
 def call_model_vision(
@@ -441,6 +566,10 @@ def call_model_vision(
     receipt. Returns {"text", "usage"} like call_model, without tool_calls.
     """
     provider = provider or os.getenv("LLM_PROVIDER", "anthropic")
+    # Sandbox photo path: boto3 Converse takes the inference-profile id the
+    # sandbox requires (see _call_bedrock). Off by default.
+    if provider == "bedrock" and os.getenv("AP_BEDROCK_BOTO3") == "1":
+        return _call_vision_boto3(image_bytes, media_type, prompt, system)
     if provider == "anthropic":
         # "anthropic" pointed at a compatible endpoint is NOT image-capable:
         # a live probe against DeepSeek's compat endpoint showed it silently
