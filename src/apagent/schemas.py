@@ -187,6 +187,12 @@ class Document(BaseModel):
     tax_cents: int | None = None
     total_cents: int | None = None
 
+    # The remittance account printed on the invoice. Vendor text, i.e.
+    # untrusted — the payout-account guardrail compares it against the
+    # account we hold on file for the vendor. None on a PO/GRN, and None on
+    # an invoice that prints no account.
+    payout_account: str | None = None
+
     # Where this document came from. Until chat confirmation existed every
     # document was an ERP record and provenance was not a question, so these
     # all carry defaults — the committed dataset has no such keys and must
@@ -698,3 +704,15 @@ class SanityConfig(BaseModel):
     history_ratio: float = 10.0
     history_min_pos: int = 4
     per_vendor_overrides: dict[str, "SanityConfig"] | None = None
+
+
+class Vendor(BaseModel):
+    """Vendor master record. The `payout_account` here is OUR authority — the
+    account on file — against which the guardrail checks each invoice's
+    printed account. Kept separate from the id->name map derived from POs
+    because an account is registered master data, not something read off a
+    document."""
+
+    vendor_id: str
+    vendor_name: str
+    payout_account: str | None = None
