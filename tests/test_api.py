@@ -107,6 +107,51 @@ def test_performance_scores_the_benchmark_view_not_the_raw_cache():
     assert svc.performance()["schema_pass"]["total"] == base_total  # upload excluded
 
 
+# --- PO sanity screen surfaces --------------------------------------------
+
+FATFINGER_ID = "PO-DEMO-FATFINGER"
+OVERORDER_ID = "PO-DEMO-OVERORDER"
+
+
+def test_pos_list_flags_exactly_the_two_seeded_pos():
+    """The PO screening list carries a flag count per PO: every real PO is
+    clean (0), and only the two seeded fat-finger POs are flagged."""
+    rows = Service().pos()
+    by_id = {r["po_id"]: r for r in rows}
+    assert by_id[FATFINGER_ID]["flag_count"] >= 1
+    assert by_id[OVERORDER_ID]["flag_count"] >= 1
+    flagged = sorted(r["po_id"] for r in rows if r["flag_count"] > 0)
+    assert flagged == [FATFINGER_ID, OVERORDER_ID], flagged
+
+
+def test_po_detail_exposes_the_arithmetic_flag_on_the_mistyped_line():
+    flags = Service().po_detail(FATFINGER_ID)["sanity_flags"]
+    assert len(flags) == 1
+    assert flags[0]["signal"] == "ARITHMETIC"
+    assert flags[0]["line_no"] == 2  # the A4 paper line
+    assert flags[0]["hint"]
+
+
+def test_po_detail_exposes_the_history_flag_on_the_overorder():
+    flags = Service().po_detail(OVERORDER_ID)["sanity_flags"]
+    assert len(flags) == 1
+    assert flags[0]["signal"] == "HISTORY"
+    assert flags[0]["line_no"] == 1  # the toilet-roll line
+    assert "usual order" in flags[0]["hint"]
+
+
+def test_po_detail_unknown_id_raises_keyerror():
+    with pytest.raises(KeyError):
+        Service().po_detail("PO-DOES-NOT-EXIST")
+
+
+def test_case_bundle_carries_po_sanity_flags_field():
+    """Every case bundle exposes the matched PO's flags; a clean PO gives an
+    empty list rather than omitting the field."""
+    c = Service().get_case("INV-V005-3018")
+    assert c["po_sanity_flags"] == []
+
+
 def test_analytics_scorecard_covers_every_planted_defect():
     a = Service().analytics()
     assert len(a["defects"]) == 7

@@ -34,6 +34,7 @@ from apagent.mail.attach import pdf_attachments
 from apagent.mail.revise import make_revision
 from apagent.matching.engine import match_invoice
 from apagent.pipeline import _blocking_rows, _safe_doc_id, decide_invoice, grn_gate, supersede
+from apagent.rules.sanity import screen_po
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
 from apagent.scheduling import schedule_payments
 from apagent.schemas import (
@@ -44,6 +45,7 @@ from apagent.schemas import (
     DiscrepancyField,
     Document,
     EvidenceSource,
+    SanityConfig,
     ToleranceConfig,
 )
 from apagent.store import DocumentStore
@@ -110,6 +112,20 @@ class Service:
 
             self.registry = remote_resilient_registry(self._raw_registry)
         self.config = ToleranceConfig()
+        # Fat-finger screen. Every PO is checked once, here at load, by pure
+        # deterministic code (rules/sanity.py) — zero LLM — and the advisory
+        # flags are cached by po_id. They surface read-only (GET /api/pos) and
+        # ride into the invoice case bundle, so a reviewer sees that the PO an
+        # invoice aligns to was itself flagged for a possible typo. Advisory
+        # only: nothing here blocks a payment or edits a number.
+        self.sanity_config = SanityConfig()
+        _all_pos = self.store.all_pos()
+
+        def _screen(po: Document) -> list[dict]:
+            others = [o for o in _all_pos if o.doc_id != po.doc_id]
+            return [f.model_dump() for f in screen_po(po, others, self.sanity_config)]
+
+        self._po_flags: dict[str, list[dict]] = {po.doc_id: _screen(po) for po in _all_pos}
         self._cache: dict[str, dict] = {}
         # Three threads write this state: the FastAPI threadpool, the chat
         # poller and the mail poller. The lock guards cache mutation, the
@@ -387,6 +403,10 @@ class Service:
             "ref_doc_id": invoice.ref_doc_id,
             "lines": [line.model_dump() for line in invoice.lines],
             "po": po.model_dump() if po else None,
+            # Fat-finger flags on the PO this invoice aligns to, computed at
+            # load. Advisory: the reviewer sees "the PO itself was flagged for a
+            # possible typo" without it changing any gate or decision.
+            "po_sanity_flags": self._po_flags.get(po.doc_id, []) if po else [],
             "grn": grn.model_dump() if grn else None,
             "chat_grn": self._chat_grn_view(grn, po),
             "match": checked.model_dump(),
@@ -416,6 +436,45 @@ class Service:
             # cost a full match per revision on every page load of the
             # invoice they correct.
             "revisions": self._revisions.get(invoice_id, []),
+        }
+
+    def pos(self) -> list[dict]:
+        """Every PO with its fat-finger flag count — the PO screening list.
+
+        Read-only and flag-count only; the per-line flags live in po_detail so
+        the list stays light. This is the "PO entered the system -> here is the
+        advisory" surface the design asks for, without a PO-entry front door.
+        """
+        out = []
+        for po in self.store.all_pos():
+            flags = self._po_flags.get(po.doc_id, [])
+            out.append(
+                {
+                    "po_id": po.doc_id,
+                    "vendor_id": po.vendor_id,
+                    "vendor_name": self.store.vendors().get(po.vendor_id, po.vendor_name),
+                    "currency": po.currency,
+                    "issue_date": po.issue_date,
+                    "line_count": len(po.lines),
+                    "flag_count": len(flags),
+                }
+            )
+        return out
+
+    def po_detail(self, po_id: str) -> dict:
+        """One PO with its lines and its fat-finger flags. Raises KeyError for
+        an unknown id so the API can turn it into a 404."""
+        po = self.store.get_po(po_id)
+        if po is None:
+            raise KeyError(po_id)
+        return {
+            "po_id": po.doc_id,
+            "vendor_id": po.vendor_id,
+            "vendor_name": self.store.vendors().get(po.vendor_id, po.vendor_name),
+            "currency": po.currency,
+            "issue_date": po.issue_date,
+            "lines": [line.model_dump() for line in po.lines],
+            "sanity_flags": self._po_flags.get(po.doc_id, []),
         }
 
     def performance(self, report: dict | None = None) -> dict:
