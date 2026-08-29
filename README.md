@@ -250,6 +250,16 @@ tests/                # 428 offline tests
 docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap analysis
 ```
 
+## From Demo to a Real Deployment
+
+The decision core is production-shaped, not a mock: code owns authority, the model only reads, every money-moving number is re-checked by a gate, and false approvals are pinned at zero in CI. Running it for a real SME is a matter of connecting the edges, not rebuilding the middle:
+
+- **The model runs on real AWS.** The pipeline runs on Claude via **Amazon Bedrock** — verified on the hackathon's own sandbox account (`AP_BEDROCK_BOTO3=1` routes through the Converse API for the sandbox's inference-profile access; `scripts/check_bedrock.py` confirms it). Nothing about the judgement is a local stand-in.
+- **What a real rollout still needs**, in honest order of size: an **ERP connector** (SAP / Xero / QuickBooks) so invoices come from the books instead of the synthetic set; **extraction hardening** for the messiness of real supplier PDFs (scans, skew, handwriting), measured on real documents rather than clean generated ones; and **data-residency, access tiers and an audit log** fit for real financial data, above today's demo sign-in.
+- **Who it is for.** Exactly the business in the story — an SME with no large ERP, clearing invoices by hand. The incumbents (Coupa, SAP Concur) price for enterprises; this space is a genuine gap, and the cheapest path in is a layer beside an existing accounting tool, not a rip-and-replace.
+
+The point is not that it is shippable tomorrow. It is a working core with a clear, honest path to production — and the boundaries below are stated, not hidden, because that is what a business evaluating it actually needs to see.
+
 ## What's Left
 
 All planned modules are built. Beyond the hackathon scope: reading documents from an actual ERP instead of the synthetic dataset. The other item that used to sit in this sentence — a real mailbox for the outbound messages — got built: the vendor email loop sends its queries, chases once, and reads the replies for real.
