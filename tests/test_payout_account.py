@@ -1,4 +1,5 @@
 from apagent.schemas import DocType, Document, LineItem, Vendor
+from apagent.store import DocumentStore
 
 
 def _line():
@@ -34,3 +35,27 @@ def test_vendor_master_model():
     assert v.vendor_id == "V1"
     assert v.payout_account == "SG12 3456"
     assert Vendor(vendor_id="V2", vendor_name="B").payout_account is None
+
+
+def _po():
+    return Document(
+        doc_id="PO1",
+        doc_type=DocType.PO,
+        vendor_id="V1",
+        vendor_name="Acme",
+        issue_date="2026-01-01",
+        ref_doc_id=None,
+        currency="SGD",
+        lines=[_line()],
+    )
+
+
+def test_store_returns_vendor_account_and_none_when_absent():
+    store = DocumentStore([_po()], [], [], {"V1": "SG12 3456"})
+    assert store.vendor_account("V1") == "SG12 3456"
+    assert store.vendor_account("V-unknown") is None
+
+
+def test_store_without_accounts_returns_none():
+    store = DocumentStore([_po()], [], [])
+    assert store.vendor_account("V1") is None

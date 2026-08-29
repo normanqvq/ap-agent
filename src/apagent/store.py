@@ -15,30 +15,46 @@ it. A global store would make every test depend on the committed dataset.
 import json
 from pathlib import Path
 
-from apagent.schemas import DocType, Document, EvidenceSource
+from apagent.schemas import DocType, Document, EvidenceSource, Vendor
 
 
 class DocumentStore:
     """All POs, GRNs and invoices, indexed for the lookups the tools need."""
 
-    def __init__(self, pos: list[Document], grns: list[Document], invoices: list[Document]):
+    def __init__(
+        self,
+        pos: list[Document],
+        grns: list[Document],
+        invoices: list[Document],
+        vendor_accounts: dict[str, str | None] | None = None,
+    ):
         self._pos = {doc.doc_id: doc for doc in pos}
         # One GRN per PO in our world; keyed by the PO it confirms, because
         # "is there a receipt for this order?" is the question the agent asks.
         # A GRN's own id is never the lookup key.
         self._grns_by_po = {doc.ref_doc_id: doc for doc in grns if doc.ref_doc_id}
         self._invoices = {doc.doc_id: doc for doc in invoices}
+        # vendor_id -> on-file payout account (our authority). Empty when no
+        # vendors.json is present, e.g. the tiny stores tests build by hand.
+        self._vendor_accounts = vendor_accounts or {}
 
     @classmethod
     def from_dir(cls, data_dir: Path) -> "DocumentStore":
-        """Load the synthetic dataset directory (pos/grns/invoices .json)."""
+        """Load the synthetic dataset directory (pos/grns/invoices/vendors)."""
 
         def load(name: str) -> list[Document]:
             return [
                 Document(**d) for d in json.loads((data_dir / name).read_text(encoding="utf-8"))
             ]
 
-        return cls(load("pos.json"), load("grns.json"), load("invoices.json"))
+        accounts: dict[str, str | None] = {}
+        vpath = data_dir / "vendors.json"
+        if vpath.exists():
+            for v in json.loads(vpath.read_text(encoding="utf-8")):
+                vendor = Vendor(**v)
+                accounts[vendor.vendor_id] = vendor.payout_account
+
+        return cls(load("pos.json"), load("grns.json"), load("invoices.json"), accounts)
 
     # --- exact lookups ------------------------------------------------------
 
@@ -74,6 +90,12 @@ class DocumentStore:
         deliberately not the source here.
         """
         return {po.vendor_id: po.vendor_name for po in self._pos.values()}
+
+    def vendor_account(self, vendor_id: str) -> str | None:
+        """The payout account we hold on file for this vendor, or None if the
+        vendor is unknown or has no registered account. This is the trusted
+        baseline the payout-account guardrail checks an invoice against."""
+        return self._vendor_accounts.get(vendor_id)
 
     def add_invoice(self, doc: Document) -> None:
         """Register a newly extracted invoice (the API upload path).
