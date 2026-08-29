@@ -81,6 +81,7 @@ def test_photo_releases_the_missing_grn_case(monkeypatch):
     clears the proof-of-delivery gate and the invoice releases — decided by the
     real grn_gate, with the model stubbed to approve."""
     svc = Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)  # keep the repo file untouched
     inv = svc.store.get_invoice("INV-V006-3019")
     po_id = inv.ref_doc_id
     monkeypatch.setattr(
@@ -179,6 +180,7 @@ def test_reupload_gets_a_fresh_evidence_id(monkeypatch):
     receipt entry, so a dict-size counter would stall and hand the NEXT upload
     a duplicate evidence id. The monotonic counter cannot."""
     svc = Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)  # keep the repo file untouched
     po_id = svc.store.get_invoice("INV-V006-3019").ref_doc_id
     monkeypatch.setattr(
         vision,

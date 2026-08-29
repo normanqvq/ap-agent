@@ -88,6 +88,7 @@ def test_intake_end_to_end_through_the_real_upload_path(monkeypatch):
         ),
     )
     svc = Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)  # keep the repo file untouched
     bundle = svc.intake("telegram", "msg.pdf", b"%PDF-1.4 fake")
     assert bundle["invoice_id"] == "INV-INTAKE-9"
     assert bundle["intake_source"] == "telegram"
