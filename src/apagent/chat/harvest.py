@@ -19,6 +19,15 @@ Refusing to look at a message from an unlisted sender would throw away the
 most useful thing on a hold screen: what was actually said, and by whom. So
 an unauthorised confirmation still becomes evidence -- it simply arrives with
 confirmed_by=None, and pipeline.grn_gate will not release money on it alone.
+
+One boundary to know when reading step 3: authorisation attaches to the
+SENDER of the @mention, while the claim is extracted from the whole window --
+other people's words included. A supplier in the group can type "all
+arrived" and a rostered colleague's casual @mention then mints an authorised
+receipt from it. The echo-back (the bot states exactly what it recorded,
+while the typist still remembers the delivery), the informal ceiling, and
+the quantity check bound the damage; the split itself is stated here rather
+than left to be discovered.
 """
 
 from datetime import datetime
@@ -131,7 +140,19 @@ class ChatHarvester:
         if receipt is None:
             return HarvestResult(templates.refusal(reason or ""), evidence=evidence)
 
-        self.store.add_grn(receipt)
+        try:
+            self.store.add_grn(receipt)
+        except ValueError:
+            # The store refuses to replace an ERP receipt with a chat one (the
+            # downgrade guard, store.py). Before this catch the ValueError
+            # escaped to the poller: the bot went silent, the crash was logged,
+            # and the REST of the poll batch was lost — getUpdates had already
+            # confirmed it. The photo path pre-checks the same condition; here
+            # the store's own refusal is the check, and the group gets told.
+            return HarvestResult(
+                templates.refusal("already_recorded"),
+                evidence=evidence.model_copy(update={"refusal_reason": "already_recorded"}),
+            )
         invoice_ids = [
             inv.doc_id
             for inv in self.store.invoices_for_vendor(receipt.vendor_id)

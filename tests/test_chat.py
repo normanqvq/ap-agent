@@ -113,6 +113,62 @@ def test_authorised_sender_is_recorded_as_proof(monkeypatch, store, roster):
     assert "proof of delivery" in result.reply
 
 
+def test_confirming_an_order_with_an_erp_receipt_gets_a_reply_not_a_crash(
+    monkeypatch, store, roster
+):
+    """PO-2026-1001 already carries a formal ERP receipt, and the store
+    refuses the CHAT downgrade by design. Before this was caught, the
+    ValueError escaped to the poller: the bot went silent, and the rest of
+    the poll batch was lost. Now the group is told, and nothing changes."""
+    claim = {
+        "is_delivery_confirmation": True,
+        "po_reference": "PO-2026-1001",
+        "items": [],
+        "everything_arrived": True,
+        "notes": None,
+    }
+    h = harvester_with(monkeypatch, store, roster, claim)
+    result = h.on_mention(msg("1", "@apbot confirm"))
+    assert result.receipt is None
+    assert "already has a formal goods receipt" in result.reply
+    assert store.get_grn_for_po("PO-2026-1001").source == EvidenceSource.ERP
+
+
+def test_console_starts_when_the_chat_side_cannot(monkeypatch):
+    """A corrupt roster file used to escape the lifespan and take the whole
+    console down — exactly the failure the lifespan's own docstring forbids
+    ("Nothing in here may prevent the console from starting"). The chat side
+    now starts under the same try the mail side already had."""
+    from fastapi.testclient import TestClient
+
+    import apagent.api.service as service_module
+    from apagent.api.app import app
+    from apagent.api.service import Service
+
+    def explode(self):
+        raise RuntimeError("roster.json is corrupt")
+
+    monkeypatch.setattr(Service, "chat_harvester", explode)
+    # A fresh singleton, restored afterwards, same as the mail lifespan test.
+    monkeypatch.setattr(service_module, "_service", None)
+    with TestClient(app) as client:  # entering runs the lifespan
+        assert client.post("/api/login", json={"name": "Norman"}).status_code == 200
+        assert client.get("/api/invoices").status_code == 200
+
+
+def test_mention_matching_respects_the_word_boundary(monkeypatch):
+    """ "@apbot" must not fire on "@apbotfake" — a look-alike bot in the same
+    group would otherwise have every one of its mentions harvested too."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456789:short-fake-value")
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "apbot")
+    from apagent.chat.adapters import TelegramAdapter
+
+    adapter = TelegramAdapter()
+    assert adapter.mentions_bot(msg("1", "@apbot confirm the receipt"))
+    assert adapter.mentions_bot(msg("2", "hey @APBOT confirm"))
+    assert not adapter.mentions_bot(msg("3", "@apbotfake confirm"))
+
+
 # --- resolution fails closed ----------------------------------------------
 
 
@@ -534,10 +590,48 @@ def test_a_bot_token_never_reaches_the_logs(caplog):
     from apagent.chat.adapters import redact_tokens_from_logs
 
     redact_tokens_from_logs()
-    url = "https://api.telegram.org/bot8874647777:AAH_EmUxAJ8XGk6ss9LADjxKTn63G7lKuOY/getUpdates"
+    # A synthetic token: right SHAPE (bot<digits>:<35+ chars>) so the redactor
+    # matches it, but not a real credential. Never put a live token in a test.
+    url = (
+        "https://api.telegram.org/bot0000000000:FAKEtokenForTestsOnly_00000000000000000/getUpdates"
+    )
     with caplog.at_level(logging.INFO):
         logging.getLogger("httpx").info("HTTP Request: GET %s", url)
         logging.getLogger("httpx").info("plain message with %s inside", url)
     joined = "\n".join(r.getMessage() for r in caplog.records)
-    assert "AAH_EmU" not in joined
+    assert "FAKEtoken" not in joined
     assert "bot<REDACTED>" in joined
+
+
+def test_redaction_survives_the_shapes_httpx_actually_logs(caplog):
+    """The first filter only redacted str args, and real leaks are not str:
+    httpx passes an httpx.URL OBJECT as a log arg, a failing request logs an
+    exception object whose str() contains the URL, and log.exception carries
+    the URL inside a traceback. A probe proved each shape leaked. This pins
+    the fix: everything is collapsed to text and scrubbed before a handler
+    sees it."""
+    import logging
+
+    import httpx
+
+    from apagent.chat.adapters import redact_tokens_from_logs
+
+    redact_tokens_from_logs()
+    url = httpx.URL(
+        "https://api.telegram.org/bot0000000000:FAKEtokenForTestsOnly_00000000000000000/getUpdates"
+    )
+    with caplog.at_level(logging.INFO):
+        # 1. the URL as a non-str arg, exactly httpx's own log line
+        logging.getLogger("httpx").info('HTTP Request: GET %s "200 OK"', url)
+        # 2. an exception OBJECT as the arg
+        logging.getLogger("apagent.chat").info("poll failed: %s", ValueError(str(url)))
+        # 3. the URL inside a traceback via log.exception
+        try:
+            raise RuntimeError(f"connect failed for {url}")
+        except RuntimeError:
+            logging.getLogger("apagent.chat").exception("chat poll failed; retrying")
+    rendered = "\n".join(
+        r.getMessage() + (r.exc_text or "") + (r.stack_info or "") for r in caplog.records
+    )
+    assert "FAKEtoken" not in rendered
+    assert rendered.count("bot<REDACTED>") >= 3

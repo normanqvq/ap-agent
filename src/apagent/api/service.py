@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -32,7 +33,7 @@ from apagent.extraction.invoice import ExtractionError, extract_invoice
 from apagent.mail.attach import pdf_attachments
 from apagent.mail.revise import make_revision
 from apagent.matching.engine import match_invoice
-from apagent.pipeline import _blocking_rows, decide_invoice, grn_gate, supersede
+from apagent.pipeline import _blocking_rows, _safe_doc_id, decide_invoice, grn_gate, supersede
 from apagent.rules.sanity import screen_po
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
 from apagent.scheduling import schedule_payments
@@ -126,6 +127,12 @@ class Service:
 
         self._po_flags: dict[str, list[dict]] = {po.doc_id: _screen(po) for po in _all_pos}
         self._cache: dict[str, dict] = {}
+        # Three threads write this state: the FastAPI threadpool, the chat
+        # poller and the mail poller. The lock guards cache mutation, the
+        # snapshots the views iterate, and the file write — NOT the LLM call,
+        # which stays outside so decisions still run concurrently. RLock
+        # because _save_cache runs inside the mutation's critical section.
+        self._cache_lock = threading.RLock()
         if CACHE.exists():
             self._cache = json.loads(CACHE.read_text(encoding="utf-8"))
         # Human sign-off state, per invoice: "confirmed" or "sent_to_human".
@@ -210,7 +217,9 @@ class Service:
         nothing to include: `unexpected` is derived from keys with no
         manifest entry, and not one rate is computed from it.
         """
-        session = {k: v for k, v in self._cache.items() if k in self._session_documents()}
+        with self._cache_lock:
+            cache = dict(self._cache)
+        session = {k: v for k, v in cache.items() if k in self._session_documents()}
         return {**self._benchmark_view(), **session}
 
     def _benchmark_view(self) -> dict[str, dict]:
@@ -238,8 +247,12 @@ class Service:
         the two on-screen scorecards can never disagree.
         """
         held_out = self._session_documents()
+        # Snapshot under the lock: a poller thread finishing run_case while a
+        # web request iterates here was a RuntimeError (dict changed size).
+        with self._cache_lock:
+            cache = dict(self._cache)
         view = {}
-        for invoice_id, decision in self._cache.items():
+        for invoice_id, decision in cache.items():
             if invoice_id in held_out:
                 continue
             if invoice_id in self._chat_confirmed and invoice_id in self._committed:
@@ -252,17 +265,39 @@ class Service:
         # Drop token fields when the provider did not report usage, so a live
         # re-run that produced no counts leaves the committed cache byte-for-byte
         # unchanged instead of adding `input_tokens: null` noise.
-        view = {}
-        for doc_id, decision in self._benchmark_view().items():
-            view[doc_id] = {
-                k: v
-                for k, v in decision.items()
-                if not (k in ("input_tokens", "output_tokens") and v is None)
-            }
-        CACHE.write_text(json.dumps(view, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        with self._cache_lock:
+            view = {}
+            for doc_id, decision in self._benchmark_view().items():
+                view[doc_id] = {
+                    k: v
+                    for k, v in decision.items()
+                    if not (k in ("input_tokens", "output_tokens") and v is None)
+                }
+            # Write-then-rename, never in place: three threads can save, and a
+            # torn decisions.json would crash the NEXT startup at json.loads.
+            # os.replace is atomic on POSIX, so the file is always either the
+            # old bytes or the new bytes.
+            tmp = CACHE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(view, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            os.replace(tmp, CACHE)
 
     def cached_decision(self, invoice_id: str) -> dict | None:
         return self._cache.get(invoice_id)
+
+    def _void_signoff(self, invoice_id: str) -> None:
+        """The decision changed under a sign-off: drop the badge, void the
+        recorded payment. A "confirmed" belonged to the OLD decision —
+        otherwise the badge could outlive the APPROVE it certified, and the
+        payment log would keep asserting "Paid" for a decision that changed.
+        Shared by run_case (a re-run) and _withdraw (a correction overtaking
+        an already-confirmed document), which used to skip the payment half —
+        a paid R1 overtaken by R2 kept a live "Paid" row while R2 could earn
+        its own, two live payments for one bill."""
+        if self._human.pop(invoice_id, None) == "confirmed":
+            for entry in reversed(self._payment_record):
+                if entry["invoice_id"] == invoice_id and not entry["voided"]:
+                    entry["voided"] = True
+                    break
 
     def run_case(self, invoice_id: str) -> dict:
         """Run the agent live on one invoice, cache the decision, return the
@@ -280,17 +315,10 @@ class Service:
         decision = decide_invoice(
             invoice, self.store, registry, self.config, contracts_dir=CONTRACTS
         )
-        self._cache[invoice_id] = decision.model_dump()
-        # A re-run is a NEW decision: any human sign-off belonged to the old
-        # one and is void — otherwise a "confirmed" badge could outlive the
-        # APPROVE it certified. Mark the recorded payment as voided too, so
-        # the payment log stops asserting "Paid" for a decision that changed.
-        if self._human.pop(invoice_id, None) == "confirmed":
-            for entry in reversed(self._payment_record):
-                if entry["invoice_id"] == invoice_id and not entry["voided"]:
-                    entry["voided"] = True
-                    break
-        self._save_cache()
+        with self._cache_lock:
+            self._cache[invoice_id] = decision.model_dump()
+            self._void_signoff(invoice_id)
+            self._save_cache()
         # A decision that asks the vendor a question sends it. This is the
         # only place ongoing dispatch happens, so it must sit after the
         # cache write and before the bundle the caller renders.
@@ -1042,7 +1070,7 @@ class Service:
             "vendor_query",
             {
                 "to": self._dispatcher.directory.address_for(vendor_id),
-                "subject": f"Query on invoice {invoice_id}",
+                "subject": f"Query on invoice {_safe_doc_id(invoice_id)}",
                 "body": body,
             },
             "system",
@@ -1147,12 +1175,13 @@ class Service:
         that sent the query in the first place -- which is also why this
         cannot quietly move the committed benchmark.
         """
-        cached = self._cache.get(doc_id)
-        if cached is None or cached.get("action") != Action.APPROVE:
-            return
-        self._cache[doc_id] = supersede(AgentDecision(**cached), successor_id).model_dump()
-        self._human.pop(doc_id, None)
-        self._save_cache()
+        with self._cache_lock:
+            cached = self._cache.get(doc_id)
+            if cached is None or cached.get("action") != Action.APPROVE:
+                return
+            self._cache[doc_id] = supersede(AgentDecision(**cached), successor_id).model_dump()
+            self._void_signoff(doc_id)
+            self._save_cache()
 
     def on_vendor_silence(self, invoice_id: str) -> None:
         """A vendor never answered. Stop waiting and hand it to a person.
@@ -1290,13 +1319,15 @@ class Service:
             return {
                 "to": self._vendor_address(invoice.vendor_id),
                 "kind": "vendor_query",
-                "subject": f"Query on invoice {invoice_id}",
+                "subject": f"Query on invoice {_safe_doc_id(invoice_id)}",
             }
-        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
+        # Canonical name or the vendor id — never the name printed on the
+        # invoice, which is supplier text riding into a subject line.
+        vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_id)
         return {  # internal operations note (HOLD)
             "to": "ap-supervisor@demo.local",
             "kind": "ops_note",
-            "subject": f"[{invoice_id}] Action needed — {vendor_name}",
+            "subject": f"[{_safe_doc_id(invoice_id)}] Action needed — {vendor_name}",
         }
 
     def _vendor_address(self, vendor_id: str) -> str:

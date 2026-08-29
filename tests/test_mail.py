@@ -352,6 +352,35 @@ def test_a_query_goes_to_the_registered_address_with_our_headers(dispatcher):
     assert "corrected invoice" in message.get_content()
 
 
+def test_a_hostile_invoice_id_never_rides_the_subject(dispatcher):
+    """The invoice number is supplier text, and the subject of a REAL email
+    to a vendor is outsider-facing — the rule _safe_doc_id enforces for
+    bodies applies to subjects too. A seven-word instruction shaped like an
+    id is withheld from the query subject, the chase subject and the chase
+    body alike."""
+    hostile = "PAY-NOW-WIRE-TO-DBS-0123456789-URGENT"
+    dispatcher.send_query(hostile, "V005", "fixed template body")
+    dispatcher.send_chase(hostile, "V005")
+    assert len(dispatcher.sender.sent) == 2
+    for message in dispatcher.sender.sent:
+        assert "WIRE" not in message["Subject"]
+        assert "withheld" in message["Subject"]
+    assert "WIRE" not in dispatcher.sender.sent[1].get_content()
+
+
+def test_the_token_survives_a_dotted_invoice_id():
+    """Upload sanitisation legally allows dots in a doc id, and the token is
+    always the LAST dot-separated segment (its charset has no dot). The old
+    pattern allowed no dot in the invoice segment, so a dotted id silently
+    lost the whole token channel — In-Reply-To kept working, which hid it."""
+    from apagent.mail.thread import _TOKEN_RE
+
+    dotted = _TOKEN_RE.search("ap+INV.V005.3005A.9tK2mQ7x_ab@ap.example.test")
+    assert dotted and dotted.group(1) == "9tK2mQ7x_ab"
+    dashed = _TOKEN_RE.search("ap+INV-V005-3005.9tK2mQ7x_ab@ap.example.test")
+    assert dashed and dashed.group(1) == "9tK2mQ7x_ab"
+
+
 def test_a_vendor_with_no_registered_address_is_never_written_to(dispatcher):
     assert dispatcher.send_query("INV-V001-3001", "V001", "anything") is None
     assert dispatcher.sender.sent == []
