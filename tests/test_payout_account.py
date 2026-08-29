@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from apagent.pipeline import decide_invoice_rules_only
 from apagent.schemas import Action, DocType, Document, LineItem, Vendor
 from apagent.store import DocumentStore
@@ -130,3 +132,13 @@ def test_no_master_account_passes():
     store, inv = _triple("SG99 8888 7777 6666", None)
     dec = decide_invoice_rules_only(inv, store)
     assert dec.action == Action.APPROVE
+
+
+def test_demo_bankswap_escalates_from_committed_dataset():
+    data_dir = Path(__file__).resolve().parents[1] / "data" / "synthetic"
+    store = DocumentStore.from_dir(data_dir)
+    inv = store.get_invoice("INV-DEMO-BANKSWAP")
+    assert inv is not None
+    dec = decide_invoice_rules_only(inv, store)
+    assert dec.action == Action.ESCALATE
+    assert "payout account" in dec.reasoning.lower()

@@ -908,5 +908,30 @@
     "tax_cents": 35,
     "total_cents": 427,
     "payout_account": "SG21 DBSS 0110 0001 2345"
+  },
+  {
+    "doc_id": "INV-DEMO-BANKSWAP",
+    "doc_type": "INVOICE",
+    "vendor_id": "V001",
+    "vendor_name": "Tan Hardware Supplies Pte Ltd",
+    "issue_date": "2026-08-22",
+    "ref_doc_id": "PO-DEMO-BANKSWAP",
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "SKU-BOLT-M8",
+        "description": "M8 hex bolt, zinc plated",
+        "qty": 200,
+        "uom": "PCS",
+        "unit_price_cents": 12,
+        "line_total_cents": 2400
+      }
+    ],
+    "payment_terms": "NET 30",
+    "due_date": "2026-09-21",
+    "tax_cents": 0,
+    "total_cents": 2400,
+    "payout_account": "SG99 HACK 9990 0009 8765"
   }
 ]

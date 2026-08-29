@@ -46,7 +46,8 @@ def test_duplicate_case_fails_the_duplicate_gate():
 def test_list_is_ordered_headline_first_and_complete():
     cases = Service().list_cases()
     assert cases[0]["invoice_id"] == "INV-V005-3018"
-    assert len(cases) == 22
+    # 22 graded invoices plus the held-out bank-swap demo showcase row.
+    assert len(cases) == 23
     assert all("vendor_name" in c and "total_cents" in c for c in cases)
 
 

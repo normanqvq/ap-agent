@@ -75,7 +75,13 @@ DEMO_ORDER = [
     "INV-V001-3021",  # partial delivery
     "INV-V003-3901",  # duplicate
     "INV-V004-3010",  # missing PO ref
+    "INV-DEMO-BANKSWAP",  # bank-swap escalation, held out of the graded metrics
 ]
+
+# Held out of every scored rate: it has no manifest ground truth, exactly like
+# an upload or a correction. Present so the bank-swap demo can ESCALATE in the
+# live console without moving STP / touchless / false-approve.
+DEMO_HELD_OUT = {"INV-DEMO-BANKSWAP"}
 
 # The channels a document can arrive through. "upload" is the manual web
 # upload; "email" and "telegram" are the external fetchers' seam (docs/INTAKE.md).
@@ -201,7 +207,11 @@ class Service:
         score them either way and they stay out of every rate. They do not
         stay out of the harness's INPUT -- see _harness_input.
         """
-        return self._uploaded | {doc_id for ids in self._revisions.values() for doc_id in ids}
+        return (
+            self._uploaded
+            | {doc_id for ids in self._revisions.values() for doc_id in ids}
+            | DEMO_HELD_OUT
+        )
 
     def _harness_input(self) -> dict[str, dict]:
         """Everything evaluate() is shown: the benchmark, plus this session's
