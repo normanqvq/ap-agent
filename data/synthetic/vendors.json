@@ -1,0 +1,8 @@
+[
+  {"vendor_id": "V001", "vendor_name": "Tan Hardware Supplies Pte Ltd", "payout_account": "SG21 DBSS 0110 0001 2345"},
+  {"vendor_id": "V002", "vendor_name": "Mei Ling Office Solutions", "payout_account": "SG34 OCBC 0220 0002 3456"},
+  {"vendor_id": "V003", "vendor_name": "Golden Wok Food Trading", "payout_account": "SG47 UOVB 0330 0003 4567"},
+  {"vendor_id": "V004", "vendor_name": "Sinar Jaya Packaging Sdn Bhd", "payout_account": "MY55 MBBE 0440 0004 5678"},
+  {"vendor_id": "V005", "vendor_name": "Pacific Circuit Components Inc", "payout_account": "US60 CHAS 0550 0005 6789"},
+  {"vendor_id": "V006", "vendor_name": "CleanPro Facilities Services", "payout_account": "SG73 SCBL 0660 0006 7890"}
+]
