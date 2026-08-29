@@ -198,3 +198,66 @@ def test_parse_tool_args_survives_broken_json():
     assert _parse_tool_args('{"po_id": ') == {"_malformed_args": '{"po_id": '}
     # Valid JSON that is not an object is just as unusable as broken JSON
     assert _parse_tool_args('["PO-9"]') == {"_malformed_args": '["PO-9"]'}
+
+
+def test_sandbox_boto3_path_routes_and_normalises(monkeypatch):
+    """AP_BEDROCK_BOTO3=1 routes Bedrock through boto3 Converse (the sandbox
+    needs an inference-profile modelId that AnthropicBedrock rejects). A fake
+    boto3 client proves the switch works AND that the Converse reply is
+    normalised to the same {text, tool_calls, stop_reason, usage} shape the
+    rest of the code expects — so the agent loop cannot tell the difference."""
+    import sys
+    import types
+
+    from apagent.llm import client as C
+
+    captured = {}
+
+    class _FakeRuntime:
+        def converse(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "output": {
+                    "message": {
+                        "content": [
+                            {"text": "checking"},
+                            {
+                                "toolUse": {
+                                    "toolUseId": "u1",
+                                    "name": "lookup_po",
+                                    "input": {"po_id": "PO-1"},
+                                }
+                            },
+                        ]
+                    }
+                },
+                "stopReason": "tool_use",
+                "usage": {"inputTokens": 10, "outputTokens": 3},
+            }
+
+    fake_boto3 = types.SimpleNamespace(client=lambda *a, **k: _FakeRuntime())
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setenv("AP_BEDROCK_BOTO3", "1")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("BEDROCK_MODEL", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+
+    out = C.call_model(
+        messages=[{"role": "user", "content": "decide"}],
+        tools=[
+            {
+                "name": "lookup_po",
+                "description": "d",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
+        system="sys",
+        provider="bedrock",
+    )
+    # The profile id reached Converse as modelId (the whole point of this path)
+    assert captured["modelId"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert captured["toolConfig"]["tools"][0]["toolSpec"]["name"] == "lookup_po"
+    # Reply normalised to the standard shape
+    assert out["text"] == "checking"
+    assert out["tool_calls"] == [{"id": "u1", "name": "lookup_po", "args": {"po_id": "PO-1"}}]
+    assert out["stop_reason"] == "tool_use"
+    assert out["usage"] == {"input_tokens": 10, "output_tokens": 3}
