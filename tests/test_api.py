@@ -677,3 +677,17 @@ def test_the_headline_numbers_are_all_measured_over_the_same_set(monkeypatch):
     # The flip is real and still visible — on the invoice's own page, next to
     # the conversation that caused it.
     assert svc.get_case("INV-V006-3019")["chat_grn"] is not None
+
+
+def test_case_bundle_exposes_payout_account_mismatch():
+    c = Service().get_case("INV-DEMO-BANKSWAP")
+    pa = c["payout_account"]
+    assert pa is not None
+    assert pa["matches"] is False
+    assert pa["invoice"].endswith("8765")
+    assert pa["on_file"].endswith("2345")
+
+
+def test_case_bundle_payout_account_matches_on_a_real_invoice():
+    c = Service().get_case("INV-V001-3001")
+    assert c["payout_account"]["matches"] is True

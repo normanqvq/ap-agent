@@ -419,6 +419,7 @@ class Service:
             "po_sanity_flags": self._po_flags.get(po.doc_id, []) if po else [],
             "grn": grn.model_dump() if grn else None,
             "chat_grn": self._chat_grn_view(grn, po),
+            "payout_account": self._payout_account_view(invoice),
             "match": checked.model_dump(),
             "review_gate": review_gate,
             "duplicates": [d.doc_id for d in duplicates],
@@ -944,6 +945,21 @@ class Service:
                 except Exception:
                     continue
         return self.run_case(invoice_id)
+
+    def _payout_account_view(self, invoice: Document) -> dict | None:
+        """The payout-account comparison for the invoice detail. Server-side so
+        the frontend renders a verdict it did not compute (CLAUDE.md: no
+        business logic in the frontend). None when there is nothing to show."""
+        on_file = self.store.vendor_account(invoice.vendor_id)
+        printed = invoice.payout_account
+        if printed is None and on_file is None:
+            return None
+        matches = (
+            printed is not None
+            and on_file is not None
+            and "".join(printed.split()).upper() == "".join(on_file.split()).upper()
+        )
+        return {"invoice": printed, "on_file": on_file, "matches": matches}
 
     def _chat_grn_view(self, grn, po) -> dict | None:
         """The chat confirmation behind a receipt, for the detail page.
