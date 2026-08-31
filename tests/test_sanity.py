@@ -54,6 +54,7 @@ def _po(lines, vendor_id="V001", doc_id="PO-T"):
 
 def _history(qty, n, sku="SKU-X", desc="widget"):
     """n past POs each ordering `qty` of one item — a settled norm."""
+
     def one(i):
         line = _line(1, qty=qty, unit_price_cents=100, line_total_cents=qty * 100, sku=sku)
         line.description = desc
