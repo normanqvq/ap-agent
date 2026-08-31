@@ -1571,8 +1571,12 @@ def _handoff_draft(invoice, vendor_name: str, decision: dict | None, gates: list
 def _guardrails(
     checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config, superseded
 ) -> list[dict]:
-    """The eight code gates as pass/fail, for the detail view. Mirrors
-    pipeline._apply_guardrails so the UI shows exactly what code enforces.
+    """The first eight code gates as pass/fail chips, for the detail view.
+    Mirrors pipeline._apply_guardrails so the UI shows exactly what code
+    enforces — the ninth gate, the payout-account check, is surfaced as its own
+    card (see Service._payout_account_view) rather than a chip, because a
+    changed remittance account deserves the reviewer's eye, not a green tick in
+    a row.
 
     The GRN gate is not mirrored by hand any more — it CALLS pipeline.grn_gate,
     the same function the pipeline enforces with. Hand-copying it was already
