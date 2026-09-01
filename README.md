@@ -13,7 +13,7 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
 ![RAG](https://img.shields.io/badge/RAG-BM25-6366F1)
 ![Matching](https://img.shields.io/badge/matching-Hungarian-0EA5E9)
-![Tests](https://img.shields.io/badge/tests-463%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-471%20passing-16A34A)
 ![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-84CC16)
 
@@ -161,7 +161,7 @@ None of these is a prompt instruction. The injection defence is a property of th
 | Matching | SciPy (Hungarian assignment) | pairing line items with no SKU |
 | Vision | Anthropic / Bedrock image input | reads a photographed delivery note into a goods receipt |
 | Frontend | vanilla HTML / CSS / JS (zero build) | dashboard and invoice-detail console |
-| Data | deterministic synthetic generator | 22 invoices, 6 contracts, 7 planted defects |
+| Data | deterministic synthetic generator | 22 graded invoices (+1 seeded payout-swap demo), 6 contracts, 7 planted defects |
 | Orchestration *(optional)* | LangGraph | the same pipeline as a state graph, pinned to the same output |
 | Tool protocol *(optional)* | MCP (Model Context Protocol) | tools exposed as a server; agent calls them with an in-process fallback |
 | Deployment *(optional)* | Bedrock AgentCore | one decorator; local with no AWS, or a serverless HTTPS endpoint |
@@ -188,7 +188,7 @@ Or open `INV-V006-3019` — held for no delivery proof — and upload the photog
 
 The three states of that moment, captured on a live Bedrock run:
 
-| 1 · Held — no delivery proof | 2 · Reading the photo | 3 · Released — 6 / 6 gates |
+| 1 · Held — no delivery proof | 2 · Reading the photo | 3 · Released — every gate passed |
 | --- | --- | --- |
 | ![Held: the goods-received gate fails and the invoice waits](docs/screenshots/photo-hold.png) | ![The multimodal model reading the photographed docket](docs/screenshots/photo-reading.png) | ![Released: delivery confirmed by photo, every gate green](docs/screenshots/photo-released.png) |
 
@@ -211,7 +211,7 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 463 offline tests, no API key needed
+pytest                                    # 471 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
@@ -249,7 +249,7 @@ deploy/               # optional: Bedrock AgentCore entrypoint + local-run / dep
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
 data/samples/         # three attack PDFs + the delivery-docket photo for the live demos
-tests/                # 463 offline tests
+tests/                # 471 offline tests
 docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap analysis
 ```
 

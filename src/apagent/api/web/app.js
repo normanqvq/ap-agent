@@ -617,7 +617,7 @@ async function analytics() {
         ${bar("HOLD", d.HOLD, "var(--amber)")}
         ${bar("ESCALATE", d.ESCALATE, "var(--red)")}
         ${bar("EMAIL", d.EMAIL, "var(--accent)")}
-        <div class="cap num">${m.decided} / ${m.total} ground-truth invoices decided${a.unexpected.length ? ` · +${a.unexpected.length} raised this session (no ground truth, unscored)` : ""}</div>
+        <div class="cap num">${m.decided} / ${m.total} ground-truth invoices decided${a.unexpected.length ? ` · +${a.unexpected.length} without ground truth (this session's uploads and the seeded demo), unscored` : ""}</div>
       </div>
     </div>
     ${perfPanel(a.performance)}
