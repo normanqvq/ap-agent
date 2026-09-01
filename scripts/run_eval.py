@@ -15,6 +15,7 @@ import json
 import sys
 from pathlib import Path
 
+from apagent.api.service import DEMO_HELD_OUT
 from apagent.eval import evaluate
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
@@ -29,6 +30,11 @@ def main() -> None:
     if not decisions_path.exists():
         sys.exit("No decisions cache. Run scripts/precompute_decisions.py first.")
     decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
+    # The seeded demo invoice has no manifest entry by design -- it exists to
+    # be clicked, not scored. Hold it out here as the service does, so this
+    # CLI, the committed report and the console agree instead of a fresh run
+    # warning about a file that ships in git.
+    decisions = {k: v for k, v in decisions.items() if k not in DEMO_HELD_OUT}
 
     report = evaluate(manifest, decisions)
 

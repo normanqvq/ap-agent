@@ -12,7 +12,7 @@ from pathlib import Path
 from apagent.api.service import Service
 from apagent.eval import evaluate
 from apagent.pipeline import decide_invoice_rules_only
-from apagent.schemas import Action, HoldReason
+from apagent.schemas import Action, DocType, Document, HoldReason, LineItem
 from apagent.store import DocumentStore
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "synthetic"
@@ -62,3 +62,40 @@ def test_roi_reports_manual_cost_and_is_honest_about_tokens():
     # provider run is ever committed (_save_cache keeps non-None token fields),
     # this flips to True — the red would mean the data got more honest, not a bug.
     assert roi["agent_cost_measured"] is False
+
+
+def test_rules_only_baseline_refuses_a_superseded_original():
+    """Gate 1 in the baseline too. The A/B is only honest if the rules-only
+    column runs every gate the agent column runs; this one was skipped, so a
+    withdrawn original still scored APPROVE in the baseline."""
+    line = LineItem(
+        line_no=1,
+        sku="SKU-1",
+        description="widget",
+        qty=10,
+        uom="PCS",
+        unit_price_cents=100,
+        line_total_cents=1000,
+    )
+
+    def _doc(doc_id, doc_type, ref, **kw):
+        return Document(
+            doc_id=doc_id,
+            doc_type=doc_type,
+            vendor_id="V1",
+            vendor_name="Acme",
+            issue_date="2026-01-02",
+            ref_doc_id=ref,
+            currency="SGD",
+            lines=[line],
+            **kw,
+        )
+
+    po = _doc("PO1", DocType.PO, None)
+    grn = _doc("GRN1", DocType.GRN, "PO1")
+    original = _doc("INV1", DocType.INVOICE, "PO1", total_cents=1000)
+    revision = _doc("INV1-R1", DocType.INVOICE, "PO1", total_cents=1000, replaces="INV1")
+    store = DocumentStore([po], [grn], [original, revision])
+    dec = decide_invoice_rules_only(original, store)
+    assert dec.action != Action.APPROVE
+    assert "superseded" in dec.reasoning.lower()

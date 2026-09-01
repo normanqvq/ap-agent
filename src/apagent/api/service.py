@@ -33,7 +33,14 @@ from apagent.extraction.invoice import ExtractionError, extract_invoice
 from apagent.mail.attach import pdf_attachments
 from apagent.mail.revise import make_revision
 from apagent.matching.engine import match_invoice
-from apagent.pipeline import _blocking_rows, _safe_doc_id, decide_invoice, grn_gate, supersede
+from apagent.pipeline import (
+    _blocking_rows,
+    _norm_account,
+    _safe_doc_id,
+    decide_invoice,
+    grn_gate,
+    supersede,
+)
 from apagent.rules.sanity import screen_po
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
 from apagent.scheduling import schedule_payments
@@ -386,6 +393,7 @@ class Service:
         po = self.store.get_po(match.po_id) if match.po_id else None
         grn = self.store.get_grn_for_po(match.po_id) if match.po_id else None
         superseded = superseded_by(invoice, self.store)
+        payout = self._payout_account_view(invoice)
         gates = _guardrails(
             checked,
             rechecked,
@@ -397,6 +405,7 @@ class Service:
             invoice,
             config,
             superseded,
+            payout,
         )
         decision = self._cache.get(invoice.doc_id)
         vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
@@ -419,7 +428,7 @@ class Service:
             "po_sanity_flags": self._po_flags.get(po.doc_id, []) if po else [],
             "grn": grn.model_dump() if grn else None,
             "chat_grn": self._chat_grn_view(grn, po),
-            "payout_account": self._payout_account_view(invoice),
+            "payout_account": payout,
             "match": checked.model_dump(),
             "review_gate": review_gate,
             "duplicates": [d.doc_id for d in duplicates],
@@ -952,14 +961,18 @@ class Service:
         business logic in the frontend). None when there is nothing to show."""
         on_file = self.store.vendor_account(invoice.vendor_id)
         printed = invoice.payout_account
-        if printed is None and on_file is None:
+        # Both sides or nothing. An invoice that prints no account (every
+        # PDF the extractor saw before it learned the field) is not a CHANGED
+        # account, and a vendor with no baseline cannot be compared -- the
+        # gate is silent in exactly these cases, and a card that cried
+        # "changed" on every upload would teach the reviewer to ignore it.
+        if printed is None or on_file is None:
             return None
-        matches = (
-            printed is not None
-            and on_file is not None
-            and "".join(printed.split()).upper() == "".join(on_file.split()).upper()
-        )
-        return {"invoice": printed, "on_file": on_file, "matches": matches}
+        return {
+            "invoice": printed,
+            "on_file": on_file,
+            "matches": _norm_account(printed) == _norm_account(on_file),
+        }
 
     def _chat_grn_view(self, grn, po) -> dict | None:
         """The chat confirmation behind a receipt, for the detail page.
@@ -1536,6 +1549,8 @@ def _reason_label(dec: dict) -> str:
         return "Duplicate"
     if "manual_review_required=true" in r or "at or above the manual-review threshold" in r:
         return "Over threshold"
+    if "payout account" in r:
+        return "Payout account changed"
     if action == "ESCALATE":
         return "Needs review"
     return "—"
@@ -1569,14 +1584,25 @@ def _handoff_draft(invoice, vendor_name: str, decision: dict | None, gates: list
 
 
 def _guardrails(
-    checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config, superseded
+    checked,
+    rechecked,
+    review_gate,
+    duplicates,
+    allowance,
+    grn,
+    po,
+    invoice,
+    config,
+    superseded,
+    payout: dict | None = None,
 ) -> list[dict]:
-    """The first eight code gates as pass/fail chips, for the detail view.
+    """The nine code gates as pass/fail chips, for the detail view.
     Mirrors pipeline._apply_guardrails so the UI shows exactly what code
-    enforces — the ninth gate, the payout-account check, is surfaced as its own
-    card (see Service._payout_account_view) rather than a chip, because a
-    changed remittance account deserves the reviewer's eye, not a green tick in
-    a row.
+    enforces. The ninth gate, the payout-account check, is a chip AND its own
+    card (see Service._payout_account_view): the chip keeps the strip honest —
+    "Gates 9 / 9 · all passed" can no longer sit beside an ESCALATE, and the
+    hand-off email names the gate that failed — while the card gives a changed
+    remittance account the reviewer's eye rather than one red tick in a row.
 
     The GRN gate is not mirrored by hand any more — it CALLS pipeline.grn_gate,
     the same function the pipeline enforces with. Hand-copying it was already
@@ -1619,6 +1645,14 @@ def _guardrails(
             "key": "grn",
             "label": _grn_gate_label(grn),
             "passed": grn_passed and not qty_blocked and not other_blocked,
+        },
+        {
+            # Passes when there is nothing to compare (no printed account, or
+            # no account on file) -- the pipeline's gate is silent then too.
+            # Fails only on a real mismatch, which the card spells out.
+            "key": "payout",
+            "label": "Payout account on file",
+            "passed": payout is None or payout["matches"],
         },
     ]
 
