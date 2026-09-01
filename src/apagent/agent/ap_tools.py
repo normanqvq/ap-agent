@@ -151,6 +151,35 @@ def hard_duplicates(
     return out
 
 
+def billed_elsewhere(invoice: Document, store: DocumentStore) -> dict[str, int]:
+    """Quantity per SKU that OTHER live invoices from this vendor already bill
+    against this invoice's purchase order -- the instalment attack the
+    duplicate gate cannot see. Three invoices at 100%, 90% and 80% of one
+    order are three different totals and three different documents, each
+    inside the order on its own, together nearly triple it. Summed here and
+    compared against what was received in grn_gate.
+
+    Same population as hard_duplicates -- same vendor, same resolved PO,
+    outside this invoice's own correction chain -- minus documents a later
+    correction has withdrawn, which owe nothing.
+    """
+    inv_po, _ = find_po(invoice, store.all_pos())
+    if inv_po is None:
+        return {}
+    chain = _revision_chain(invoice, store)
+    out: dict[str, int] = {}
+    for other in store.invoices_for_vendor(invoice.vendor_id):
+        if other.doc_id in chain or superseded_by(other, store) is not None:
+            continue
+        other_po, _ = find_po(other, store.all_pos())
+        if other_po is None or other_po.doc_id != inv_po.doc_id:
+            continue
+        for line in other.lines:
+            if line.sku:
+                out[line.sku] = out.get(line.sku, 0) + line.qty
+    return out
+
+
 def recheck_with_contract(
     match, vendor_id: str, chunks, base_config: ToleranceConfig | None = None
 ):
