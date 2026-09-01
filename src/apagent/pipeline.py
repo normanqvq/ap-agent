@@ -138,8 +138,8 @@ def decide_invoice_rules_only(
     contract and recovers a price variance the default tolerance would hold.
     chunks=() makes the price gate see no contract allowance, so
     INV-V005-3018's 4% stays out of tolerance here and holds — exactly the
-    friction the agent removes. Everything else (duplicate, money gate, proof
-    of delivery) is identical to decide_invoice, so the baseline is as SAFE as
+    friction the agent removes. Everything else (supersession, duplicate, money gate,
+    proof of delivery, payout account) is identical to decide_invoice, so the baseline is as SAFE as
     the full pipeline; it just leaves approvals on the table. Both columns
     score false-approves = 0; the difference is STP, not risk.
     """
@@ -170,6 +170,7 @@ def decide_invoice_rules_only(
         (),
         grn,
         po,
+        superseded=superseded_by(invoice, store),
         vendor_account=store.vendor_account(invoice.vendor_id),
     )
 
