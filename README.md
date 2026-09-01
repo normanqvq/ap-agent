@@ -41,7 +41,7 @@ The core idea: **code owns the authority; the agent recovers and explains the ju
 - Runs a three-way match: pairs line items (Hungarian assignment when items carry no SKU), and computes unit-price, quantity, UOM, line-total, and invoice-total discrepancies.
 - Checks each discrepancy against tolerances, with per-vendor allowances parsed **in code** from the supplier's contract clause.
 - Runs a hand-written agent loop: the model calls read-only tools (lookup PO / GRN, vendor history, duplicate check, contract search, contract re-check) and returns a decision.
-- Applies eight code guardrails that override an unjustified approval — the injection defence, the "no auto-paying above a threshold" rule, and the refusal to pay a document a later correction has withdrawn all live here, not in the prompt.
+- Applies nine code guardrails that override an unjustified approval — the injection defence, the "no auto-paying above a threshold" rule, the refusal to pay a document a later correction has withdrawn, and the check that the invoice's payout account still matches the one on file for the vendor all live here, not in the prompt.
 - Emits one of four actions — `APPROVE`, `HOLD`, `EMAIL`, `ESCALATE` — with a confidence, a rationale, the complete tool-call trail, and (for holds/queries) an outbound message rendered by code from a fixed template.
 - Batches the approved invoices into weekly Friday payment runs — one transfer per vendor, each invoice paid as late as possible but never past due. Only `APPROVE` moves money; everything else is listed as withheld, with its reason.
 - Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice — alongside the photographed delivery docket the photo finale uses.
@@ -102,7 +102,7 @@ flowchart LR
     B --> C[Three-way match<br/>invoice vs PO vs GRN]
     C --> D[Tolerance rules]
     D --> E[Agent loop<br/>tools + judgement]
-    E --> F[Code guardrails<br/>eight gates]
+    E --> F[Code guardrails<br/>nine gates]
     F --> G{Decision}
     G --> H[APPROVE · HOLD · EMAIL · ESCALATE]
 ```
@@ -119,7 +119,7 @@ The same pipeline runs as a Bedrock AgentCore agent behind one decorator — `py
 
 ### Code computes facts; the model judges meaning; code owns authority
 
-Every number the agent reasons about — deltas, tolerance verdicts, duplicate detection — is produced by deterministic code, so it is reproducible from the documents alone. The model interprets those facts and cites contracts. The final limits are enforced in code: the model can recommend `APPROVE`, but eight guardrails (not superseded by a later correction, amount threshold, PO matched, billed in the currency ordered, no unordered lines, no duplicate, price within the code-parsed contract tolerance, goods received) will override it. A test suite runs a deliberately fooled model against every planted defect and confirms code still refuses each one.
+Every number the agent reasons about — deltas, tolerance verdicts, duplicate detection — is produced by deterministic code, so it is reproducible from the documents alone. The model interprets those facts and cites contracts. The final limits are enforced in code: the model can recommend `APPROVE`, but nine guardrails (not superseded by a later correction, amount threshold, PO matched, billed in the currency ordered, no unordered lines, no duplicate, price within the code-parsed contract tolerance, goods received, payout account matches the vendor master) will override it. A test suite runs a deliberately fooled model against every planted defect and confirms code still refuses each one.
 
 ### The glass box
 
@@ -133,7 +133,7 @@ Every channel an attacker controls has a matching defence in code, each pinned b
 
 | Attack | Where it enters | Defence (in code) |
 | --- | --- | --- |
-| "Approve this" in the invoice body | PDF text | Action is a 4-value enum; the price delta is code-computed; eight gates re-check after the model |
+| "Approve this" in the invoice body | PDF text | Action is a 4-value enum; the price delta is code-computed; nine gates re-check after the model |
 | "Approve this" in a contract clause | contract PDF | The allowance % is parsed by a heading-scoped regex, never taken from the model |
 | Instruction as the invoice **number** | supplier-controlled id | `_safe_doc_id` shape-checks the id; anything instruction-shaped is withheld from every outbound message and subject line |
 | Homoglyph vendor name (Cyrillic look-alikes) | printed name | Normalisation keeps only `[a-z0-9 ]`, so a spoof drops below the match floor → `UNKNOWN`, which escalates |

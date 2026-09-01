@@ -46,7 +46,8 @@ def test_duplicate_case_fails_the_duplicate_gate():
 def test_list_is_ordered_headline_first_and_complete():
     cases = Service().list_cases()
     assert cases[0]["invoice_id"] == "INV-V005-3018"
-    assert len(cases) == 22
+    # 22 graded invoices plus the held-out bank-swap demo showcase row.
+    assert len(cases) == 23
     assert all("vendor_name" in c and "total_cents" in c for c in cases)
 
 
@@ -676,3 +677,17 @@ def test_the_headline_numbers_are_all_measured_over_the_same_set(monkeypatch):
     # The flip is real and still visible — on the invoice's own page, next to
     # the conversation that caused it.
     assert svc.get_case("INV-V006-3019")["chat_grn"] is not None
+
+
+def test_case_bundle_exposes_payout_account_mismatch():
+    c = Service().get_case("INV-DEMO-BANKSWAP")
+    pa = c["payout_account"]
+    assert pa is not None
+    assert pa["matches"] is False
+    assert pa["invoice"].endswith("8765")
+    assert pa["on_file"].endswith("2345")
+
+
+def test_case_bundle_payout_account_matches_on_a_real_invoice():
+    c = Service().get_case("INV-V001-3001")
+    assert c["payout_account"]["matches"] is True

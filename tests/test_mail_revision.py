@@ -630,9 +630,11 @@ def test_a_revision_is_reported_as_an_unmeasured_decision(monkeypatch):
     honest; dropping it from the harness's view of what was decided is how
     three approvals hid behind "false approvals: 0"."""
     svc = _wired(monkeypatch, at_po_prices=True)
-    assert svc.analytics()["unexpected"] == []
+    # INV-DEMO-BANKSWAP is always here too: a held-out demo decision with no
+    # manifest entry, exactly like a revision -- see DEMO_HELD_OUT.
+    assert svc.analytics()["unexpected"] == ["INV-DEMO-BANKSWAP"]
     _deliver(svc, _reply_with_pdf)
-    assert svc.analytics()["unexpected"] == ["INV-V005-3005-R1"]
+    assert svc.analytics()["unexpected"] == ["INV-DEMO-BANKSWAP", "INV-V005-3005-R1"]
     assert svc.metrics()["false_approve"] == 0
 
 
@@ -849,7 +851,7 @@ def test_the_detail_view_shows_the_currency_gate(monkeypatch):
     }
 
 
-def test_a_withdrawn_document_loses_its_confirmed_payment():
+def test_a_withdrawn_document_loses_its_confirmed_payment(monkeypatch):
     """R1 was approved AND a reviewer confirmed its payment; then R2 arrived.
     _withdraw retired the decision but left the payment record's "Paid" row
     live, so R2 could earn a second live payment for the same bill — two
@@ -859,6 +861,7 @@ def test_a_withdrawn_document_loses_its_confirmed_payment():
     from apagent.schemas import Action, AgentDecision
 
     svc = Service()
+    monkeypatch.setattr(svc, "_save_cache", lambda: None)  # keep the repo file untouched
     doc_id = "INV-UP-R1"
     svc._uploaded.add(doc_id)  # session doc: never written to the disk cache
     svc._cache[doc_id] = AgentDecision(

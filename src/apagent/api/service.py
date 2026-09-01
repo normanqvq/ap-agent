@@ -75,7 +75,13 @@ DEMO_ORDER = [
     "INV-V001-3021",  # partial delivery
     "INV-V003-3901",  # duplicate
     "INV-V004-3010",  # missing PO ref
+    "INV-DEMO-BANKSWAP",  # bank-swap escalation, held out of the graded metrics
 ]
+
+# Held out of every scored rate: it has no manifest ground truth, exactly like
+# an upload or a correction. Present so the bank-swap demo can ESCALATE in the
+# live console without moving STP / touchless / false-approve.
+DEMO_HELD_OUT = {"INV-DEMO-BANKSWAP"}
 
 # The channels a document can arrive through. "upload" is the manual web
 # upload; "email" and "telegram" are the external fetchers' seam (docs/INTAKE.md).
@@ -201,7 +207,11 @@ class Service:
         score them either way and they stay out of every rate. They do not
         stay out of the harness's INPUT -- see _harness_input.
         """
-        return self._uploaded | {doc_id for ids in self._revisions.values() for doc_id in ids}
+        return (
+            self._uploaded
+            | {doc_id for ids in self._revisions.values() for doc_id in ids}
+            | DEMO_HELD_OUT
+        )
 
     def _harness_input(self) -> dict[str, dict]:
         """Everything evaluate() is shown: the benchmark, plus this session's
@@ -409,6 +419,7 @@ class Service:
             "po_sanity_flags": self._po_flags.get(po.doc_id, []) if po else [],
             "grn": grn.model_dump() if grn else None,
             "chat_grn": self._chat_grn_view(grn, po),
+            "payout_account": self._payout_account_view(invoice),
             "match": checked.model_dump(),
             "review_gate": review_gate,
             "duplicates": [d.doc_id for d in duplicates],
@@ -934,6 +945,21 @@ class Service:
                 except Exception:
                     continue
         return self.run_case(invoice_id)
+
+    def _payout_account_view(self, invoice: Document) -> dict | None:
+        """The payout-account comparison for the invoice detail. Server-side so
+        the frontend renders a verdict it did not compute (CLAUDE.md: no
+        business logic in the frontend). None when there is nothing to show."""
+        on_file = self.store.vendor_account(invoice.vendor_id)
+        printed = invoice.payout_account
+        if printed is None and on_file is None:
+            return None
+        matches = (
+            printed is not None
+            and on_file is not None
+            and "".join(printed.split()).upper() == "".join(on_file.split()).upper()
+        )
+        return {"invoice": printed, "on_file": on_file, "matches": matches}
 
     def _chat_grn_view(self, grn, po) -> dict | None:
         """The chat confirmation behind a receipt, for the detail page.
@@ -1545,8 +1571,12 @@ def _handoff_draft(invoice, vendor_name: str, decision: dict | None, gates: list
 def _guardrails(
     checked, rechecked, review_gate, duplicates, allowance, grn, po, invoice, config, superseded
 ) -> list[dict]:
-    """The eight code gates as pass/fail, for the detail view. Mirrors
-    pipeline._apply_guardrails so the UI shows exactly what code enforces.
+    """The first eight code gates as pass/fail chips, for the detail view.
+    Mirrors pipeline._apply_guardrails so the UI shows exactly what code
+    enforces — the ninth gate, the payout-account check, is surfaced as its own
+    card (see Service._payout_account_view) rather than a chip, because a
+    changed remittance account deserves the reviewer's eye, not a green tick in
+    a row.
 
     The GRN gate is not mirrored by hand any more — it CALLS pipeline.grn_gate,
     the same function the pipeline enforces with. Hand-copying it was already

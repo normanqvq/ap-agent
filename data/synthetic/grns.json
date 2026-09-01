@@ -811,5 +811,29 @@
     "due_date": null,
     "tax_cents": null,
     "total_cents": null
+  },
+  {
+    "doc_id": "GRN-DEMO-BANKSWAP",
+    "doc_type": "GRN",
+    "vendor_id": "V001",
+    "vendor_name": "Tan Hardware Supplies Pte Ltd",
+    "issue_date": "2026-08-22",
+    "ref_doc_id": "PO-DEMO-BANKSWAP",
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "SKU-BOLT-M8",
+        "description": "M8 hex bolt, zinc plated",
+        "qty": 200,
+        "uom": "PCS",
+        "unit_price_cents": 12,
+        "line_total_cents": 2400
+      }
+    ],
+    "payment_terms": null,
+    "due_date": null,
+    "tax_cents": null,
+    "total_cents": null
   }
 ]

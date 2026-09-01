@@ -914,5 +914,17 @@
     ],
     "rounds_used": 2,
     "outbound_message": null
+  },
+  "INV-DEMO-BANKSWAP": {
+    "invoice_id": "INV-DEMO-BANKSWAP",
+    "action": "ESCALATE",
+    "hold_reason": null,
+    "confidence": 1.0,
+    "reasoning": "[code guardrail] The invoice's payout account (…8765) differs from the account on file for this vendor (…2345), so code overrides APPROVE to ESCALATE. Model reasoning was: [rules-only baseline] deterministic gates only, no contract lookup",
+    "tool_calls": [],
+    "rounds_used": 0,
+    "input_tokens": null,
+    "output_tokens": null,
+    "outbound_message": null
   }
 }

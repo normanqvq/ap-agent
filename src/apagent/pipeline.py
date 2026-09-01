@@ -104,7 +104,17 @@ def decide_invoice(
     grn = store.get_grn_for_po(checked.po_id) if checked.po_id else None
     po = store.get_po(checked.po_id) if checked.po_id else None
     decision = _apply_guardrails(
-        decision, invoice, checked, review_gate, duplicates, config, chunks, grn, po, superseded
+        decision,
+        invoice,
+        checked,
+        review_gate,
+        duplicates,
+        config,
+        chunks,
+        grn,
+        po,
+        superseded,
+        vendor_account=store.vendor_account(invoice.vendor_id),
     )
 
     outbound = _render_outbound_message(decision, invoice, checked, store)
@@ -151,8 +161,23 @@ def decide_invoice_rules_only(
     grn = store.get_grn_for_po(checked.po_id) if checked.po_id else None
     po = store.get_po(checked.po_id) if checked.po_id else None
     return _apply_guardrails(
-        baseline, invoice, checked, review_gate, duplicates, config, (), grn, po
+        baseline,
+        invoice,
+        checked,
+        review_gate,
+        duplicates,
+        config,
+        (),
+        grn,
+        po,
+        vendor_account=store.vendor_account(invoice.vendor_id),
     )
+
+
+def _norm_account(account: str) -> str:
+    """Compare accounts ignoring spacing and case, so '1234 5678' and
+    '12345678' are the same account. Deterministic, no cleverness."""
+    return "".join(account.split()).upper()
 
 
 def _override(decision: AgentDecision, action: Action, hold_reason, why: str) -> AgentDecision:
@@ -375,6 +400,7 @@ def _apply_guardrails(
     grn: Document | None = None,
     po: Document | None = None,
     superseded: Document | None = None,
+    vendor_account: str | None = None,
 ) -> AgentDecision:
     """The authority layer: an APPROVE must survive every code check.
 
@@ -528,6 +554,30 @@ def _apply_guardrails(
     passed, why = grn_gate(checked, grn, po, invoice, config)
     if not passed:
         return _override(decision, Action.HOLD, HoldReason.AWAITING_GRN, why)
+
+    # 9. The payout-account gate. Every gate above proves WHAT is paid; none
+    # proves WHOM. An invoice correct in every line but printed with a changed
+    # remittance account is business-email-compromise — a compromised vendor
+    # mailbox redirecting the money. The account on the invoice is the vendor's
+    # text; the account on file (store.vendor_account, from the vendor master)
+    # is ours, and they must agree before money moves. Silent when either side
+    # is unknown (a new vendor has no baseline; an invoice may print no account)
+    # or when they match — which is why it never fires on the graded set, whose
+    # invoices carry their on-file account. This is the last check before an
+    # APPROVE releases payment.
+    if (
+        invoice.payout_account
+        and vendor_account
+        and _norm_account(invoice.payout_account) != _norm_account(vendor_account)
+    ):
+        return _override(
+            decision,
+            Action.ESCALATE,
+            None,
+            f"The invoice's payout account (…{invoice.payout_account[-4:]}) "
+            f"differs from the account on file for this vendor "
+            f"(…{vendor_account[-4:]}), so code overrides APPROVE to ESCALATE.",
+        )
 
     return decision
 

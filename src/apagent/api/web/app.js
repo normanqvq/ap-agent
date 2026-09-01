@@ -862,6 +862,17 @@ function renderDetail(c) {
         <pre class="raw" id="raw-${i}" hidden>${esc(prettyRaw(t.result))}</pre></div></div>`;
   }).join("") : `<div class="placeholder">Not run yet. Click Re-run.</div>`;
 
+  // Payout-account card. The verdict (pa.matches) is computed server-side in
+  // service._payout_account_view — the frontend only renders it, per CLAUDE.md.
+  const pa = c.payout_account;
+  const last4 = (s) => esc((s || "").replace(/\s/g, "").slice(-4));
+  const payoutCard = !pa ? "" : pa.matches
+    ? `<div class="card"><h3>Payout account</h3>
+        <div class="allgood">✓ …${last4(pa.invoice)} matches the account on file</div></div>`
+    : `<div class="card chatev unauth"><h3>⚠ Payout account changed</h3>
+        <p class="evnote" style="font-weight:600">Invoice pays …${last4(pa.invoice)}, but the account on file for this vendor is …${last4(pa.on_file)}.</p>
+        <p class="evnote">Verify the vendor's bank details out of band before releasing payment — a changed remittance account with everything else correct is the signature of vendor-email compromise.</p></div>`;
+
   view.innerHTML = `
     <div class="head">
       <div><div class="crumb">Invoices / ${esc(c.invoice_id)}</div><h2>Invoice detail</h2></div>
@@ -911,6 +922,7 @@ function renderDetail(c) {
         <div class="card recon"><h3>Three-way match</h3>
           <div class="ids">${esc(c.po ? c.po.doc_id : "no PO")} · ${esc(c.grn ? c.grn.doc_id : "no GRN")} · ${esc(c.invoice_id)}</div>
           ${recon}</div>
+        ${payoutCard}
         ${dec ? `<div class="card reason-card"><h3>Decision rationale</h3>
           <ol class="points">${reasonPoints(c).map((p) => `<li>${esc(p)}</li>`).join("")}</ol>
           <details class="rawreason"><summary>Model's raw rationale (audit)</summary><p>${esc(dec.reasoning)}</p></details></div>` : ""}

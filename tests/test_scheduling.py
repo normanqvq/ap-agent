@@ -162,7 +162,8 @@ def test_demo_plan_over_committed_decisions():
     approved = {k for k, v in decisions.items() if v["action"] == "APPROVE"}
     paid = {i["invoice_id"] for r in plan["runs"] for p in r["payments"] for i in p["invoices"]}
     assert paid == approved
-    assert plan["summary"]["not_scheduled_count"] == 22 - len(approved)
+    # 22 graded invoices plus the held-out bank-swap demo (ESCALATE, never paid).
+    assert plan["summary"]["not_scheduled_count"] == 23 - len(approved)
 
     for run in plan["runs"]:
         assert date.fromisoformat(run["run_date"]).weekday() == FRIDAY

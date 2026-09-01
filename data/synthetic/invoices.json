@@ -48,7 +48,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-29",
     "tax_cents": 878,
-    "total_cents": 10638
+    "total_cents": 10638,
+    "payout_account": "SG21 DBSS 0110 0001 2345"
   },
   {
     "doc_id": "INV-V002-3002",
@@ -90,7 +91,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-30",
     "tax_cents": 5004,
-    "total_cents": 60604
+    "total_cents": 60604,
+    "payout_account": "SG34 OCBC 0220 0002 3456"
   },
   {
     "doc_id": "INV-V003-3003",
@@ -123,7 +125,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-31",
     "tax_cents": 5693,
-    "total_cents": 68953
+    "total_cents": 68953,
+    "payout_account": "SG47 UOVB 0330 0003 4567"
   },
   {
     "doc_id": "INV-V004-3004",
@@ -174,7 +177,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-17",
     "tax_cents": 0,
-    "total_cents": 89100
+    "total_cents": 89100,
+    "payout_account": "MY55 MBBE 0440 0004 5678"
   },
   {
     "doc_id": "INV-V005-3005",
@@ -216,7 +220,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-23",
     "tax_cents": 0,
-    "total_cents": 53040
+    "total_cents": 53040,
+    "payout_account": "US60 CHAS 0550 0005 6789"
   },
   {
     "doc_id": "INV-V006-3006",
@@ -258,7 +263,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-18",
     "tax_cents": 9846,
-    "total_cents": 119246
+    "total_cents": 119246,
+    "payout_account": "SG73 SCBL 0660 0006 7890"
   },
   {
     "doc_id": "INV-V001-3007",
@@ -291,7 +297,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-19",
     "tax_cents": 256,
-    "total_cents": 3096
+    "total_cents": 3096,
+    "payout_account": "SG21 DBSS 0110 0001 2345"
   },
   {
     "doc_id": "INV-V002-3008",
@@ -333,7 +340,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-23",
     "tax_cents": 48330,
-    "total_cents": 585330
+    "total_cents": 585330,
+    "payout_account": "SG34 OCBC 0220 0002 3456"
   },
   {
     "doc_id": "INV-V003-3009",
@@ -384,7 +392,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-16",
     "tax_cents": 16074,
-    "total_cents": 194674
+    "total_cents": 194674,
+    "payout_account": "SG47 UOVB 0330 0003 4567"
   },
   {
     "doc_id": "INV-V004-3010",
@@ -417,7 +426,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-20",
     "tax_cents": 0,
-    "total_cents": 107200
+    "total_cents": 107200,
+    "payout_account": "MY55 MBBE 0440 0004 5678"
   },
   {
     "doc_id": "INV-V005-3011",
@@ -468,7 +478,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-17",
     "tax_cents": 0,
-    "total_cents": 92820
+    "total_cents": 92820,
+    "payout_account": "US60 CHAS 0550 0005 6789"
   },
   {
     "doc_id": "INV-V006-3012",
@@ -519,7 +530,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-19",
     "tax_cents": 10143,
-    "total_cents": 122843
+    "total_cents": 122843,
+    "payout_account": "SG73 SCBL 0660 0006 7890"
   },
   {
     "doc_id": "INV-V001-3013",
@@ -552,7 +564,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-24",
     "tax_cents": 43,
-    "total_cents": 523
+    "total_cents": 523,
+    "payout_account": "SG21 DBSS 0110 0001 2345"
   },
   {
     "doc_id": "INV-V002-3014",
@@ -594,7 +607,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-25",
     "tax_cents": 39177,
-    "total_cents": 474477
+    "total_cents": 474477,
+    "payout_account": "SG34 OCBC 0220 0002 3456"
   },
   {
     "doc_id": "INV-V003-3015",
@@ -627,7 +641,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-17",
     "tax_cents": 1937,
-    "total_cents": 23457
+    "total_cents": 23457,
+    "payout_account": "SG47 UOVB 0330 0003 4567"
   },
   {
     "doc_id": "INV-V004-3016",
@@ -660,7 +675,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-16",
     "tax_cents": 0,
-    "total_cents": 68000
+    "total_cents": 68000,
+    "payout_account": "MY55 MBBE 0440 0004 5678"
   },
   {
     "doc_id": "INV-V005-3017",
@@ -702,7 +718,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-28",
     "tax_cents": 0,
-    "total_cents": 34320
+    "total_cents": 34320,
+    "payout_account": "US60 CHAS 0550 0005 6789"
   },
   {
     "doc_id": "INV-V003-3901",
@@ -735,7 +752,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-31",
     "tax_cents": 5693,
-    "total_cents": 68953
+    "total_cents": 68953,
+    "payout_account": "SG47 UOVB 0330 0003 4567"
   },
   {
     "doc_id": "INV-V005-3018",
@@ -777,7 +795,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-11",
     "tax_cents": 0,
-    "total_cents": 18065
+    "total_cents": 18065,
+    "payout_account": "US60 CHAS 0550 0005 6789"
   },
   {
     "doc_id": "INV-V006-3019",
@@ -819,7 +838,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-19",
     "tax_cents": 10489,
-    "total_cents": 127029
+    "total_cents": 127029,
+    "payout_account": "SG73 SCBL 0660 0006 7890"
   },
   {
     "doc_id": "INV-V002-3020",
@@ -852,7 +872,8 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-29",
     "tax_cents": 5990,
-    "total_cents": 72540
+    "total_cents": 72540,
+    "payout_account": "SG34 OCBC 0220 0002 3456"
   },
   {
     "doc_id": "INV-V001-3021",
@@ -885,6 +906,32 @@
     "payment_terms": "NET 30",
     "due_date": "2026-08-21",
     "tax_cents": 35,
-    "total_cents": 427
+    "total_cents": 427,
+    "payout_account": "SG21 DBSS 0110 0001 2345"
+  },
+  {
+    "doc_id": "INV-DEMO-BANKSWAP",
+    "doc_type": "INVOICE",
+    "vendor_id": "V001",
+    "vendor_name": "Tan Hardware Supplies Pte Ltd",
+    "issue_date": "2026-08-22",
+    "ref_doc_id": "PO-DEMO-BANKSWAP",
+    "currency": "SGD",
+    "lines": [
+      {
+        "line_no": 1,
+        "sku": "SKU-BOLT-M8",
+        "description": "M8 hex bolt, zinc plated",
+        "qty": 200,
+        "uom": "PCS",
+        "unit_price_cents": 12,
+        "line_total_cents": 2400
+      }
+    ],
+    "payment_terms": "NET 30",
+    "due_date": "2026-09-21",
+    "tax_cents": 0,
+    "total_cents": 2400,
+    "payout_account": "SG99 HACK 9990 0009 8765"
   }
 ]
