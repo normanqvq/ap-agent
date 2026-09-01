@@ -26,6 +26,7 @@ from apagent.rules.tolerance import apply_tolerances
 from apagent.schemas import (
     Action,
     ChatGrnPolicy,
+    DiscrepancyField,
     DocType,
     Document,
     EvidenceSource,
@@ -219,15 +220,16 @@ def _sku_less(doc_id, doc_type, qty, ref=None, **kw):
     )
 
 
-def test_sku_less_po_line_would_slip_past_gate_five(monkeypatch):
-    """The reason _chat_grn_reconciles exists rather than trusting gate 5.
+def test_sku_less_po_line_no_longer_slips_past_gate_five(monkeypatch):
+    """Why _chat_grn_reconciles exists, and the hole it covered, now closed.
 
-    matching.build_discrepancies only compares invoice against receipt when
-    the PO line carries a sku (engine.py:185). With sku=None the comparison
-    silently vanishes and gate 5 has NOTHING to say — asserted below — so a
-    chat receipt confirming 50 units would have released an invoice billing
-    100. Every committed PO happens to print SKUs, which is exactly what
-    makes this the kind of hole that ships.
+    matching.build_discrepancies used to compare invoice against receipt
+    only when the PO line carried a sku; with sku=None the comparison
+    silently vanished and gate 5 had nothing to say, so a chat receipt
+    confirming 50 units would have released an invoice billing 100 had the
+    chat gate not re-counted. The engine now falls back to the receipt line
+    at the order's line number, so gate 5 sees the shortfall itself —
+    asserted below — and the chat gate remains a second, independent count.
     """
     _defiant_approve(monkeypatch)
     po = _sku_less("PO-T", DocType.PO, 100)
@@ -243,13 +245,15 @@ def test_sku_less_po_line_would_slip_past_gate_five(monkeypatch):
     )
     store = DocumentStore([po], [grn], [invoice])
 
-    # Gate 5 is genuinely silent here — this assert is the point of the test.
+    # Gate 5 sees the 100-billed / 50-confirmed gap on its own now.
     checked = apply_tolerances(match_invoice(invoice, [po], [grn]), ToleranceConfig())
-    assert _blocking_rows(checked) == []
+    rows = _blocking_rows(checked)
+    assert [r.field for r in rows] == [DiscrepancyField.QTY]
+    assert (rows[0].grn_value, rows[0].invoice_value) == ("50", "100")
 
     decision = decide_invoice(invoice, store, ToolRegistry())
     assert decision.action == Action.HOLD
-    assert decision.hold_reason == HoldReason.AWAITING_GRN
+    assert decision.hold_reason == HoldReason.AWAITING_DELIVERY
 
 
 def test_empty_chat_receipt_never_counts_as_proof(monkeypatch, demo):

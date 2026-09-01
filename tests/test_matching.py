@@ -297,3 +297,61 @@ def test_pair_lines_drops_below_floor_pair_to_unmatched():
     pairs, un_po, un_inv = pair_lines(po, inv)
     assert pairs == []
     assert un_po == [1] and un_inv == [1]
+
+
+def test_pct_is_exact_at_the_boundary():
+    """7 / 100 * 100 is 7.000000000000001 in floating point and fails a 7%
+    tolerance it plainly meets; the committed 2/3/5% cases only passed by
+    luck of representation."""
+    from apagent.matching.engine import _pct
+
+    assert _pct(7, 100) == 7.0
+    assert _pct(21, 300) == 7.0
+
+
+def test_document_refuses_duplicate_line_numbers():
+    line = LineItem(
+        line_no=1,
+        sku="A",
+        description="x",
+        qty=1,
+        uom="PCS",
+        unit_price_cents=1,
+        line_total_cents=1,
+    )
+    with pytest.raises(ValueError, match="duplicate line_no"):
+        Document(
+            doc_id="D",
+            doc_type=DocType.INVOICE,
+            vendor_id="V",
+            vendor_name="v",
+            issue_date="2026-01-01",
+            ref_doc_id=None,
+            currency="SGD",
+            lines=[line, line],
+        )
+
+
+def test_amounts_are_bounded_where_they_are_built():
+    """10**400 cents used to pass construction and overflow a float division
+    three modules later (a 500 on the detail page). Refused at the schema."""
+    with pytest.raises(ValueError):
+        LineItem(
+            line_no=1,
+            sku="A",
+            description="x",
+            qty=1,
+            uom="PCS",
+            unit_price_cents=10**400,
+            line_total_cents=1,
+        )
+    with pytest.raises(ValueError):
+        LineItem(
+            line_no=1,
+            sku="A",
+            description="x",
+            qty=10**12,
+            uom="PCS",
+            unit_price_cents=1,
+            line_total_cents=1,
+        )

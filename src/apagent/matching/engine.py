@@ -150,7 +150,9 @@ def _pct(delta: int, base: int) -> float | None:
     percentage negative and sail under every `<= limit` check."""
     if base == 0:
         return None
-    return abs(delta) / abs(base) * 100
+    # Multiply first: 7 * 100 / 100 is exactly 7.0, while 7 / 100 * 100 is
+    # 7.000000000000001 and fails a `<= 7` tolerance it plainly meets.
+    return abs(delta) * 100 / abs(base)
 
 
 def build_discrepancies(
@@ -167,8 +169,10 @@ def build_discrepancies(
     inv_by_no = {line.line_no: line for line in invoice.lines}
     grn_by_sku = {}
     grn_qty_by_sku: dict[str, int] = {}
+    grn_by_no: dict[int, list[LineItem]] = {}
     if grn is not None:
         for line in grn.lines:
+            grn_by_no.setdefault(line.line_no, []).append(line)
             if not line.sku:
                 continue
             grn_by_sku[line.sku] = line
@@ -191,6 +195,20 @@ def build_discrepancies(
         #   on): unknown, no invoice-vs-GRN comparison possible.
         if grn is not None and po_line.sku:
             grn_qty = grn_qty_by_sku.get(po_line.sku, 0)
+        elif grn is not None:
+            # No SKU to key on. Fall back to the receipt line at the order's
+            # line number, taken only if it reads like the same goods --
+            # every receipt we hold mirrors the order's numbering (ERP
+            # receipts by construction, chat and photo receipts because they
+            # copy their lines from it). Nothing there is "received zero",
+            # the same limit case as the SKU branch. Before this branch a
+            # SKU-less line was never compared to the receipt at all, so an
+            # invoice billing goods no receipt recorded read clean.
+            grn_qty = sum(
+                g.qty
+                for g in grn_by_no.get(po_no, [])
+                if _similarity(po_line, g) >= PAIR_SIMILARITY_FLOOR
+            )
         else:
             grn_qty = None
 
