@@ -138,6 +138,7 @@ Every channel an attacker controls has a matching defence in code, each pinned b
 | Instruction as the invoice **number** | supplier-controlled id | `_safe_doc_id` shape-checks the id; anything instruction-shaped is withheld from every outbound message and subject line |
 | Homoglyph vendor name (Cyrillic look-alikes) | printed name | Normalisation keeps only `[a-z0-9 ]`, so a spoof drops below the match floor → `UNKNOWN`, which escalates |
 | Currency swap | invoice currency | A dedicated gate refuses an invoice billed in a currency the order was not placed in |
+| Payout-account swap ("we changed banks") | invoice payout field | A gate compares the printed account against the vendor master (spacing/case-normalised) and escalates any mismatch — the classic redirect-the-money fraud has nowhere to go |
 | Forged duplicate (drop / alter / nudge the ref) | supplier text | Duplicates key on the **resolved** PO + near-equal total, not the printed ref — four evasions collapse |
 | Chat message telling the bot to approve | Telegram text | The claim schema has no action field; the bot token never reaches the logs (redacted in every shape httpx logs) |
 | Email reply spoofing another invoice | vendor mail | Replies correlate by Message-ID + a 72-bit code-minted token, never by subject; senders are checked against a registered directory |
@@ -192,6 +193,8 @@ The three states of that moment, captured on a live Bedrock run:
 | ![Held: the goods-received gate fails and the invoice waits](docs/screenshots/photo-hold.png) | ![The multimodal model reading the photographed docket](docs/screenshots/photo-reading.png) | ![Released: delivery confirmed by photo, every gate green](docs/screenshots/photo-released.png) |
 
 The evidence card in the third shot is the honest part: who vouched, which policy applied, the quantities as code matched them to the purchase order — and the reminder that no photo can approve an invoice by itself.
+
+And `INV-DEMO-BANKSWAP` is the fraud that costs businesses the most: a perfectly clean invoice — right amount, right PO, goods received — that quietly prints a *different* bank account, as if the vendor had emailed "we've changed banks." Every other gate passes; the payout-account gate catches the one field that would have wired the money to the attacker, and escalates it.
 
 ## Running It
 
