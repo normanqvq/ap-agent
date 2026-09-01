@@ -161,3 +161,23 @@ def test_extract_pdf_text_reads_real_pdf():
     text = extract_pdf_text(PDF_DIR / "INV-V001-3001.pdf")
     assert "INV-V001-3001" in text
     assert "PO-2026-1001" in text
+
+
+def test_extract_invoice_carries_the_printed_payout_account(monkeypatch):
+    """The ninth gate can only compare what the extractor hands it. Until this
+    field existed, every live-extracted invoice arrived with no account and the
+    gate was structurally silent on the one path BEC actually uses."""
+    with_account = dict(GOOD_JSON, payout_account=" SG12 3456 7890 ")
+    monkeypatch.setattr(
+        "apagent.extraction.invoice.call_model", fake_model(json.dumps(with_account))
+    )
+    doc = extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS)
+    assert doc.payout_account == "SG12 3456 7890"
+
+
+def test_extract_invoice_leaves_payout_account_none_when_not_printed(monkeypatch):
+    blank = dict(GOOD_JSON, payout_account="   ")
+    monkeypatch.setattr("apagent.extraction.invoice.call_model", fake_model(json.dumps(blank)))
+    assert extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS).payout_account is None
+    monkeypatch.setattr("apagent.extraction.invoice.call_model", fake_model(json.dumps(GOOD_JSON)))
+    assert extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS).payout_account is None

@@ -58,6 +58,7 @@ Reply with ONLY a JSON object, no prose, in exactly this shape:
   "due_date": "YYYY-MM-DD or null",
   "tax_amount": "string or null, the tax/GST amount exactly as printed",
   "total_amount": "string or null, the grand total exactly as printed",
+  "payout_account": "string or null, the bank account / IBAN / PayNow to be paid into, as printed",
   "lines": [
     {
       "line_no": 1,
@@ -77,6 +78,16 @@ Rules:
 - Use null for anything not printed on the invoice. Do not guess.
 - line_no counts from 1 in the order the lines appear.
 """
+
+
+def _printed_account(value) -> str | None:
+    """The payout account exactly as printed, or None. Whitespace-only is
+    'not printed': the gate compares only when both sides exist, and an empty
+    string would read as a real account that matches nothing."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def extract_pdf_text(pdf_path: Path) -> str:
@@ -210,6 +221,7 @@ def extract_invoice(
             due_date=data.get("due_date"),
             tax_cents=_to_cents(data.get("tax_amount")),
             total_cents=_to_cents(data.get("total_amount")),
+            payout_account=_printed_account(data.get("payout_account")),
         )
     except (TypeError, ValueError) as exc:
         raise ExtractionError(f"{pdf_path.name}: invalid field in model output: {exc}") from exc
