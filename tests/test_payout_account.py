@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from apagent.api.service import Service, _reason_label
 from apagent.pipeline import decide_invoice_rules_only
 from apagent.schemas import Action, DocType, Document, LineItem, Vendor
 from apagent.store import DocumentStore
@@ -142,3 +143,46 @@ def test_demo_bankswap_escalates_from_committed_dataset():
     dec = decide_invoice_rules_only(inv, store)
     assert dec.action == Action.ESCALATE
     assert "payout account" in dec.reasoning.lower()
+
+
+def test_view_is_silent_when_only_one_side_is_known():
+    """An invoice that prints no account is not a CHANGED account. Before
+    this pin, every live-extracted PDF (no payout field yet) rendered the red
+    "Payout account changed" card against a vendor with an account on file."""
+    svc = Service()
+    inv = svc.store.get_invoice("INV-V001-3001")
+    assert svc._payout_account_view(inv.model_copy(update={"payout_account": None})) is None
+    stranger = inv.model_copy(update={"vendor_id": "V-nobody", "payout_account": "SG99 9999"})
+    assert svc._payout_account_view(stranger) is None
+
+
+def test_view_uses_the_gate_normaliser():
+    svc = Service()
+    inv = svc.store.get_invoice("INV-V001-3001")
+    on_file = svc.store.vendor_account(inv.vendor_id)
+    respaced = inv.model_copy(update={"payout_account": on_file.replace(" ", "").lower()})
+    assert svc._payout_account_view(respaced)["matches"] is True
+
+
+def test_ninth_gate_is_a_chip_and_names_itself_in_the_handoff():
+    """The strip must not read "all passed" beside an ESCALATE, and the
+    hand-off email must name the gate that failed."""
+    svc = Service()
+    swap = svc.get_case("INV-DEMO-BANKSWAP")
+    chips = {g["key"]: g["passed"] for g in swap["guardrails"]}
+    assert len(chips) == 9
+    assert chips["payout"] is False
+    assert "Payout account on file" in swap["handoff_draft"]["body"]
+    assert "Failed gates: none" not in swap["handoff_draft"]["body"]
+    clean = svc.get_case("INV-V001-3001")
+    assert {g["key"]: g["passed"] for g in clean["guardrails"]}["payout"] is True
+
+
+def test_queue_reason_label_knows_the_payout_gate():
+    dec = {
+        "action": "ESCALATE",
+        "hold_reason": None,
+        "reasoning": "[code guardrail] The invoice's payout account (…6666) differs from the "
+        "account on file for this vendor (…1234), so code overrides APPROVE to ESCALATE.",
+    }
+    assert _reason_label(dec) == "Payout account changed"
