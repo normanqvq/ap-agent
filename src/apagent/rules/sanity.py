@@ -139,7 +139,10 @@ def _history(
     the bar. Below the sample gate, or below the ratio, it says nothing; a
     brand-new item has no norm and is ARITHMETIC's problem, not this one's."""
     seen = history_qtys.get(_key(line), [])
-    if len(seen) < config.history_min_pos:
+    # `not seen` guards the median: history_min_pos is a code-only knob, but
+    # set to 0 it would let an item with no history reach median([]) and
+    # take the console down at start-up (the screen runs at load).
+    if not seen or len(seen) < config.history_min_pos:
         return None
     baseline = int(median(seen))
     if baseline <= 0:

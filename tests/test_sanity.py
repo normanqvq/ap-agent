@@ -227,3 +227,20 @@ def test_the_overorder_demo_po_is_caught_by_history():
     flags = screen_po(demo, others, DEFAULT)
     assert _signals(flags) == {SanityCheck.HISTORY}
     assert flags[0].ratio == 10.0
+
+
+def test_history_signal_survives_an_empty_sample_gate():
+    """history_min_pos=0 must not reach median([]) on an item with no
+    history: the screen runs at console start-up, so that crash would take
+    the whole console down over a config knob."""
+    po = Document(
+        doc_id="PO-EMPTY-HIST",
+        doc_type=DocType.PO,
+        vendor_id="V001",
+        vendor_name="Acme",
+        issue_date="2026-01-01",
+        ref_doc_id=None,
+        currency="SGD",
+        lines=[_line(1, 10, 100, 1000, sku="SKU-NEVER-SEEN")],
+    )
+    assert screen_po(po, [], SanityConfig(history_min_pos=0)) == []
