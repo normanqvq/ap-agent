@@ -508,3 +508,19 @@ def test_policy_can_be_set_per_vendor():
     )
     assert resolve_config("V006", base).chat_grn_policy == ChatGrnPolicy.OFF
     assert resolve_config("V001", base).chat_grn_policy == ChatGrnPolicy.TIERED
+
+
+def test_blank_confirmer_is_not_an_authorised_receiver():
+    """`is None` checks let confirmed_by="" and endorsed_by="" count as an
+    authorised receiver and a reviewer's endorsement. Blank is nobody."""
+    from pathlib import Path
+
+    from apagent.schemas import ToleranceConfig
+
+    store = DocumentStore.from_dir(Path(__file__).resolve().parents[1] / "data" / "synthetic")
+    po = store.get_po("PO-2026-1001")
+    invoice = store.get_invoice("INV-V001-3001")
+    tiered = ToleranceConfig(chat_grn_policy=ChatGrnPolicy.TIERED)
+    passed, why = grn_gate(None, _chat_grn(po, confirmed_by=""), po, invoice, tiered)
+    assert passed is False
+    assert "not an authorised receiver" in why

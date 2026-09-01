@@ -331,14 +331,14 @@ def grn_gate(
             "APPROVE to HOLD."
         )
 
-    if grn.endorsed_by is None:
+    if not grn.endorsed_by:
         if policy == ChatGrnPolicy.EVIDENCE_ONLY:
             return False, (
                 f"Goods receipt {grn.doc_id} was confirmed in chat, and this company "
                 "treats chat confirmations as evidence for a reviewer rather than "
                 "grounds to pay, so code overrides APPROVE to HOLD."
             )
-        if grn.confirmed_by is None:
+        if not grn.confirmed_by:
             return False, (
                 f"Goods receipt {grn.doc_id} came from a chat message whose sender is "
                 "not an authorised receiver, so it is evidence for a reviewer but not "
