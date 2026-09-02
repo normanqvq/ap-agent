@@ -393,3 +393,25 @@ def test_agent_handles_empty_response(monkeypatch):
 
     assert decision.action == Action.ESCALATE
     assert "empty response" in decision.reasoning.lower()
+
+
+def test_agent_survives_a_null_reasoning(monkeypatch):
+    """`reasoning: null` from the model used to escape as a ValidationError
+    and turn /run into a 500."""
+    from apagent.schemas import Action
+
+    registry = ToolRegistry()
+
+    def fake_call_model(messages, tools, system, provider=None):
+        return {
+            "text": '{"action": "APPROVE", "confidence": 1.0, "reasoning": null}',
+            "tool_calls": [],
+            "stop_reason": "end_turn",
+        }
+
+    monkeypatch.setattr("apagent.agent.loop.call_model", fake_call_model)
+    decision = run_agent(
+        system_prompt="x", user_message="y", registry=registry, invoice_id="INV-001", max_rounds=3
+    )
+    assert decision.action == Action.APPROVE
+    assert decision.reasoning == ""
