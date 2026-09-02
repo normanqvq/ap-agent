@@ -34,7 +34,7 @@ from apagent.agent.ap_tools import (
 from apagent.agent.loop import MAX_ROUNDS, run_agent
 from apagent.agent.prompts import AP_SYSTEM_PROMPT, build_task_message
 from apagent.agent.registry import ToolRegistry
-from apagent.matching.engine import match_invoice
+from apagent.matching.engine import _pair_sku_less_receipt_lines, match_invoice, pair_lines
 from apagent.retrieval.search import Chunk, load_contracts
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
 from apagent.schemas import (
@@ -329,13 +329,29 @@ def money_gate(
     return True, None
 
 
+def _received_per_order_line(po: Document, grn: Document) -> dict[int, int]:
+    """What the receipt records against each order line: summed by SKU where
+    the order prints one, paired by description where it does not -- the
+    same two rules the matching engine applies, so the gate and the
+    discrepancy rows can never disagree about what arrived."""
+    by_sku: dict[str, int] = {}
+    for line in grn.lines:
+        if line.sku:
+            by_sku[line.sku] = by_sku.get(line.sku, 0) + line.qty
+    sku_less = _pair_sku_less_receipt_lines(po, grn)
+    return {
+        line.line_no: (by_sku.get(line.sku, 0) if line.sku else sku_less.get(line.line_no, 0))
+        for line in po.lines
+    }
+
+
 def grn_gate(
     checked: MatchResult,
     grn: Document | None,
     po: Document | None,
     invoice: Document,
     config: ToleranceConfig,
-    billed_elsewhere: dict[str, int] | None = None,
+    billed_elsewhere: dict[int, int] | None = None,
 ) -> tuple[bool, str | None]:
     """Gate 6 as a pure function: (passed, refusal_reason).
 
@@ -374,21 +390,22 @@ def grn_gate(
     # over-billed once another live invoice has already claimed 10 of the
     # same goods. Only the sum can see that, so the sum is what is compared.
     if billed_elsewhere and po is not None:
-        received: dict[str, int] = {}
-        for line in grn.lines:
-            if line.sku:
-                received[line.sku] = received.get(line.sku, 0) + line.qty
-        for line in invoice.lines:
-            if not line.sku or line.sku not in billed_elsewhere:
+        received = _received_per_order_line(po, grn)
+        po_by_no = {line.line_no: line for line in po.lines}
+        inv_by_no = {line.line_no: line for line in invoice.lines}
+        pairs, _, _ = pair_lines(po.lines, invoice.lines)
+        for po_no, inv_no in pairs:
+            elsewhere = billed_elsewhere.get(po_no, 0)
+            if not elsewhere:
                 continue
-            together = line.qty + billed_elsewhere[line.sku]
-            have = received.get(line.sku, 0)
+            together = max(inv_by_no[inv_no].qty, 0) + elsewhere
+            have = received.get(po_no, 0)
             if together > have:
+                what = po_by_no[po_no].sku or po_by_no[po_no].description
                 return False, (
-                    f"Other invoices on {po.doc_id} already bill "
-                    f"{billed_elsewhere[line.sku]} of {line.sku}; with this one that is "
-                    f"{together} against {have} received, so code overrides APPROVE "
-                    "to HOLD."
+                    f"Other invoices on {po.doc_id} already bill {elsewhere} of {what}; "
+                    f"with this one that is {together} against {have} received, so code "
+                    "overrides APPROVE to HOLD."
                 )
     if grn.source != EvidenceSource.CHAT:
         return True, None
@@ -475,7 +492,7 @@ def _apply_guardrails(
     po: Document | None = None,
     superseded: Document | None = None,
     vendor_account: str | None = None,
-    billed_elsewhere: dict[str, int] | None = None,
+    billed_elsewhere: dict[int, int] | None = None,
 ) -> AgentDecision:
     """The authority layer: an APPROVE must survive every code check.
 

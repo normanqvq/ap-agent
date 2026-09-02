@@ -1548,9 +1548,13 @@ def _reason_label(dec: dict) -> str:
         "AWAITING_GRN": "No goods receipt",
         "AWAITING_DELIVERY": "Short delivery",
     }
+    r = (dec.get("reasoning") or "").lower()
+    if "already bill" in r:
+        return (
+            "Over-billed across invoices"  # before the hold_reason table: it holds as AWAITING_GRN
+        )
     if hr in reasons:
         return reasons[hr]
-    r = dec.get("reasoning", "").lower()
     if "hard-duplicate" in r or "duplicate of inv" in r or "duplicates inv" in r:
         return "Duplicate"
     if "manual_review_required=true" in r or "at or above the manual-review threshold" in r:
@@ -1561,8 +1565,6 @@ def _reason_label(dec: dict) -> str:
         return "Tax out of policy"
     if "cap code will apply" in r:
         return "Contract clause needs a human"
-    if "already bill" in r:
-        return "Over-billed across invoices"
     if action == "ESCALATE":
         return "Needs review"
     return "—"
@@ -1607,7 +1609,7 @@ def _guardrails(
     config,
     superseded,
     payout: dict | None = None,
-    billed_elsewhere: dict[str, int] | None = None,
+    billed_elsewhere: dict[int, int] | None = None,
 ) -> list[dict]:
     """The nine code gates as pass/fail chips, for the detail view.
     Mirrors pipeline._apply_guardrails so the UI shows exactly what code

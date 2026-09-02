@@ -179,14 +179,23 @@ class TelegramAdapter:
         except Exception as exc:
             log.warning("telegram getUpdates failed: %s: %s", type(exc).__name__, exc)
             return []
-        if not payload.get("ok"):
-            log.warning("telegram getUpdates refused: %s", payload.get("description"))
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            desc = (
+                payload.get("description") if isinstance(payload, dict) else type(payload).__name__
+            )
+            log.warning("telegram getUpdates refused: %s", desc)
             return []
 
         out = []
-        for update in payload.get("result", []):
+        updates = payload.get("result")
+        if not isinstance(updates, list):
+            log.warning("telegram getUpdates: result is not a list")
+            return []
+        for update in updates:
+            if not isinstance(update, dict):
+                continue
             update_id = update.get("update_id")
-            if update_id is None:
+            if not isinstance(update_id, int) or isinstance(update_id, bool):
                 # A malformed update must not break the "never raises"
                 # promise two lines up in the docstring.
                 continue

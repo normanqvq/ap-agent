@@ -89,7 +89,7 @@ def _parse_qty(printed: object) -> int | None:
     if isinstance(printed, bool) or printed is None:
         return None
     if isinstance(printed, int):
-        return printed if printed >= 0 else None
+        return printed if 0 <= printed <= 10**9 else None
     match = _QTY_RE.search(str(printed))
     if match is None:
         return None
@@ -185,7 +185,7 @@ def resolve_grn(
             complete = item.get("complete")
             if complete is None:
                 complete = claim.get("everything_arrived")
-            if not complete:
+            if complete is not True:  # a string 'no' is truthy
                 # Say nothing about this line rather than guess. It ends up
                 # absent from the receipt, which build_discrepancies reads as
                 # zero received -- so the invoice holds on it, which is the
@@ -194,13 +194,15 @@ def resolve_grn(
                 continue
             qty = line.qty
         stated[line.line_no] = stated.get(line.line_no, 0) + qty
+        if stated[line.line_no] > 10**9:
+            return None, "unreadable_item"
 
     if not stated and skipped:
         # Every named item was too vague to record. Nothing was confirmed.
         return None, "no_quantity"
 
     if not stated:
-        if not claim.get("everything_arrived"):
+        if claim.get("everything_arrived") is not True:
             # "The delivery came in" with no items and no completeness claim
             # says nothing about how much arrived.
             return None, "no_quantity"

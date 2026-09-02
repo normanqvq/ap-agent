@@ -662,3 +662,23 @@ def test_telegram_drops_a_malformed_update_instead_of_raising():
     assert adapter._to_message({"text": "hi", "chat": "not-a-dict", "date": 0}) is None
     assert adapter._to_message({"text": "hi", "chat": {"id": 1}, "date": 10**20}) is None
     assert adapter._to_message({"text": "hi", "chat": {"id": 1}, "date": 0}) is not None
+
+
+def test_resolve_treats_a_stringly_no_as_not_confirmed(store):
+    """ "everything_arrived": "no" is a string, and strings are truthy; it
+    used to record the FULL order as received."""
+    claim = {
+        "is_delivery_confirmation": True,
+        "po_reference": PO_ID,
+        "everything_arrived": "no",
+        "items": [],
+    }
+    receipt, reason = resolve_grn(claim, store, [], "Li Wei", "2026-08-12T14:30:00", "CHAT-EV-0001")
+    assert receipt is None and reason == "no_quantity"
+
+
+def test_parse_qty_caps_integers_too():
+    from apagent.chat.resolve import _parse_qty
+
+    assert _parse_qty(10**10) is None
+    assert _parse_qty(60) == 60

@@ -205,3 +205,28 @@ def test_to_cents_refuses_absurd_magnitudes():
     with pytest.raises(ExtractionError):
         _to_cents("1" * 40)
     assert _to_cents("9,999,999,999.99") == 999_999_999_999
+
+
+def test_extract_invoice_refuses_malformed_model_json_shapes(monkeypatch):
+    """A list, a string, lines that are not objects, a non-string vendor name:
+    each used to surface as an AttributeError -- a 500 on Upload."""
+    import pytest
+
+    from apagent.extraction.invoice import ExtractionError
+
+    shapes = [
+        [1],
+        "abc",
+        dict(GOOD_JSON, lines="abc"),
+        dict(GOOD_JSON, lines=[1]),
+        dict(GOOD_JSON, lines=[None]),
+    ]
+    for payload in shapes:
+        monkeypatch.setattr(
+            "apagent.extraction.invoice.call_model", fake_model(json.dumps(payload))
+        )
+        with pytest.raises(ExtractionError):
+            extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS)
+    numeric = dict(GOOD_JSON, vendor_name=5)
+    monkeypatch.setattr("apagent.extraction.invoice.call_model", fake_model(json.dumps(numeric)))
+    assert extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS).vendor_name == "5"

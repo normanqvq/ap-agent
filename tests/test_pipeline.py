@@ -514,3 +514,32 @@ def test_hard_duplicates_are_not_counted_as_instalments():
     a = _one_line_doc("INV-A", DocType.INVOICE, 10, ref="PO-T")
     b = _one_line_doc("INV-B", DocType.INVOICE, 10, ref="PO-T")
     assert billed_elsewhere(a, DocumentStore([po], [grn], [a, b])) == {}
+
+
+@pytest.mark.parametrize(
+    "ledger, this_sku",
+    [
+        ([("INV-A", 10, "A-1"), ("INV-C", -10, "A-1")], "A-1"),  # a credit cannot refund the ledger
+        ([("INV-A", 10, "A-1")], None),  # no SKU printed: pairs by description
+        ([("INV-A", 10, "A-1")], "a-1"),  # SKU in another case: same order line
+    ],
+)
+def test_instalment_gate_keys_on_the_order_line_not_the_printed_sku(
+    monkeypatch, registry, ledger, this_sku
+):
+    """10 ordered, 10 received, INV-A already bills all 10. A second invoice
+    for 4 of the same goods must HOLD however its SKU is printed and whatever
+    else sits in the ledger -- the sum is against the ORDER line, not a string."""
+    _defiant_approve(monkeypatch)
+    po = _one_line_doc("PO-T", DocType.PO, 10)
+    grn = _one_line_doc("GRN-T", DocType.GRN, 10, ref="PO-T")
+
+    def inv(doc_id, qty, sku):
+        d = _one_line_doc(doc_id, DocType.INVOICE, qty, ref="PO-T")
+        return d.model_copy(update={"lines": [d.lines[0].model_copy(update={"sku": sku})]})
+
+    second = inv("INV-T2", 4, this_sku)  # 400 vs 1000: outside the duplicate window
+    store = DocumentStore([po], [grn], [*(inv(*row) for row in ledger), second])
+    decision = decide(store, registry, second)
+    assert decision.action == Action.HOLD, decision.reasoning
+    assert "already bill" in decision.reasoning
