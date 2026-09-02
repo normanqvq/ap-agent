@@ -181,3 +181,52 @@ def test_extract_invoice_leaves_payout_account_none_when_not_printed(monkeypatch
     assert extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS).payout_account is None
     monkeypatch.setattr("apagent.extraction.invoice.call_model", fake_model(json.dumps(GOOD_JSON)))
     assert extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS).payout_account is None
+
+
+def test_extract_pdf_text_refuses_bytes_that_are_not_a_pdf(tmp_path):
+    """Dragging the wrong file into Upload used to surface as a 500: pdfminer
+    raises its own exception types, and only ExtractionError was caught."""
+    import pytest
+
+    from apagent.extraction.invoice import ExtractionError, extract_pdf_text
+
+    for payload in (b"", b"garbage", b"%PDF-1.4\n", b"%PDF-1.4\n" + b"\x00" * 4096):
+        p = tmp_path / "x.pdf"
+        p.write_bytes(payload)
+        with pytest.raises(ExtractionError):
+            extract_pdf_text(p)
+
+
+def test_to_cents_refuses_absurd_magnitudes():
+    import pytest
+
+    from apagent.extraction.invoice import ExtractionError, _to_cents
+
+    with pytest.raises(ExtractionError):
+        _to_cents("1" * 40)
+    assert _to_cents("9,999,999,999.99") == 999_999_999_999
+
+
+def test_extract_invoice_refuses_malformed_model_json_shapes(monkeypatch):
+    """A list, a string, lines that are not objects, a non-string vendor name:
+    each used to surface as an AttributeError -- a 500 on Upload."""
+    import pytest
+
+    from apagent.extraction.invoice import ExtractionError
+
+    shapes = [
+        [1],
+        "abc",
+        dict(GOOD_JSON, lines="abc"),
+        dict(GOOD_JSON, lines=[1]),
+        dict(GOOD_JSON, lines=[None]),
+    ]
+    for payload in shapes:
+        monkeypatch.setattr(
+            "apagent.extraction.invoice.call_model", fake_model(json.dumps(payload))
+        )
+        with pytest.raises(ExtractionError):
+            extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS)
+    numeric = dict(GOOD_JSON, vendor_name=5)
+    monkeypatch.setattr("apagent.extraction.invoice.call_model", fake_model(json.dumps(numeric)))
+    assert extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS).vendor_name == "5"

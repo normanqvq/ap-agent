@@ -691,3 +691,30 @@ def test_case_bundle_exposes_payout_account_mismatch():
 def test_case_bundle_payout_account_matches_on_a_real_invoice():
     c = Service().get_case("INV-V001-3001")
     assert c["payout_account"]["matches"] is True
+
+
+def test_upload_rejects_bytes_that_are_not_a_pdf():
+    client = _signed_in_client()
+    r = client.post(
+        "/api/invoices/upload", files={"file": ("x.pdf", b"garbage", "application/pdf")}
+    )
+    assert r.status_code in (400, 422), r.text
+    assert "PDF" in r.json()["detail"]
+
+
+def test_currency_chip_fails_when_the_invoice_currency_is_unreadable():
+    """The pipeline escalates an unreadable currency; the chip used to show it
+    as passed when both sides were None."""
+    svc = Service()
+    inv = svc.store.get_invoice("INV-V001-3001").model_copy(
+        update={"doc_id": "INV-NOCUR", "currency": None}
+    )
+    svc.store.add_invoice(inv)
+    chips = {g["key"]: g["passed"] for g in svc.get_case("INV-NOCUR")["guardrails"]}
+    assert chips["currency"] is False
+
+
+def test_settings_expose_the_tax_cap():
+    client = _signed_in_client()
+    payload = client.get("/api/config").json()
+    assert "'max_tax_pct': 25.0" in str(payload), payload

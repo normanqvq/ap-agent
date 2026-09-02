@@ -297,3 +297,108 @@ def test_pair_lines_drops_below_floor_pair_to_unmatched():
     pairs, un_po, un_inv = pair_lines(po, inv)
     assert pairs == []
     assert un_po == [1] and un_inv == [1]
+
+
+def test_pct_is_exact_at_the_boundary():
+    """7 / 100 * 100 is 7.000000000000001 in floating point and fails a 7%
+    tolerance it plainly meets; the committed 2/3/5% cases only passed by
+    luck of representation."""
+    from apagent.matching.engine import _pct
+
+    assert _pct(7, 100) == 7.0
+    assert _pct(21, 300) == 7.0
+
+
+def test_document_refuses_duplicate_line_numbers():
+    line = LineItem(
+        line_no=1,
+        sku="A",
+        description="x",
+        qty=1,
+        uom="PCS",
+        unit_price_cents=1,
+        line_total_cents=1,
+    )
+    with pytest.raises(ValueError, match="duplicate line_no"):
+        Document(
+            doc_id="D",
+            doc_type=DocType.INVOICE,
+            vendor_id="V",
+            vendor_name="v",
+            issue_date="2026-01-01",
+            ref_doc_id=None,
+            currency="SGD",
+            lines=[line, line],
+        )
+
+
+def test_amounts_are_bounded_where_they_are_built():
+    """10**400 cents used to pass construction and overflow a float division
+    three modules later (a 500 on the detail page). Refused at the schema."""
+    with pytest.raises(ValueError):
+        LineItem(
+            line_no=1,
+            sku="A",
+            description="x",
+            qty=1,
+            uom="PCS",
+            unit_price_cents=10**400,
+            line_total_cents=1,
+        )
+    with pytest.raises(ValueError):
+        LineItem(
+            line_no=1,
+            sku="A",
+            description="x",
+            qty=10**12,
+            uom="PCS",
+            unit_price_cents=1,
+            line_total_cents=1,
+        )
+
+
+def _doc(doc_id, doc_type, lines, ref=None):
+    return Document(
+        doc_id=doc_id,
+        doc_type=doc_type,
+        vendor_id="V1",
+        vendor_name="Acme",
+        issue_date="2026-01-01",
+        ref_doc_id=ref,
+        currency="SGD",
+        lines=lines,
+    )
+
+
+def _li(no, desc, qty, sku=None):
+    return LineItem(
+        line_no=no,
+        sku=sku,
+        description=desc,
+        qty=qty,
+        uom="PCS",
+        unit_price_cents=100,
+        line_total_cents=qty * 100,
+    )
+
+
+def test_sku_less_receipt_lines_pair_by_description_not_line_number():
+    """A receipt typed in a different order than the PO is the normal case;
+    keying on line_no held a fully delivered order."""
+    po = _doc("PO", DocType.PO, [_li(1, "Widget", 10), _li(2, "Gadget", 5)])
+    grn = _doc("GRN", DocType.GRN, [_li(1, "Gadget", 5), _li(2, "Widget", 10)], ref="PO")
+    inv = _doc("INV", DocType.INVOICE, [_li(1, "Widget", 10), _li(2, "Gadget", 5)], ref="PO")
+    result = match_invoice(inv, [po], [grn])
+    assert [d for d in result.discrepancies if d.field == DiscrepancyField.QTY] == []
+
+
+def test_sku_less_receipt_line_is_used_once_and_for_the_line_it_names():
+    """ "M8 x 60mm" arrived; the "M8 x 40mm" line did not. The exact pass
+    claims the receipt line for the goods it names, so the other line reads
+    received 0 instead of borrowing it."""
+    po = _doc("PO", DocType.PO, [_li(1, "M8 x 40mm", 10), _li(2, "M8 x 60mm", 10)])
+    grn = _doc("GRN", DocType.GRN, [_li(1, "M8 x 60mm", 10)], ref="PO")
+    inv = _doc("INV", DocType.INVOICE, [_li(1, "M8 x 40mm", 10)], ref="PO")
+    result = match_invoice(inv, [po], [grn])
+    qty_rows = [d for d in result.discrepancies if d.field == DiscrepancyField.QTY]
+    assert [(d.grn_value, d.invoice_value) for d in qty_rows] == [("0", "10")]

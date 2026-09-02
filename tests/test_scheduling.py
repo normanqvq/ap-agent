@@ -171,3 +171,13 @@ def test_demo_plan_over_committed_decisions():
             for i in p["invoices"]:
                 if not i["late"]:
                     assert run["run_date"] <= i["due_date"]
+
+
+def test_plan_survives_an_invoice_with_no_currency_or_total():
+    """An upload whose currency the extractor could not read is escalated,
+    not paid -- but it still sits in not_scheduled, and one None among strings
+    used to make the per-currency sort raise, taking the Payments page down."""
+    invoices = [_invoice("INV-1"), _invoice("INV-X", currency=None, total_cents=None)]
+    plan = schedule_payments(invoices, _approve("INV-1"), "2026-08-14")
+    assert plan["summary"]["scheduled_count"] == 1
+    assert plan["summary"]["not_scheduled_totals"] == {"?": 0}

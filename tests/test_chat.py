@@ -635,3 +635,50 @@ def test_redaction_survives_the_shapes_httpx_actually_logs(caplog):
     )
     assert "FAKEtoken" not in rendered
     assert rendered.count("bot<REDACTED>") >= 3
+
+
+def test_resolve_refuses_unreadable_claim_shapes(store):
+    """Model output is untrusted in shape as well as content: a non-list
+    `items` used to raise inside the poller and cost the whole batch; the
+    string "false" used to count as a confirmation."""
+    args = (store, [], "Li Wei", "2026-08-12T14:30:00", "CHAT-EV-0001")
+    bad_items = {"is_delivery_confirmation": True, "po_reference": PO_ID, "items": 123}
+    assert resolve_grn(bad_items, *args) == (None, "unreadable_item")
+    stringly = {"is_delivery_confirmation": "false", "po_reference": PO_ID, "items": []}
+    assert resolve_grn(stringly, *args) == (None, "no_confirmation")
+
+
+def test_parse_qty_ignores_numbers_no_one_confirms():
+    from apagent.chat.resolve import _parse_qty
+
+    assert _parse_qty("9" * 5000) is None
+    assert _parse_qty("60 boxes") == 60
+
+
+def test_telegram_drops_a_malformed_update_instead_of_raising():
+    from apagent.chat.adapters import TelegramAdapter
+
+    adapter = TelegramAdapter()
+    assert adapter._to_message({"text": "hi", "chat": "not-a-dict", "date": 0}) is None
+    assert adapter._to_message({"text": "hi", "chat": {"id": 1}, "date": 10**20}) is None
+    assert adapter._to_message({"text": "hi", "chat": {"id": 1}, "date": 0}) is not None
+
+
+def test_resolve_treats_a_stringly_no_as_not_confirmed(store):
+    """ "everything_arrived": "no" is a string, and strings are truthy; it
+    used to record the FULL order as received."""
+    claim = {
+        "is_delivery_confirmation": True,
+        "po_reference": PO_ID,
+        "everything_arrived": "no",
+        "items": [],
+    }
+    receipt, reason = resolve_grn(claim, store, [], "Li Wei", "2026-08-12T14:30:00", "CHAT-EV-0001")
+    assert receipt is None and reason == "no_quantity"
+
+
+def test_parse_qty_caps_integers_too():
+    from apagent.chat.resolve import _parse_qty
+
+    assert _parse_qty(10**10) is None
+    assert _parse_qty(60) == 60

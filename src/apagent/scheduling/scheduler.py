@@ -96,9 +96,14 @@ def schedule_payments(
     def totals_by_currency(items: list[dict]) -> dict[str, int]:
         # Cents in different currencies must never be added together, so
         # every total in the plan is a per-currency mapping.
+        # A currency or total the extractor could not read is None. It never
+        # reaches a payment run (the currency gate escalates it), but it does
+        # sit in not_scheduled, and one None among strings used to make this
+        # sort raise -- taking the Payments page down for the session.
         out: dict[str, int] = {}
         for i in items:
-            out[i["currency"]] = out.get(i["currency"], 0) + i["total_cents"]
+            key = i["currency"] or "?"
+            out[key] = out.get(key, 0) + (i["total_cents"] or 0)
         return dict(sorted(out.items()))
 
     runs = []
@@ -107,7 +112,9 @@ def schedule_payments(
         payments = []
         # One transfer per vendor per currency. Late invoices sort first
         # within a payment — they are the ones to release first.
-        for vendor_id, currency in sorted({(i["vendor_id"], i["currency"]) for i in items}):
+        for vendor_id, currency in sorted(
+            {(i["vendor_id"], i["currency"]) for i in items}, key=lambda t: (t[0], t[1] or "")
+        ):
             vendor_items = sorted(
                 (i for i in items if (i["vendor_id"], i["currency"]) == (vendor_id, currency)),
                 key=lambda i: (not i["late"], i["invoice_id"]),
@@ -117,7 +124,7 @@ def schedule_payments(
                     "vendor_id": vendor_id,
                     "vendor_name": names.get(vendor_id, vendor_id),
                     "currency": currency,
-                    "total_cents": sum(i["total_cents"] for i in vendor_items),
+                    "total_cents": sum(i["total_cents"] or 0 for i in vendor_items),
                     "invoices": vendor_items,
                 }
             )

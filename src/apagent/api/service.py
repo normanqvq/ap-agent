@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from apagent.agent.ap_tools import (
+    billed_elsewhere,
     build_registry,
     hard_duplicates,
     recheck_with_contract,
@@ -39,6 +40,7 @@ from apagent.pipeline import (
     _safe_doc_id,
     decide_invoice,
     grn_gate,
+    money_gate,
     supersede,
 )
 from apagent.rules.sanity import screen_po
@@ -394,6 +396,7 @@ class Service:
         grn = self.store.get_grn_for_po(match.po_id) if match.po_id else None
         superseded = superseded_by(invoice, self.store)
         payout = self._payout_account_view(invoice)
+        billed = billed_elsewhere(invoice, self.store, config)
         gates = _guardrails(
             checked,
             rechecked,
@@ -406,6 +409,7 @@ class Service:
             config,
             superseded,
             payout,
+            billed,
         )
         decision = self._cache.get(invoice.doc_id)
         vendor_name = self.store.vendors().get(invoice.vendor_id, invoice.vendor_name)
@@ -1503,6 +1507,8 @@ class Service:
                 "total_pct": c.total_pct,
                 "qty_exact": c.qty_exact,
                 "manual_review_threshold_cents": c.manual_review_threshold_cents,
+                "max_tax_pct": c.max_tax_pct,
+                "max_contract_allowance_pct": c.max_contract_allowance_pct,
                 # Shown here because it decides whether money moves, and every
                 # such limit belongs on this page rather than buried in code
                 # nobody reads. Read-only like the rest of it.
@@ -1542,15 +1548,23 @@ def _reason_label(dec: dict) -> str:
         "AWAITING_GRN": "No goods receipt",
         "AWAITING_DELIVERY": "Short delivery",
     }
+    r = (dec.get("reasoning") or "").lower()
+    if "already bill" in r:
+        return (
+            "Over-billed across invoices"  # before the hold_reason table: it holds as AWAITING_GRN
+        )
     if hr in reasons:
         return reasons[hr]
-    r = dec.get("reasoning", "").lower()
     if "hard-duplicate" in r or "duplicate of inv" in r or "duplicates inv" in r:
         return "Duplicate"
     if "manual_review_required=true" in r or "at or above the manual-review threshold" in r:
         return "Over threshold"
     if "payout account" in r:
         return "Payout account changed"
+    if "goods value" in r:
+        return "Tax out of policy"
+    if "cap code will apply" in r:
+        return "Contract clause needs a human"
     if action == "ESCALATE":
         return "Needs review"
     return "—"
@@ -1595,6 +1609,7 @@ def _guardrails(
     config,
     superseded,
     payout: dict | None = None,
+    billed_elsewhere: dict[int, int] | None = None,
 ) -> list[dict]:
     """The nine code gates as pass/fail chips, for the detail view.
     Mirrors pipeline._apply_guardrails so the UI shows exactly what code
@@ -1611,20 +1626,23 @@ def _guardrails(
     UI that says a gate passed while code refuses it is worse than no UI.
     """
     blocking = _blocking_rows(rechecked)
-    price_blocked = any(b.field == DiscrepancyField.UNIT_PRICE for b in blocking)
+    price_blocked = any(b.field == DiscrepancyField.UNIT_PRICE for b in blocking) or (
+        allowance is not None and allowance[0] > config.max_contract_allowance_pct
+    )
     qty_blocked = any(b.field == DiscrepancyField.QTY for b in blocking)
     other_blocked = any(
         b.field not in (DiscrepancyField.UNIT_PRICE, DiscrepancyField.QTY) for b in blocking
     )
     pct = f"{allowance[0]:g}%" if allowance else "default 2%"
-    grn_passed, _ = grn_gate(checked, grn, po, invoice, config)
+    grn_passed, _ = grn_gate(checked, grn, po, invoice, config, billed_elsewhere)
+    money_ok, _ = money_gate(invoice, review_gate, config)
     return [
         {
             "key": "superseded",
             "label": (f"Superseded by {superseded.doc_id}" if superseded else "Not superseded"),
             "passed": superseded is None,
         },
-        {"key": "money", "label": "Amount within threshold", "passed": not review_gate},
+        {"key": "money", "label": "Amount within policy", "passed": money_ok},
         {"key": "po", "label": "PO matched", "passed": checked.po_id is not None},
         {
             # Passes with no PO to compare against: the PO chip above already
@@ -1632,7 +1650,7 @@ def _guardrails(
             # without one.
             "key": "currency",
             "label": f"Billed in the currency ordered ({po.currency})" if po else "Currency",
-            "passed": po is None or invoice.currency == po.currency,
+            "passed": po is None or (bool(invoice.currency) and invoice.currency == po.currency),
         },
         {
             "key": "unmatched",

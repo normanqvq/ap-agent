@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 from apagent.agent.registry import Tool, ToolRegistry
-from apagent.matching.engine import find_po, match_invoice
+from apagent.matching.engine import find_po, match_invoice, pair_lines
 from apagent.retrieval.search import (
     ContractIndex,
     price_variance_allowance,
@@ -148,6 +148,48 @@ def hard_duplicates(
             continue
         if _totals_duplicate(invoice.total_cents, other.total_cents, base):
             out.append(other)
+    return out
+
+
+def billed_elsewhere(
+    invoice: Document, store: DocumentStore, config: ToleranceConfig | None = None
+) -> dict[int, int]:
+    """Quantity per ORDER LINE that OTHER live invoices from this vendor already bill
+    against this invoice's purchase order -- the instalment attack the
+    duplicate gate cannot see. Three invoices at 100%, 90% and 80% of one
+    order are three different totals and three different documents, each
+    inside the order on its own, together nearly triple it. Summed here and
+    compared against what was received in grn_gate.
+
+    Same population as hard_duplicates -- same vendor, same resolved PO,
+    outside this invoice's own correction chain -- minus documents a later
+    correction has withdrawn, which owe nothing, and minus this invoice's
+    hard duplicates: a copy of the same bill is the duplicate gate's case,
+    not a second instalment, and counting it here painted the receipt chip
+    red on both halves of a duplicate pair.
+    """
+    inv_po, _ = find_po(invoice, store.all_pos())
+    if inv_po is None:
+        return {}
+    chain = _revision_chain(invoice, store)
+    copies = {d.doc_id for d in hard_duplicates(invoice, store, config or ToleranceConfig())}
+    out: dict[int, int] = {}
+    for other in store.invoices_for_vendor(invoice.vendor_id):
+        if other.doc_id in chain or other.doc_id in copies:
+            continue
+        if superseded_by(other, store) is not None:
+            continue
+        other_po, _ = find_po(other, store.all_pos())
+        if other_po is None or other_po.doc_id != inv_po.doc_id:
+            continue
+        # Keyed by the ORDER line, not the printed SKU: a SKU printed in
+        # another case, or not printed at all, pairs by description exactly
+        # as this invoice's own lines do, and a credit-shaped negative
+        # quantity counts as nothing billed, not as a refund of the ledger.
+        other_by_no = {line.line_no: line for line in other.lines}
+        pairs, _, _ = pair_lines(inv_po.lines, other.lines)
+        for po_no, inv_no in pairs:
+            out[po_no] = out.get(po_no, 0) + max(other_by_no[inv_no].qty, 0)
     return out
 
 

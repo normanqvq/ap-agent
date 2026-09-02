@@ -25,11 +25,16 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from apagent.agent.ap_tools import hard_duplicates, recheck_with_contract, superseded_by
+from apagent.agent.ap_tools import (
+    billed_elsewhere,
+    hard_duplicates,
+    recheck_with_contract,
+    superseded_by,
+)
 from apagent.agent.loop import MAX_ROUNDS, run_agent
 from apagent.agent.prompts import AP_SYSTEM_PROMPT, build_task_message
 from apagent.agent.registry import ToolRegistry
-from apagent.matching.engine import match_invoice
+from apagent.matching.engine import _pair_sku_less_receipt_lines, match_invoice, pair_lines
 from apagent.retrieval.search import Chunk, load_contracts
 from apagent.rules.tolerance import apply_tolerances, requires_manual_review, resolve_config
 from apagent.schemas import (
@@ -89,6 +94,7 @@ def decide_invoice(
     # code-owned like the duplicate set, and computed here for the same
     # reason: the guardrail must not depend on the model asking.
     superseded = superseded_by(invoice, store)
+    billed = billed_elsewhere(invoice, store, config)
 
     decision = run_agent(
         system_prompt=AP_SYSTEM_PROMPT,
@@ -115,6 +121,7 @@ def decide_invoice(
         po,
         superseded,
         vendor_account=store.vendor_account(invoice.vendor_id),
+        billed_elsewhere=billed,
     )
 
     outbound = _render_outbound_message(decision, invoice, checked, store)
@@ -172,6 +179,7 @@ def decide_invoice_rules_only(
         po,
         superseded=superseded_by(invoice, store),
         vendor_account=store.vendor_account(invoice.vendor_id),
+        billed_elsewhere=billed_elsewhere(invoice, store, config),
     )
 
 
@@ -278,12 +286,72 @@ def _chat_grn_reconciles(
     return not match.unmatched_inv_lines
 
 
+def money_gate(
+    invoice: Document, review_gate: bool, config: ToleranceConfig
+) -> tuple[bool, str | None]:
+    """Gate 2 as a pure function: (passed, refusal_reason). Enforced by
+    _apply_guardrails, displayed by the API's gate strip -- one definition.
+
+    Three facts about the AMOUNT, none of which line matching can see: the
+    manual-review threshold; a tax line out of proportion to the goods
+    (matching checks every line against the order and the total against
+    lines-plus-tax, but nothing bounds the tax itself, so a tax at 50x the
+    goods clears every comparison and rides into the payment run); and a
+    negative tax or total, which is a credit note, not a bill to pay.
+    """
+    if review_gate:
+        return False, (
+            "The invoice total is at or above the manual-review threshold, "
+            "so code overrides APPROVE to ESCALATE."
+        )
+    tax = invoice.tax_cents or 0
+    if tax < 0 or (invoice.total_cents is not None and invoice.total_cents < 0):
+        return False, (
+            "The invoice carries a negative tax or total, which is a credit "
+            "and not a bill to pay, so code overrides APPROVE to ESCALATE."
+        )
+    # The base is what the goods are worth: positive lines only, so a
+    # discount line cannot shrink it into a false "tax out of policy", and
+    # qty x unit price when the extractor found no line total.
+    goods = 0
+    for line in invoice.lines:
+        value = line.line_total_cents
+        if value is None and line.unit_price_cents is not None:
+            value = line.qty * line.unit_price_cents
+        if value and value > 0:
+            goods += value
+    if tax * 100 > goods * config.max_tax_pct:
+        return False, (
+            f"The invoice's tax ({tax / 100:,.2f}) is more than {config.max_tax_pct:g}% "
+            f"of its goods value ({goods / 100:,.2f}), so code overrides APPROVE "
+            "to ESCALATE."
+        )
+    return True, None
+
+
+def _received_per_order_line(po: Document, grn: Document) -> dict[int, int]:
+    """What the receipt records against each order line: summed by SKU where
+    the order prints one, paired by description where it does not -- the
+    same two rules the matching engine applies, so the gate and the
+    discrepancy rows can never disagree about what arrived."""
+    by_sku: dict[str, int] = {}
+    for line in grn.lines:
+        if line.sku:
+            by_sku[line.sku] = by_sku.get(line.sku, 0) + line.qty
+    sku_less = _pair_sku_less_receipt_lines(po, grn)
+    return {
+        line.line_no: (by_sku.get(line.sku, 0) if line.sku else sku_less.get(line.line_no, 0))
+        for line in po.lines
+    }
+
+
 def grn_gate(
     checked: MatchResult,
     grn: Document | None,
     po: Document | None,
     invoice: Document,
     config: ToleranceConfig,
+    billed_elsewhere: dict[int, int] | None = None,
 ) -> tuple[bool, str | None]:
     """Gate 6 as a pure function: (passed, refusal_reason).
 
@@ -317,6 +385,28 @@ def grn_gate(
             "No goods receipt is recorded for this invoice's PO, so code "
             "overrides APPROVE to HOLD until receipt is confirmed."
         )
+    # Whatever the receipt's source, it covers the ORDER, not this document:
+    # an invoice for 4 on an order of 10 fully received is fine on its own and
+    # over-billed once another live invoice has already claimed 10 of the
+    # same goods. Only the sum can see that, so the sum is what is compared.
+    if billed_elsewhere and po is not None:
+        received = _received_per_order_line(po, grn)
+        po_by_no = {line.line_no: line for line in po.lines}
+        inv_by_no = {line.line_no: line for line in invoice.lines}
+        pairs, _, _ = pair_lines(po.lines, invoice.lines)
+        for po_no, inv_no in pairs:
+            elsewhere = billed_elsewhere.get(po_no, 0)
+            if not elsewhere:
+                continue
+            together = max(inv_by_no[inv_no].qty, 0) + elsewhere
+            have = received.get(po_no, 0)
+            if together > have:
+                what = po_by_no[po_no].sku or po_by_no[po_no].description
+                return False, (
+                    f"Other invoices on {po.doc_id} already bill {elsewhere} of {what}; "
+                    f"with this one that is {together} against {have} received, so code "
+                    "overrides APPROVE to HOLD."
+                )
     if grn.source != EvidenceSource.CHAT:
         return True, None
 
@@ -331,14 +421,14 @@ def grn_gate(
             "APPROVE to HOLD."
         )
 
-    if grn.endorsed_by is None:
+    if not grn.endorsed_by:
         if policy == ChatGrnPolicy.EVIDENCE_ONLY:
             return False, (
                 f"Goods receipt {grn.doc_id} was confirmed in chat, and this company "
                 "treats chat confirmations as evidence for a reviewer rather than "
                 "grounds to pay, so code overrides APPROVE to HOLD."
             )
-        if grn.confirmed_by is None:
+        if not grn.confirmed_by:
             return False, (
                 f"Goods receipt {grn.doc_id} came from a chat message whose sender is "
                 "not an authorised receiver, so it is evidence for a reviewer but not "
@@ -402,6 +492,7 @@ def _apply_guardrails(
     po: Document | None = None,
     superseded: Document | None = None,
     vendor_account: str | None = None,
+    billed_elsewhere: dict[int, int] | None = None,
 ) -> AgentDecision:
     """The authority layer: an APPROVE must survive every code check.
 
@@ -425,14 +516,9 @@ def _apply_guardrails(
 
     # 2. The money gate. Above the manual-review threshold a human signs
     # off even on a perfectly clean match.
-    if review_gate:
-        return _override(
-            decision,
-            Action.ESCALATE,
-            None,
-            "The invoice total is at or above the manual-review threshold, "
-            "so code overrides APPROVE to ESCALATE.",
-        )
+    passed, why = money_gate(invoice, review_gate, config)
+    if not passed:
+        return _override(decision, Action.ESCALATE, None, why)
 
     # 3. No purchase order at all: there is nothing to have matched against,
     # so an APPROVE has no factual basis whatever the model says.
@@ -505,6 +591,15 @@ def _apply_guardrails(
     # the injected 10% overcharge is blocked here even if the model is
     # fully fooled.
     allowance, rechecked = recheck_with_contract(checked, invoice.vendor_id, chunks, config)
+    if allowance is not None and allowance[0] > config.max_contract_allowance_pct:
+        return _override(
+            decision,
+            Action.ESCALATE,
+            None,
+            f"The contract grants a {allowance[0]:g}% price allowance, above the "
+            f"{config.max_contract_allowance_pct:g}% cap code will apply on its own; "
+            "a human must read that clause, so code overrides APPROVE to ESCALATE.",
+        )
     blocking = _blocking_rows(rechecked)
     if blocking:
         fields = {d.field for d in blocking}
@@ -552,7 +647,7 @@ def _apply_guardrails(
     # confirmed in a chat group is accepted, but only under conditions code
     # checks (grn_gate), never conditions the prompt describes. The tiering
     # lives in grn_gate so the API's gate strip enforces the same rule.
-    passed, why = grn_gate(checked, grn, po, invoice, config)
+    passed, why = grn_gate(checked, grn, po, invoice, config, billed_elsewhere)
     if not passed:
         return _override(decision, Action.HOLD, HoldReason.AWAITING_GRN, why)
 

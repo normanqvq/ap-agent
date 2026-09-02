@@ -150,7 +150,53 @@ def _pct(delta: int, base: int) -> float | None:
     percentage negative and sail under every `<= limit` check."""
     if base == 0:
         return None
-    return abs(delta) / abs(base) * 100
+    # Multiply first: 7 * 100 / 100 is exactly 7.0, while 7 / 100 * 100 is
+    # 7.000000000000001 and fails a `<= 7` tolerance it plainly meets.
+    return abs(delta) * 100 / abs(base)
+
+
+def _pair_sku_less_receipt_lines(po: Document, grn: Document) -> dict[int, int]:
+    """Received quantity per SKU-less PO line, paired by DESCRIPTION.
+
+    Line numbers are not a key: a receipt typed in a different order than
+    the purchase order is the normal case, and keying on line_no held a
+    fully delivered order. Two passes over the receipt lines that carry no
+    SKU the order knows: an exact match on the normalised description takes
+    every such line (a split delivery is two lines that read the same), then
+    the best remaining line above the pairing floor. Each receipt line is
+    used once, so a "M8 x 60mm" receipt cannot also stand in for the "M8 x
+    40mm" line that never arrived -- the exact pass claims it for the line
+    it names first.
+    """
+    order_skus = {line.sku for line in po.lines if line.sku}
+    pool = [g for g in grn.lines if not g.sku or g.sku not in order_skus]
+    norm = lambda text: " ".join((text or "").lower().split())  # noqa: E731
+    received: dict[int, int] = {}
+    used: set[int] = set()
+    targets = [line for line in po.lines if not line.sku]
+    for po_line in targets:
+        for i, g in enumerate(pool):
+            if (
+                i not in used
+                and norm(g.description)
+                and norm(g.description) == norm(po_line.description)
+            ):
+                received[po_line.line_no] = received.get(po_line.line_no, 0) + g.qty
+                used.add(i)
+    for po_line in targets:
+        if po_line.line_no in received:
+            continue
+        best, best_score = None, PAIR_SIMILARITY_FLOOR
+        for i, g in enumerate(pool):
+            if i in used:
+                continue
+            score = _similarity(po_line, g)
+            if score >= best_score:
+                best, best_score = i, score
+        if best is not None:
+            received[po_line.line_no] = pool[best].qty
+            used.add(best)
+    return received
 
 
 def build_discrepancies(
@@ -177,6 +223,8 @@ def build_discrepancies(
             # report a phantom 50-unit shortfall on a fully-delivered order.
             grn_qty_by_sku[line.sku] = grn_qty_by_sku.get(line.sku, 0) + line.qty
 
+    sku_less_received = _pair_sku_less_receipt_lines(po, grn) if grn is not None else {}
+
     out: list[Discrepancy] = []
     for po_no, inv_no in pairs:
         po_line, inv_line = po_by_no[po_no], inv_by_no[inv_no]
@@ -191,6 +239,13 @@ def build_discrepancies(
         #   on): unknown, no invoice-vs-GRN comparison possible.
         if grn is not None and po_line.sku:
             grn_qty = grn_qty_by_sku.get(po_line.sku, 0)
+        elif grn is not None:
+            # No SKU to key on: the receipt line paired by description (see
+            # _pair_sku_less_receipt_lines). Nothing paired is "received
+            # zero", the same limit case as the SKU branch. Before this
+            # branch a SKU-less line was never compared to the receipt at
+            # all, so an invoice billing goods no receipt recorded read clean.
+            grn_qty = sku_less_received.get(po_no, 0)
         else:
             grn_qty = None
 

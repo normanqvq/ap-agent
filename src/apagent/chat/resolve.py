@@ -89,9 +89,13 @@ def _parse_qty(printed: object) -> int | None:
     if isinstance(printed, bool) or printed is None:
         return None
     if isinstance(printed, int):
-        return printed if printed >= 0 else None
+        return printed if 0 <= printed <= 10**9 else None
     match = _QTY_RE.search(str(printed))
     if match is None:
+        return None
+    if len(match.group().lstrip("-")) > 9:
+        # Not a quantity anyone confirms in a chat; also keeps int() away
+        # from Python's digit limit, which raises instead of overflowing.
         return None
     value = int(match.group())
     return value if value >= 0 else None
@@ -143,7 +147,9 @@ def resolve_grn(
     template to turn into a reply -- it is never shown to the model and never
     sent verbatim to a chat group.
     """
-    if not claim.get("is_delivery_confirmation"):
+    # `is True`, not truthiness: the string "false" is a confirmation under
+    # `if claim.get(...)`, and the model is asked for a JSON boolean.
+    if claim.get("is_delivery_confirmation") is not True:
         return None, "no_confirmation"
 
     po_ref = claim.get("po_reference")
@@ -155,6 +161,8 @@ def resolve_grn(
         return None, "no_po"
 
     items = claim.get("items") or []
+    if not isinstance(items, list):
+        return None, "unreadable_item"
     stated: dict[int, int] = {}
     skipped = False
     for item in items:
@@ -177,7 +185,7 @@ def resolve_grn(
             complete = item.get("complete")
             if complete is None:
                 complete = claim.get("everything_arrived")
-            if not complete:
+            if complete is not True:  # a string 'no' is truthy
                 # Say nothing about this line rather than guess. It ends up
                 # absent from the receipt, which build_discrepancies reads as
                 # zero received -- so the invoice holds on it, which is the
@@ -186,13 +194,15 @@ def resolve_grn(
                 continue
             qty = line.qty
         stated[line.line_no] = stated.get(line.line_no, 0) + qty
+        if stated[line.line_no] > 10**9:
+            return None, "unreadable_item"
 
     if not stated and skipped:
         # Every named item was too vague to record. Nothing was confirmed.
         return None, "no_quantity"
 
     if not stated:
-        if not claim.get("everything_arrived"):
+        if claim.get("everything_arrived") is not True:
             # "The delivery came in" with no items and no completeness claim
             # says nothing about how much arrived.
             return None, "no_quantity"

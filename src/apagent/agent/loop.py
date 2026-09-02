@@ -255,16 +255,28 @@ def _extract_decision_json(text: str) -> dict | None:
     text = text.strip()
 
     decoder = json.JSONDecoder()
-    found = None
-    for idx, char in enumerate(text):
-        if char != "{":
-            continue
-        try:
-            obj, _ = decoder.raw_decode(text, idx)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict) and "action" in obj:
-            found = obj
+    # The answer is the LAST object carrying an action, so scan the brace
+    # positions from the end and stop at the first parse -- the same result
+    # the forward scan reached, without a hostile blob of 100k "{" pinning a
+    # worker for minutes (raw_decode from every brace is quadratic). The cap
+    # bounds the worst case; real model output has a few dozen braces.
+    positions = [idx for idx, char in enumerate(text) if char == "{"]
+
+    def scan(candidates):
+        for idx in reversed(candidates):
+            try:
+                obj, _ = decoder.raw_decode(text, idx)
+            except (json.JSONDecodeError, RecursionError):
+                continue
+            if isinstance(obj, dict) and "action" in obj:
+                return obj
+        return None
+
+    found = scan(positions[-5000:])
+    if found is None and len(positions) > 5000:
+        # A real decision buried under a brace blob: one more bounded look
+        # at the head before giving up (which escalates, never approves).
+        found = scan(positions[:5000])
     return found
 
 
@@ -299,7 +311,7 @@ def _parse_final_answer(
     action_str = data.get("action", "ESCALATE")
     hold_reason_str = data.get("hold_reason")
     confidence = data.get("confidence", 0.5)
-    reasoning = data.get("reasoning", "")
+    reasoning = str(data.get("reasoning") or "")
 
     # Convert strings to enums
     try:

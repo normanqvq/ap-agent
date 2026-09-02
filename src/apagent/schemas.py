@@ -5,8 +5,9 @@ The matching engine, rules layer, agent, and API all import types from here.
 """
 
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class DocType(StrEnum):
@@ -124,10 +125,13 @@ class LineItem(BaseModel):
     line_no: int
     sku: str | None
     description: str
-    qty: int
+    qty: Annotated[int, Field(ge=-(10**9), le=10**9)]
     uom: str
-    unit_price_cents: int | None
-    line_total_cents: int | None
+    # Bounded so an absurd number is refused where it is built, not caught
+    # as a float overflow three modules later: ten trillion in any currency
+    # is not an invoice, and the extractor already refuses it.
+    unit_price_cents: Annotated[int, Field(ge=-(10**15), le=10**15)] | None
+    line_total_cents: Annotated[int, Field(ge=-(10**15), le=10**15)] | None
 
 
 class Document(BaseModel):
@@ -184,14 +188,25 @@ class Document(BaseModel):
     # These only have a value on an Invoice. On a PO or GRN they stay None.
     payment_terms: str | None = None
     due_date: str | None = None
-    tax_cents: int | None = None
-    total_cents: int | None = None
+    tax_cents: Annotated[int, Field(ge=-(10**15), le=10**15)] | None = None
+    total_cents: Annotated[int, Field(ge=-(10**15), le=10**15)] | None = None
 
     # The remittance account printed on the invoice. Vendor text, i.e.
     # untrusted — the payout-account guardrail compares it against the
     # account we hold on file for the vendor. None on a PO/GRN, and None on
     # an invoice that prints no account.
     payout_account: str | None = None
+
+    @model_validator(mode="after")
+    def _line_numbers_unique(self) -> "Document":
+        """Matching keys lines by line_no. Two lines under one number let one
+        silently swallow the other while the total still bills both -- the
+        worst failure mode in a reconciliation system -- so the state is made
+        unrepresentable here rather than handled by every consumer."""
+        seen = [line.line_no for line in self.lines]
+        if len(set(seen)) != len(seen):
+            raise ValueError(f"{self.doc_id}: duplicate line_no in {sorted(seen)}")
+        return self
 
     # Where this document came from. Until chat confirmation existed every
     # document was an ERP record and provenance was not a question, so these
@@ -583,6 +598,16 @@ class ToleranceConfig(BaseModel):
     qty_exact: bool = True
     manual_review_threshold_cents: int = 500_000
     informal_grn_ceiling_cents: int = 200_000
+    # The tax line is the one amount matching never compares to anything:
+    # lines go against the order, the total against lines-plus-tax, and the
+    # tax against nothing -- so a tax at 50x the goods clears every check
+    # and rides into the payment run. Above this share of the goods value
+    # the money gate escalates. SG GST is 9%; most VAT regimes sit under 25%.
+    max_tax_pct: float = 25.0
+    # A contract clause is parsed by code and then trusted by the price gate.
+    # A clause granting more than this is a contract for a human to read, not
+    # a tolerance for code to apply: "up to 500%" must not approve 5x prices.
+    max_contract_allowance_pct: float = 50.0
     chat_grn_policy: ChatGrnPolicy = ChatGrnPolicy.TIERED
     vendor_chase_after_hours: int = 72
     vendor_escalate_after_hours: int = 168

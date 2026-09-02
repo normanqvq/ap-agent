@@ -93,8 +93,13 @@ def _printed_account(value) -> str | None:
 def extract_pdf_text(pdf_path: Path) -> str:
     """All text from all pages. Raises ExtractionError on empty output —
     an image-only scan would otherwise flow downstream as an empty invoice."""
-    with pdfplumber.open(pdf_path) as pdf:
-        text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    except Exception as exc:  # noqa: BLE001 -- pdfminer raises a zoo of its own types on non-PDF bytes
+        raise ExtractionError(
+            f"{pdf_path.name}: not a readable PDF ({type(exc).__name__})"
+        ) from exc
     if not text.strip():
         raise ExtractionError(
             f"{pdf_path.name}: no extractable text. Likely a scanned image; "
@@ -120,9 +125,14 @@ def _to_cents(amount: str | None) -> int | None:
         return None
     cleaned = re.sub(r"[^\d.\-]", "", str(amount))
     try:
-        return int((Decimal(cleaned) * 100).quantize(Decimal("1")))
+        cents = int((Decimal(cleaned) * 100).quantize(Decimal("1")))
     except InvalidOperation as exc:
         raise ExtractionError(f"unparseable amount: {amount!r}") from exc
+    # Ten trillion in any currency is not an invoice; past ~1e308 the float
+    # renderings downstream overflow and the detail page returns a 500.
+    if abs(cents) > 10**15:
+        raise ExtractionError(f"amount out of range: {amount!r}")
+    return cents
 
 
 def match_vendor_id(printed_name: str, vendors: dict[str, str]) -> str:
@@ -187,6 +197,13 @@ def extract_invoice(
         data = json.loads(_strip_fences(raw))
     except json.JSONDecodeError as exc:
         raise ExtractionError(f"{pdf_path.name}: model output is not JSON: {exc}") from exc
+    # Shape before fields: a list, a string, or lines that are not objects
+    # used to surface as an AttributeError -- a 500 on Upload.
+    if not isinstance(data, dict):
+        raise ExtractionError(f"{pdf_path.name}: model output is not a JSON object")
+    raw_lines = data.get("lines") or []
+    if not isinstance(raw_lines, list) or not all(isinstance(ln, dict) for ln in raw_lines):
+        raise ExtractionError(f"{pdf_path.name}: model output has malformed lines")
 
     try:
         lines = [
@@ -199,7 +216,7 @@ def extract_invoice(
                 unit_price_cents=_to_cents(ln.get("unit_price")),
                 line_total_cents=_to_cents(ln.get("line_total")),
             )
-            for i, ln in enumerate(data.get("lines", []))
+            for i, ln in enumerate(raw_lines)
         ]
         # Matching keys its dicts by line_no, so duplicates (a model slip,
         # e.g. every line numbered 1) would silently swallow lines — the
@@ -207,7 +224,7 @@ def extract_invoice(
         # of appearance; positions are what the model was told line_no means.
         if len({line.line_no for line in lines}) != len(lines):
             lines = [line.model_copy(update={"line_no": i + 1}) for i, line in enumerate(lines)]
-        printed_name = data.get("vendor_name") or ""
+        printed_name = str(data.get("vendor_name") or "")
         return Document(
             doc_id=data.get("invoice_number") or pdf_path.stem,
             doc_type=DocType.INVOICE,
@@ -223,5 +240,5 @@ def extract_invoice(
             total_cents=_to_cents(data.get("total_amount")),
             payout_account=_printed_account(data.get("payout_account")),
         )
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, AttributeError) as exc:
         raise ExtractionError(f"{pdf_path.name}: invalid field in model output: {exc}") from exc
