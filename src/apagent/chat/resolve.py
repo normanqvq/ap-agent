@@ -93,6 +93,10 @@ def _parse_qty(printed: object) -> int | None:
     match = _QTY_RE.search(str(printed))
     if match is None:
         return None
+    if len(match.group().lstrip("-")) > 9:
+        # Not a quantity anyone confirms in a chat; also keeps int() away
+        # from Python's digit limit, which raises instead of overflowing.
+        return None
     value = int(match.group())
     return value if value >= 0 else None
 
@@ -143,7 +147,9 @@ def resolve_grn(
     template to turn into a reply -- it is never shown to the model and never
     sent verbatim to a chat group.
     """
-    if not claim.get("is_delivery_confirmation"):
+    # `is True`, not truthiness: the string "false" is a confirmation under
+    # `if claim.get(...)`, and the model is asked for a JSON boolean.
+    if claim.get("is_delivery_confirmation") is not True:
         return None, "no_confirmation"
 
     po_ref = claim.get("po_reference")
@@ -155,6 +161,8 @@ def resolve_grn(
         return None, "no_po"
 
     items = claim.get("items") or []
+    if not isinstance(items, list):
+        return None, "unreadable_item"
     stated: dict[int, int] = {}
     skipped = False
     for item in items:

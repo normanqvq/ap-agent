@@ -198,6 +198,16 @@ class TelegramAdapter:
         return out
 
     def _to_message(self, raw: dict | None) -> ChatMessage | None:
+        """One Telegram update -> our model, or None. Never raises: a
+        malformed update (a chat that is not an object, a date out of range)
+        is dropped, which keeps poll()'s promise instead of losing the whole
+        batch to one bad record."""
+        try:
+            return self._to_message_unchecked(raw)
+        except (TypeError, ValueError, AttributeError, OverflowError, OSError):
+            return None
+
+    def _to_message_unchecked(self, raw: dict | None) -> ChatMessage | None:
         """One Telegram update -> our model, or None if it carries no text.
 
         sender_id is str(from.id) -- the numeric id, which is the only field
