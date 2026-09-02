@@ -13,7 +13,7 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
 ![RAG](https://img.shields.io/badge/RAG-BM25-6366F1)
 ![Matching](https://img.shields.io/badge/matching-Hungarian-0EA5E9)
-![Tests](https://img.shields.io/badge/tests-500%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-501%20passing-16A34A)
 ![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-84CC16)
 
@@ -162,7 +162,7 @@ None of these is a prompt instruction. The injection defence is a property of th
 | Matching | SciPy (Hungarian assignment) | pairing line items with no SKU |
 | Vision | Anthropic / Bedrock image input | reads a photographed delivery note into a goods receipt |
 | Frontend | vanilla HTML / CSS / JS (zero build) | dashboard and invoice-detail console |
-| Data | deterministic synthetic generator | 22 graded invoices (+1 seeded payout-swap demo), 6 contracts, 7 planted defects |
+| Data | deterministic synthetic generator | 22 graded invoices (+1 held-out payout-swap demo), 6 contracts, 7 planted defects |
 | Orchestration *(optional)* | LangGraph | the same pipeline as a state graph, pinned to the same output |
 | Tool protocol *(optional)* | MCP (Model Context Protocol) | tools exposed as a server; agent calls them with an in-process fallback |
 | Deployment *(optional)* | Bedrock AgentCore | one decorator; local with no AWS, or a serverless HTTPS endpoint |
@@ -195,7 +195,7 @@ The three states of that moment, captured on a live Bedrock run:
 
 The evidence card in the third shot is the honest part: who vouched, which policy applied, the quantities as code matched them to the purchase order — and the reminder that no photo can approve an invoice by itself.
 
-And `INV-DEMO-BANKSWAP` is the fraud that costs businesses the most: a perfectly clean invoice — right amount, right PO, goods received — that quietly prints a *different* bank account, as if the vendor had emailed "we've changed banks." Every other gate passes; the payout-account gate catches the one field that would have wired the money to the attacker, and escalates it.
+And `INV-DEMO-BANKSWAP` is the fraud that costs businesses the most: a perfectly clean invoice — right amount, right PO, goods received — that quietly prints a *different* bank account, as if the vendor had emailed "we've changed banks." Every other gate passes; the payout-account gate catches the one field that would have wired the money to the attacker, and escalates it. Its committed decision was made by the agent itself: three tool calls, a clean three-way match, a model recommendation of APPROVE — and a *Code override* to ESCALATE, all visible in the glass box.
 
 ## Running It
 
@@ -212,7 +212,7 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 500 offline tests, no API key needed
+pytest                                    # 501 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
@@ -250,7 +250,7 @@ deploy/               # optional: Bedrock AgentCore entrypoint + local-run / dep
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
 data/samples/         # three attack PDFs + the delivery-docket photo for the live demos
-tests/                # 500 offline tests
+tests/                # 501 offline tests
 docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap analysis
 ```
 

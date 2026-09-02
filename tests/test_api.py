@@ -436,6 +436,32 @@ def test_upload_stays_out_of_the_committed_cache(monkeypatch, tmp_path):
         svc.upload_invoice("sample.pdf", b"%PDF-fake")
 
 
+def test_live_rerun_keeps_the_demo_invoice_on_disk(monkeypatch, tmp_path):
+    """INV-DEMO-BANKSWAP is held out of the scored rates, not of the file: it
+    ships in the dataset so the console shows its ESCALATE on load. A live
+    decision on any other invoice rewrites decisions.json, and saving the
+    benchmark view alone dropped the demo with it, so the payout gate's
+    showcase was gone at the next restart."""
+    import json
+
+    import apagent.api.service as service_module
+
+    svc = Service()
+
+    class FakeDecision:
+        def model_dump(self):
+            return dict(svc._cache["INV-V005-3018"])
+
+    monkeypatch.setattr(service_module, "decide_invoice", lambda *a, **k: FakeDecision())
+    monkeypatch.setattr(service_module, "CACHE", tmp_path / "decisions.json")
+
+    svc.run_case("INV-V005-3018")
+    saved = json.loads((tmp_path / "decisions.json").read_text(encoding="utf-8"))
+    assert saved["INV-DEMO-BANKSWAP"]["action"] == "ESCALATE"
+    assert list(saved)[-1] == "INV-DEMO-BANKSWAP"  # same key order as the committed file
+    assert "INV-V001-9999" not in saved  # still no session uploads
+
+
 def test_upload_guards():
     svc = Service()
     with pytest.raises(ValueError):

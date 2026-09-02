@@ -920,11 +920,36 @@
     "action": "ESCALATE",
     "hold_reason": null,
     "confidence": 1.0,
-    "reasoning": "[code guardrail] The invoice's payout account (…8765) differs from the account on file for this vendor (…2345), so code overrides APPROVE to ESCALATE. Model reasoning was: [rules-only baseline] deterministic gates only, no contract lookup",
-    "tool_calls": [],
-    "rounds_used": 0,
-    "input_tokens": null,
-    "output_tokens": null,
+    "reasoning": "[code guardrail] The invoice's payout account (…8765) differs from the account on file for this vendor (…2345), so code overrides APPROVE to ESCALATE. Model reasoning was: Three-way match verified: (1) PO-DEMO-BANKSWAP orders 200 pcs SKU-BOLT-M8 at 12¢ per unit = 2,400¢ total; (2) GRN-DEMO-BANKSWAP records receipt of identical 200 pcs at 12¢ per unit; (3) INV-DEMO-BANKSWAP bills 200 pcs at 12¢ per unit = 2,400¢ total. Line pairs [1,1] match perfectly. No unmatched lines. Match confidence 1.0. Duplicate check confirms no prior invoice matches this PO and amount. Manual review threshold not triggered. All tolerances met, receipt confirmed, no quantity variance. Invoice is clean for approval.",
+    "tool_calls": [
+      {
+        "round": 1,
+        "tool_name": "check_duplicate_invoice",
+        "args": {
+          "invoice_id": "INV-DEMO-BANKSWAP"
+        },
+        "result": "{\"invoice_id\": \"INV-DEMO-BANKSWAP\", \"likely_duplicates\": [], \"same_amount_only\": []}"
+      },
+      {
+        "round": 1,
+        "tool_name": "lookup_po",
+        "args": {
+          "po_id": "PO-DEMO-BANKSWAP"
+        },
+        "result": "{\"doc_id\": \"PO-DEMO-BANKSWAP\", \"doc_type\": \"PO\", \"vendor_id\": \"V001\", \"vendor_name\": \"Tan Hardware Supplies Pte Ltd\", \"issue_date\": \"2026-08-20\", \"ref_doc_id\": null, \"currency\": \"SGD\", \"lines\": [{\"line_no\": 1, \"sku\": \"SKU-BOLT-M8\", \"description\": \"M8 hex bolt, zinc plated\", \"qty\": 200, \"uom\": \"PCS\", \"unit_price_cents\": 12, \"line_total_cents\": 2400}], \"replaces\": null, \"payment_terms\": null, \"due_date\": null, \"tax_cents\": null, \"total_cents\": null, \"payout_account\": null, \"source\": \"ERP\", \"source_ref\": null, \"confirmed_by\": null, \"captured_at\": null, \"endorsed_by\": null}"
+      },
+      {
+        "round": 1,
+        "tool_name": "lookup_grn",
+        "args": {
+          "po_id": "PO-DEMO-BANKSWAP"
+        },
+        "result": "{\"doc_id\": \"GRN-DEMO-BANKSWAP\", \"doc_type\": \"GRN\", \"vendor_id\": \"V001\", \"vendor_name\": \"Tan Hardware Supplies Pte Ltd\", \"issue_date\": \"2026-08-22\", \"ref_doc_id\": \"PO-DEMO-BANKSWAP\", \"currency\": \"SGD\", \"lines\": [{\"line_no\": 1, \"sku\": \"SKU-BOLT-M8\", \"description\": \"M8 hex bolt, zinc plated\", \"qty\": 200, \"uom\": \"PCS\", \"unit_price_cents\": 12, \"line_total_cents\": 2400}], \"replaces\": null, \"payment_terms\": null, \"due_date\": null, \"tax_cents\": null, \"total_cents\": null, \"payout_account\": null, \"source\": \"ERP\", \"source_ref\": null, \"confirmed_by\": null, \"captured_at\": null, \"endorsed_by\": null}"
+      }
+    ],
+    "rounds_used": 2,
+    "input_tokens": 6217,
+    "output_tokens": 421,
     "outbound_message": null
   }
 }
