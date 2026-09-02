@@ -90,6 +90,8 @@ def build_graph(
         return {"decision": decision}
 
     def guardrails_node(state: APState) -> dict:
+        from apagent.agent.ap_tools import billed_elsewhere, superseded_by
+
         invoice, checked, config = state["invoice"], state["checked"], state["config"]
         chunks = _contract_chunks(str(contracts_dir)) if contracts_dir else ()
         grn = store.get_grn_for_po(checked.po_id) if checked.po_id else None
@@ -104,6 +106,13 @@ def build_graph(
             chunks,
             grn,
             po,
+            # The same three facts decide_invoice hands the guardrails. Left
+            # out, the graph would skip the supersession, payout-account and
+            # cumulative-billing checks and "pinned to the same output" would
+            # hold only on a dataset that never exercises them.
+            superseded=superseded_by(invoice, store),
+            vendor_account=store.vendor_account(invoice.vendor_id),
+            billed_elsewhere=billed_elsewhere(invoice, store),
         )
         return {"decision": decision}
 

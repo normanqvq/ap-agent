@@ -396,3 +396,83 @@ def test_outbound_withholds_hyphenated_instruction_id(monkeypatch, registry):
 
     assert _safe_doc_id("INV-V006-3019") == "INV-V006-3019"
     assert _safe_doc_id("PO-2026-1003") == "PO-2026-1003"
+
+
+def test_guardrail_blocks_tax_padding_on_a_clean_match(monkeypatch, store, registry):
+    """Every line matches the PO to the cent, the GRN is complete, the account
+    is on file -- and the printed tax is 50x the goods. Nothing in matching
+    reads tax_cents except to reconcile the printed total against itself, so
+    a padded tax line used to clear all nine gates and schedule SGD 4,897.60
+    on a 97.60 order."""
+    _defiant_approve(monkeypatch)
+    base = store.get_invoice("INV-V001-3001")
+    goods = base.total_cents - (base.tax_cents or 0)
+    padded = base.model_copy(
+        update={"doc_id": "INV-V001-3001-TAX", "tax_cents": 480_000, "total_cents": goods + 480_000}
+    )
+    decision = decide(store, registry, padded)
+    assert decision.action == Action.ESCALATE, decision.reasoning
+    assert "tax" in decision.reasoning.lower()
+    # A credit is not a bill either.
+    credit = base.model_copy(
+        update={"doc_id": "INV-V001-3001-NEG", "tax_cents": -goods - 100, "total_cents": -100}
+    )
+    assert decide(store, registry, credit).action == Action.ESCALATE
+
+
+def test_guardrail_blocks_instalments_that_over_bill_the_order(monkeypatch, registry):
+    """Two invoices on one order, each inside it on its own, together over it.
+    Not duplicates (totals 1000 vs 400), so gate 6 is blind; the receipt gate
+    now compares the SUM against what was received."""
+    _defiant_approve(monkeypatch)
+    po = _one_line_doc("PO-T", DocType.PO, 10)
+    grn = _one_line_doc("GRN-T", DocType.GRN, 10, ref="PO-T")
+    first = _one_line_doc("INV-T1", DocType.INVOICE, 10, ref="PO-T")
+    second = _one_line_doc("INV-T2", DocType.INVOICE, 4, ref="PO-T")
+    together = DocumentStore([po], [grn], [first, second])
+    decision = decide(together, registry, second)
+    assert decision.action == Action.HOLD, decision.reasoning
+    assert "already bill" in decision.reasoning
+    alone = DocumentStore([po], [grn], [second])
+    assert decide(alone, registry, second).action == Action.APPROVE
+
+
+def test_sku_less_lines_are_still_reconciled_against_the_receipt(monkeypatch, registry):
+    """Small vendors print no SKU. The receipt lookup used to key on SKU only,
+    so a SKU-less line was never compared to the receipt: bill 10, receive 0,
+    read clean."""
+    _defiant_approve(monkeypatch)
+
+    def strip(doc):
+        return doc.model_copy(update={"lines": [doc.lines[0].model_copy(update={"sku": None})]})
+
+    po = strip(_one_line_doc("PO-T", DocType.PO, 10))
+    nothing = strip(_one_line_doc("GRN-T", DocType.GRN, 0, ref="PO-T"))
+    inv = strip(_one_line_doc("INV-T", DocType.INVOICE, 10, ref="PO-T"))
+    decision = decide(DocumentStore([po], [nothing], [inv]), registry, inv)
+    assert decision.action != Action.APPROVE, decision.reasoning
+
+
+def test_guardrail_refuses_a_contract_allowance_above_the_cap(monkeypatch, store, registry):
+    """A contract clause is code-parsed and then trusted by the price gate.
+    "Up to 500%" used to approve a 5x price; above the cap the clause is for
+    a human to read, not a tolerance for code to apply."""
+    import apagent.pipeline as pipeline
+    from apagent.rules.tolerance import apply_tolerances
+
+    _defiant_approve(monkeypatch)
+    po = _one_line_doc("PO-T", DocType.PO, 10)
+    grn = _one_line_doc("GRN-T", DocType.GRN, 10, ref="PO-T")
+    line = po.lines[0].model_copy(update={"unit_price_cents": 500, "line_total_cents": 5000})
+    inv = _one_line_doc("INV-T", DocType.INVOICE, 10, ref="PO-T", total=5000).model_copy(
+        update={"lines": [line]}
+    )
+
+    def generous(checked, vendor_id, chunks, config):
+        wide = config.model_copy(update={"unit_price_pct": 500.0})
+        return (500.0, None), apply_tolerances(checked, wide)
+
+    monkeypatch.setattr(pipeline, "recheck_with_contract", generous)
+    decision = decide(DocumentStore([po], [grn], [inv]), registry, inv)
+    assert decision.action == Action.ESCALATE, decision.reasoning
+    assert "cap" in decision.reasoning

@@ -656,6 +656,8 @@ async function settings() {
       ${setting("Invoice-total tolerance", `${(t.total_abs_cents / 100).toFixed(2)} and ${t.total_pct}%`, "in the invoice's own currency; a total must sit inside both bounds")}
       ${setting("Quantity", t.qty_exact ? "exact match" : "tolerance", "quantity gaps are never noise — they mean goods did not arrive")}
       ${setting("Manual-review threshold", (t.manual_review_threshold_cents / 100).toLocaleString("en", { minimumFractionDigits: 2 }), "in the invoice's own currency; at or above it a human signs off, even on a clean match")}
+      ${setting("Tax cap", `${t.max_tax_pct}% of goods value`, "a tax line above this share of the goods is not a bill we pay on autopilot — the one amount matching never compares to the order")}
+      ${setting("Contract allowance cap", `${t.max_contract_allowance_pct}%`, "a clause granting more than this is a contract for a human to read, not a tolerance for code to apply")}
       ${setting("Informal-receipt ceiling", (t.informal_grn_ceiling_cents / 100).toLocaleString("en", { minimumFractionDigits: 2 }), "the most we pay on a delivery confirmed in chat rather than recorded in the system")}
       ${setting("Vendor reminder after", `${t.vendor_chase_after_hours} h`, "one reminder on a query the vendor has not answered — never a second")}
       ${setting("Hand to a human after", `${t.vendor_escalate_after_hours} h`, "silence this long means email was the wrong channel; a person picks it up")}
