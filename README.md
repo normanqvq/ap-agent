@@ -195,7 +195,7 @@ The three states of that moment, captured on a live Bedrock run:
 
 The evidence card in the third shot is the honest part: who vouched, which policy applied, the quantities as code matched them to the purchase order — and the reminder that no photo can approve an invoice by itself.
 
-And `INV-DEMO-BANKSWAP` is the fraud that costs businesses the most: a perfectly clean invoice — right amount, right PO, goods received — that quietly prints a *different* bank account, as if the vendor had emailed "we've changed banks." Every other gate passes; the payout-account gate catches the one field that would have wired the money to the attacker, and escalates it.
+And `INV-DEMO-BANKSWAP` is the fraud that costs businesses the most: a perfectly clean invoice — right amount, right PO, goods received — that quietly prints a *different* bank account, as if the vendor had emailed "we've changed banks." Every other gate passes; the payout-account gate catches the one field that would have wired the money to the attacker, and escalates it. Its committed decision was made by the agent itself: three tool calls, a clean three-way match, a model recommendation of APPROVE — and a *Code override* to ESCALATE, all visible in the glass box.
 
 ## Running It
 
