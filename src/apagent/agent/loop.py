@@ -261,14 +261,23 @@ def _extract_decision_json(text: str) -> dict | None:
     # worker for minutes (raw_decode from every brace is quadratic). The cap
     # bounds the worst case; real model output has a few dozen braces.
     positions = [idx for idx, char in enumerate(text) if char == "{"]
-    for idx in reversed(positions[-5000:]):
-        try:
-            obj, _ = decoder.raw_decode(text, idx)
-        except (json.JSONDecodeError, RecursionError):
-            continue
-        if isinstance(obj, dict) and "action" in obj:
-            return obj
-    return None
+
+    def scan(candidates):
+        for idx in reversed(candidates):
+            try:
+                obj, _ = decoder.raw_decode(text, idx)
+            except (json.JSONDecodeError, RecursionError):
+                continue
+            if isinstance(obj, dict) and "action" in obj:
+                return obj
+        return None
+
+    found = scan(positions[-5000:])
+    if found is None and len(positions) > 5000:
+        # A real decision buried under a brace blob: one more bounded look
+        # at the head before giving up (which escalates, never approves).
+        found = scan(positions[:5000])
+    return found
 
 
 def _parse_final_answer(

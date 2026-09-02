@@ -112,7 +112,7 @@ def build_graph(
             # hold only on a dataset that never exercises them.
             superseded=superseded_by(invoice, store),
             vendor_account=store.vendor_account(invoice.vendor_id),
-            billed_elsewhere=billed_elsewhere(invoice, store),
+            billed_elsewhere=billed_elsewhere(invoice, store, config),
         )
         return {"decision": decision}
 

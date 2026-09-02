@@ -476,3 +476,41 @@ def test_guardrail_refuses_a_contract_allowance_above_the_cap(monkeypatch, store
     decision = decide(DocumentStore([po], [grn], [inv]), registry, inv)
     assert decision.action == Action.ESCALATE, decision.reasoning
     assert "cap" in decision.reasoning
+
+
+def test_money_gate_tax_base_ignores_discount_lines_and_missing_totals():
+    from apagent.pipeline import money_gate
+    from apagent.schemas import LineItem, ToleranceConfig
+
+    goods = LineItem(
+        line_no=1,
+        sku="A",
+        description="x",
+        qty=10,
+        uom="PCS",
+        unit_price_cents=100,
+        line_total_cents=None,
+    )  # extractor found no line total
+    discount = LineItem(
+        line_no=2,
+        sku="D",
+        description="discount",
+        qty=1,
+        uom="PCS",
+        unit_price_cents=-900,
+        line_total_cents=-900,
+    )
+    inv = _one_line_doc("INV-T", DocType.INVOICE, 10, ref="PO-T").model_copy(
+        update={"lines": [goods, discount], "tax_cents": 90, "total_cents": 190}
+    )
+    assert money_gate(inv, False, ToleranceConfig()) == (True, None)
+
+
+def test_hard_duplicates_are_not_counted_as_instalments():
+    from apagent.agent.ap_tools import billed_elsewhere
+
+    po = _one_line_doc("PO-T", DocType.PO, 10)
+    grn = _one_line_doc("GRN-T", DocType.GRN, 10, ref="PO-T")
+    a = _one_line_doc("INV-A", DocType.INVOICE, 10, ref="PO-T")
+    b = _one_line_doc("INV-B", DocType.INVOICE, 10, ref="PO-T")
+    assert billed_elsewhere(a, DocumentStore([po], [grn], [a, b])) == {}

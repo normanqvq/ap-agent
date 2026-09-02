@@ -415,3 +415,10 @@ def test_agent_survives_a_null_reasoning(monkeypatch):
     )
     assert decision.action == Action.APPROVE
     assert decision.reasoning == ""
+
+
+def test_decision_is_found_even_under_a_brace_blob():
+    from apagent.agent.loop import _extract_decision_json
+
+    text = '{"action": "HOLD", "reasoning": "x"} ' + "{" * 6000
+    assert _extract_decision_json(text)["action"] == "HOLD"

@@ -396,7 +396,7 @@ class Service:
         grn = self.store.get_grn_for_po(match.po_id) if match.po_id else None
         superseded = superseded_by(invoice, self.store)
         payout = self._payout_account_view(invoice)
-        billed = billed_elsewhere(invoice, self.store)
+        billed = billed_elsewhere(invoice, self.store, config)
         gates = _guardrails(
             checked,
             rechecked,

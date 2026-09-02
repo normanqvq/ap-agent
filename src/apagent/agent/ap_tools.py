@@ -151,7 +151,9 @@ def hard_duplicates(
     return out
 
 
-def billed_elsewhere(invoice: Document, store: DocumentStore) -> dict[str, int]:
+def billed_elsewhere(
+    invoice: Document, store: DocumentStore, config: ToleranceConfig | None = None
+) -> dict[str, int]:
     """Quantity per SKU that OTHER live invoices from this vendor already bill
     against this invoice's purchase order -- the instalment attack the
     duplicate gate cannot see. Three invoices at 100%, 90% and 80% of one
@@ -161,15 +163,21 @@ def billed_elsewhere(invoice: Document, store: DocumentStore) -> dict[str, int]:
 
     Same population as hard_duplicates -- same vendor, same resolved PO,
     outside this invoice's own correction chain -- minus documents a later
-    correction has withdrawn, which owe nothing.
+    correction has withdrawn, which owe nothing, and minus this invoice's
+    hard duplicates: a copy of the same bill is the duplicate gate's case,
+    not a second instalment, and counting it here painted the receipt chip
+    red on both halves of a duplicate pair.
     """
     inv_po, _ = find_po(invoice, store.all_pos())
     if inv_po is None:
         return {}
     chain = _revision_chain(invoice, store)
+    copies = {d.doc_id for d in hard_duplicates(invoice, store, config or ToleranceConfig())}
     out: dict[str, int] = {}
     for other in store.invoices_for_vendor(invoice.vendor_id):
-        if other.doc_id in chain or superseded_by(other, store) is not None:
+        if other.doc_id in chain or other.doc_id in copies:
+            continue
+        if superseded_by(other, store) is not None:
             continue
         other_po, _ = find_po(other, store.all_pos())
         if other_po is None or other_po.doc_id != inv_po.doc_id:

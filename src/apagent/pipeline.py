@@ -94,7 +94,7 @@ def decide_invoice(
     # code-owned like the duplicate set, and computed here for the same
     # reason: the guardrail must not depend on the model asking.
     superseded = superseded_by(invoice, store)
-    billed = billed_elsewhere(invoice, store)
+    billed = billed_elsewhere(invoice, store, config)
 
     decision = run_agent(
         system_prompt=AP_SYSTEM_PROMPT,
@@ -179,7 +179,7 @@ def decide_invoice_rules_only(
         po,
         superseded=superseded_by(invoice, store),
         vendor_account=store.vendor_account(invoice.vendor_id),
-        billed_elsewhere=billed_elsewhere(invoice, store),
+        billed_elsewhere=billed_elsewhere(invoice, store, config),
     )
 
 
@@ -310,7 +310,16 @@ def money_gate(
             "The invoice carries a negative tax or total, which is a credit "
             "and not a bill to pay, so code overrides APPROVE to ESCALATE."
         )
-    goods = sum(line.line_total_cents or 0 for line in invoice.lines)
+    # The base is what the goods are worth: positive lines only, so a
+    # discount line cannot shrink it into a false "tax out of policy", and
+    # qty x unit price when the extractor found no line total.
+    goods = 0
+    for line in invoice.lines:
+        value = line.line_total_cents
+        if value is None and line.unit_price_cents is not None:
+            value = line.qty * line.unit_price_cents
+        if value and value > 0:
+            goods += value
     if tax * 100 > goods * config.max_tax_pct:
         return False, (
             f"The invoice's tax ({tax / 100:,.2f}) is more than {config.max_tax_pct:g}% "
