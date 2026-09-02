@@ -13,7 +13,7 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 ![AWS Bedrock](https://img.shields.io/badge/LLM-AWS%20Bedrock-FF9900?logo=amazonaws&logoColor=white)
 ![RAG](https://img.shields.io/badge/RAG-BM25-6366F1)
 ![Matching](https://img.shields.io/badge/matching-Hungarian-0EA5E9)
-![Tests](https://img.shields.io/badge/tests-471%20passing-16A34A)
+![Tests](https://img.shields.io/badge/tests-489%20passing-16A34A)
 ![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-84CC16)
 
@@ -41,7 +41,7 @@ The core idea: **code owns the authority; the agent recovers and explains the ju
 - Runs a three-way match: pairs line items (Hungarian assignment when items carry no SKU), and computes unit-price, quantity, UOM, line-total, and invoice-total discrepancies.
 - Checks each discrepancy against tolerances, with per-vendor allowances parsed **in code** from the supplier's contract clause.
 - Runs a hand-written agent loop: the model calls read-only tools (lookup PO / GRN, vendor history, duplicate check, contract search, contract re-check) and returns a decision.
-- Applies nine code guardrails that override an unjustified approval — the injection defence, the "no auto-paying above a threshold" rule, the refusal to pay a document a later correction has withdrawn, and the check that the invoice's payout account still matches the one on file for the vendor all live here, not in the prompt.
+- Applies nine code guardrails that override an unjustified approval — the injection defence, the "no auto-paying above a threshold" rule (which also caps the tax line at a share of the goods and refuses credits), the refusal to pay a document a later correction has withdrawn, the sum of what every live invoice on an order has billed measured against what was received, the cap on how generous a contract allowance code will apply on its own, and the check that the invoice's payout account still matches the one on file for the vendor all live here, not in the prompt.
 - Emits one of four actions — `APPROVE`, `HOLD`, `EMAIL`, `ESCALATE` — with a confidence, a rationale, the complete tool-call trail, and (for holds/queries) an outbound message rendered by code from a fixed template.
 - Batches the approved invoices into weekly Friday payment runs — one transfer per vendor, each invoice paid as late as possible but never past due. Only `APPROVE` moves money; everything else is listed as withheld, with its reason.
 - Accepts a **live PDF upload**: the LLM extracts it, the agent decides it on the spot, and the eval harness lists it as *unexpected* (no ground truth) instead of quietly scoring it. Three ready-made attack PDFs sit in `data/samples/` — a duplicate re-bill, a 12% overcharge, and a prompt-injection invoice — alongside the photographed delivery docket the photo finale uses.
@@ -86,7 +86,7 @@ Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 
 ![Analytics](docs/screenshots/analytics.png)
 
-**Settings** — the policy, read-only: the tolerance limits, the manual-review threshold and the vendor-silence windows the gates enforce, each vendor's code-parsed contract allowance with its source file, the four-value action enum, and the pay-run calendar. Deliberately not editable from the web — every limit lives in version-controlled code, so changing one is a reviewed commit, not a click.
+**Settings** — the policy, read-only: the tolerance limits, the manual-review threshold, the tax and contract-allowance caps and the vendor-silence windows the gates enforce, each vendor's code-parsed contract allowance with its source file, the four-value action enum, and the pay-run calendar. Deliberately not editable from the web — every limit lives in version-controlled code, so changing one is a reviewed commit, not a click.
 
 ![Settings](docs/screenshots/settings.png)
 
@@ -212,7 +212,7 @@ python scripts/precompute_decisions.py   # run the agent on all invoices, cache 
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
-pytest                                    # 471 offline tests, no API key needed
+pytest                                    # 489 offline tests, no API key needed
 ```
 
 Tests never need a key — every LLM call is stubbed. To run on AWS Bedrock, set `LLM_PROVIDER=bedrock`, provide AWS credentials (region `ap-southeast-1`), and verify with `python scripts/check_bedrock.py`.
@@ -250,7 +250,7 @@ deploy/               # optional: Bedrock AgentCore entrypoint + local-run / dep
 scripts/              # dataset generator, demo runner, decision precompute, eval, scheduling, samples, Bedrock check
 data/synthetic/       # committed test data: PDFs, JSON docs, contracts, manifest, decisions
 data/samples/         # three attack PDFs + the delivery-docket photo for the live demos
-tests/                # 471 offline tests
+tests/                # 489 offline tests
 docs/                 # ALGORITHMS, LANGGRAPH, MCP, DEPLOY, screenshots, gap analysis
 ```
 
