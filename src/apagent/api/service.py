@@ -285,8 +285,18 @@ class Service:
         # re-run that produced no counts leaves the committed cache byte-for-byte
         # unchanged instead of adding `input_tokens: null` noise.
         with self._cache_lock:
+            on_disk = self._benchmark_view()
+            # The demo invoice is held out of every RATE, not of the file: it
+            # ships in the dataset so the console shows its ESCALATE on load.
+            # Saving the benchmark view alone dropped it from disk on the
+            # first live re-run of ANY invoice, and the payout gate's showcase
+            # was gone at the next restart. It goes last, matching the
+            # committed key order, so an unchanged demo stays byte-identical.
+            for doc_id in DEMO_HELD_OUT:
+                if doc_id in self._cache:
+                    on_disk[doc_id] = self._cache[doc_id]
             view = {}
-            for doc_id, decision in self._benchmark_view().items():
+            for doc_id, decision in on_disk.items():
                 view[doc_id] = {
                     k: v
                     for k, v in decision.items()
