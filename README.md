@@ -119,7 +119,7 @@ The same pipeline runs as a Bedrock AgentCore agent behind one decorator — `py
 
 ### Code computes facts; the model judges meaning; code owns authority
 
-Every number the agent reasons about — deltas, tolerance verdicts, duplicate detection — is produced by deterministic code, so it is reproducible from the documents alone. The model interprets those facts and cites contracts. The final limits are enforced in code: the model can recommend `APPROVE`, but nine guardrails (not superseded by a later correction, amount threshold, PO matched, billed in the currency ordered, no unordered lines, no duplicate, price within the code-parsed contract tolerance, goods received, payout account matches the vendor master) will override it. A test suite runs a deliberately fooled model against every planted defect and confirms code still refuses each one.
+Every number the agent reasons about — deltas, tolerance verdicts, duplicate detection — is produced by deterministic code, so it is reproducible from the documents alone. The model interprets those facts and cites contracts. The final limits are enforced in code: the model can recommend `APPROVE`, but nine guardrails (not superseded by a later correction, amount within policy — the review threshold and a tax cap — PO matched, billed in the currency ordered, no unordered lines, no duplicate, price within the code-parsed contract tolerance, goods received, payout account matches the vendor master) will override it. A test suite runs a deliberately fooled model against every planted defect and confirms code still refuses each one.
 
 ### The glass box
 
@@ -139,6 +139,7 @@ Every channel an attacker controls has a matching defence in code, each pinned b
 | Homoglyph vendor name (Cyrillic look-alikes) | printed name | Normalisation keeps only `[a-z0-9 ]`, so a spoof drops below the match floor → `UNKNOWN`, which escalates |
 | Currency swap | invoice currency | A dedicated gate refuses an invoice billed in a currency the order was not placed in |
 | Payout-account swap ("we changed banks") | invoice payout field | A gate compares the printed account against the vendor master (spacing/case-normalised) and escalates any mismatch — the classic redirect-the-money fraud has nowhere to go |
+| Tax padded, or one order billed in instalments | invoice tax line / several invoices | The money gate caps tax at a share of the goods value; the receipt gate sums what every live invoice on the PO has billed against what was received — a padded tax line or a 100%+90%+80% split clears no gate |
 | Forged duplicate (drop / alter / nudge the ref) | supplier text | Duplicates key on the **resolved** PO + near-equal total, not the printed ref — four evasions collapse |
 | Chat message telling the bot to approve | Telegram text | The claim schema has no action field; the bot token never reaches the logs (redacted in every shape httpx logs) |
 | Email reply spoofing another invoice | vendor mail | Replies correlate by Message-ID + a 72-bit code-minted token, never by subject; senders are checked against a registered directory |
