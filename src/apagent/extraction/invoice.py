@@ -93,8 +93,13 @@ def _printed_account(value) -> str | None:
 def extract_pdf_text(pdf_path: Path) -> str:
     """All text from all pages. Raises ExtractionError on empty output —
     an image-only scan would otherwise flow downstream as an empty invoice."""
-    with pdfplumber.open(pdf_path) as pdf:
-        text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    except Exception as exc:  # noqa: BLE001 -- pdfminer raises a zoo of its own types on non-PDF bytes
+        raise ExtractionError(
+            f"{pdf_path.name}: not a readable PDF ({type(exc).__name__})"
+        ) from exc
     if not text.strip():
         raise ExtractionError(
             f"{pdf_path.name}: no extractable text. Likely a scanned image; "
@@ -120,9 +125,14 @@ def _to_cents(amount: str | None) -> int | None:
         return None
     cleaned = re.sub(r"[^\d.\-]", "", str(amount))
     try:
-        return int((Decimal(cleaned) * 100).quantize(Decimal("1")))
+        cents = int((Decimal(cleaned) * 100).quantize(Decimal("1")))
     except InvalidOperation as exc:
         raise ExtractionError(f"unparseable amount: {amount!r}") from exc
+    # Ten trillion in any currency is not an invoice; past ~1e308 the float
+    # renderings downstream overflow and the detail page returns a 500.
+    if abs(cents) > 10**15:
+        raise ExtractionError(f"amount out of range: {amount!r}")
+    return cents
 
 
 def match_vendor_id(printed_name: str, vendors: dict[str, str]) -> str:

@@ -181,3 +181,27 @@ def test_extract_invoice_leaves_payout_account_none_when_not_printed(monkeypatch
     assert extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS).payout_account is None
     monkeypatch.setattr("apagent.extraction.invoice.call_model", fake_model(json.dumps(GOOD_JSON)))
     assert extract_invoice(PDF_DIR / "INV-V001-3001.pdf", VENDORS).payout_account is None
+
+
+def test_extract_pdf_text_refuses_bytes_that_are_not_a_pdf(tmp_path):
+    """Dragging the wrong file into Upload used to surface as a 500: pdfminer
+    raises its own exception types, and only ExtractionError was caught."""
+    import pytest
+
+    from apagent.extraction.invoice import ExtractionError, extract_pdf_text
+
+    for payload in (b"", b"garbage", b"%PDF-1.4\n", b"%PDF-1.4\n" + b"\x00" * 4096):
+        p = tmp_path / "x.pdf"
+        p.write_bytes(payload)
+        with pytest.raises(ExtractionError):
+            extract_pdf_text(p)
+
+
+def test_to_cents_refuses_absurd_magnitudes():
+    import pytest
+
+    from apagent.extraction.invoice import ExtractionError, _to_cents
+
+    with pytest.raises(ExtractionError):
+        _to_cents("1" * 40)
+    assert _to_cents("9,999,999,999.99") == 999_999_999_999
