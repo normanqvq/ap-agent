@@ -171,7 +171,14 @@ body {
 .recon .concl .l1 { font-size: 12.5px; }
 .recon .concl .l1 b { color: var(--amber); }
 .recon .concl .chip { display: inline-block; margin-top: 8px; background: #cdeecf; color: var(--green); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; }
-.recon .allgood { color: var(--green); font-weight: 600; font-size: 13px; padding: 6px 0; }
+/* Not scoped to .recon: the same one-line verdict is the whole content of the
+   fat-finger and payout-account cards when there is nothing to report. */
+.allgood { color: var(--green); font-weight: 600; font-size: 13px; padding: 6px 0; }
+/* A card whose entire content is that verdict. .card carries no padding of its
+   own (see the note above .card.chatev), so these two sat flush against their
+   own border until they got a variant that sets it. */
+.card.verdict { padding: 15px 16px; margin-bottom: 18px; }
+.card.verdict h3 { font-size: 15px; margin-bottom: 8px; }
 
 /* Reasoning + outbound */
 .reason-card { padding: 15px 16px; margin-bottom: 18px; }

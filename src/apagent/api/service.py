@@ -1037,12 +1037,25 @@ class Service:
             self._chat_evidence[result.receipt.doc_id] = result.evidence
         for invoice_id in result.invoice_ids:
             self._chat_confirmed.add(invoice_id)
-            try:
-                self.run_case(invoice_id)
-            except Exception:
-                # One bad invoice must not stop the others, and must not
-                # propagate into the poller loop.
-                continue
+            # Retry once. The gates and the three-way match are recomputed on
+            # every page load, but the DECISION only changes when run_case
+            # succeeds -- so a single failed model call leaves the console
+            # showing every gate green above a stale HOLD, which reads as a
+            # logic bug rather than a transport one.
+            for attempt in (1, 2):
+                try:
+                    self.run_case(invoice_id)
+                    break
+                except Exception:
+                    # One bad invoice must not stop the others, and must not
+                    # propagate into the poller loop -- but it must not vanish
+                    # either: silence here is indistinguishable from an idle
+                    # integration, which is exactly how this got missed.
+                    log.exception(
+                        "re-decide after chat receipt failed for %s (attempt %d/2)",
+                        invoice_id,
+                        attempt,
+                    )
 
     def chat_harvester(self):
         """The harvester bound to THIS service's store, built once."""

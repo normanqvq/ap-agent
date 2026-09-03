@@ -345,5 +345,25 @@ def index() -> FileResponse:
     return FileResponse(WEB / "index.html")
 
 
+class RevalidatingStatic(StaticFiles):
+    """Serve the console's assets with `Cache-Control: no-cache`.
+
+    They shipped with no cache header at all, which leaves the browser free to
+    apply its own heuristic and keep a stale copy. The failure mode is nasty
+    precisely because it is partial: the API is never cached, so the page shows
+    today's data inside yesterday's CSS, and the result reads as a rendering
+    bug in a feature that is actually fine.
+
+    no-cache means "revalidate", not "do not store" — the ETag StaticFiles
+    already sends turns each check into a 304, so this costs one conditional
+    request per asset, not a refetch.
+    """
+
+    def file_response(self, *args, **kwargs) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # Static assets (css/js). Mounted last so it never shadows the API routes.
-app.mount("/", StaticFiles(directory=WEB), name="web")
+app.mount("/", RevalidatingStatic(directory=WEB), name="web")

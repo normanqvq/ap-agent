@@ -301,7 +301,7 @@ async function poDetail(id) {
         This is an advisory only — it never blocks a payment, changes a decision, or edits a number;
         it just asks a person to look twice before an invoice aligns to a wrong figure.</p>
       </div>`
-    : `<div class="card"><div class="allgood">✓ Every line adds up · no fat-finger flag</div></div>`;
+    : `<div class="card verdict"><div class="allgood">✓ Every line adds up · no fat-finger flag</div></div>`;
   view.innerHTML = `
     <div class="head">
       <div><div class="crumb">Purchase orders / ${esc(c.po_id)}</div><h2>Purchase order detail</h2></div>
@@ -869,7 +869,7 @@ function renderDetail(c) {
   const pa = c.payout_account;
   const last4 = (s) => esc((s || "").replace(/\s/g, "").slice(-4));
   const payoutCard = !pa ? "" : pa.matches
-    ? `<div class="card"><h3>Payout account</h3>
+    ? `<div class="card verdict"><h3>Payout account</h3>
         <div class="allgood">✓ …${last4(pa.invoice)} matches the account on file</div></div>`
     : `<div class="card chatev unauth"><h3>⚠ Payout account changed</h3>
         <p class="evnote" style="font-weight:600">Invoice pays …${last4(pa.invoice)}, but the account on file for this vendor is …${last4(pa.on_file)}.</p>
