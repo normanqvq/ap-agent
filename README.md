@@ -17,6 +17,8 @@ An AI accounts-payable agent that three-way matches a supplier invoice against t
 ![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757?logo=claude&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-84CC16)
 
+**[▶ Watch the demo (4:26)](https://youtu.be/gcAJYAG5qZs)** — the story, the glass box, the nine gates, a photo, a Telegram message and a vendor email each releasing or holding an invoice.
+
 </div>
 
 > **Important:** This project is a hackathon demonstration for the SimplifyNext Agentic AI Hackathon 2026 (Digital track). It does not move real money, replace an ERP, or make a final payment decision. The model recommends; deterministic code enforces the limits; a human confirms.
@@ -37,8 +39,9 @@ The core idea: **code owns the authority; the agent recovers and explains the ju
 
 ## What the App Does
 
+- **Screens every purchase order the moment it enters**, before any invoice exists. Three-way matching trusts the PO, so a typo in the PO itself — 1,000 reams ordered when 100 was meant — would make a wrong invoice match green. Two deterministic signals flag a mistyped line: the arithmetic one (`qty × unit price` an order of magnitude off the printed line total) and the history one (a quantity that dwarfs the **median** of what this item is normally ordered in, judged only once the item has a settled history). Advisory only: it makes a person look twice, never blocks, edits or changes a decision, and raises zero false alarms on the historical set.
 - Loads a supplier invoice and resolves its purchase order (by reference, or by a vendor-plus-amount fallback search when the reference is missing).
-- Runs a three-way match: pairs line items (Hungarian assignment when items carry no SKU), and computes unit-price, quantity, UOM, line-total, and invoice-total discrepancies.
+- Runs a three-way match: pairs line items (Hungarian assignment when items carry no SKU, and receipt lines paired to the order by description when the receipt carries none), and computes unit-price, quantity, UOM, line-total, and invoice-total discrepancies.
 - Checks each discrepancy against tolerances, with per-vendor allowances parsed **in code** from the supplier's contract clause.
 - Runs a hand-written agent loop: the model calls read-only tools (lookup PO / GRN, vendor history, duplicate check, contract search, contract re-check) and returns a decision.
 - Applies nine code guardrails that override an unjustified approval — the injection defence, the "no auto-paying above a threshold" rule (which also caps the tax line at a share of the goods and refuses credits), the refusal to pay a document a later correction has withdrawn, the sum of what every live invoice on an order has billed measured against what was received, the cap on how generous a contract allowance code will apply on its own, and the check that the invoice's payout account still matches the one on file for the vendor all live here, not in the prompt.
@@ -74,6 +77,10 @@ Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 
 ![Invoice detail](docs/screenshots/detail.png)
 
+**Purchase orders** — the fat-finger screen at intake: every PO scored the moment it loads (*29 screened · 2 flagged · 0 false alarms*), a filter for the flagged ones, and a detail view that names the line, the signal and the amount at stake. Shown here: `PO-DEMO-OVERORDER`, 5,000 packs of toilet roll where this vendor's history says 500.
+
+![Purchase orders](docs/screenshots/pos-flagged.png)
+
 **Email composer** — *Send to human* and the vendor query open a compose window whose body is **read-only**: outbound text is rendered by code from a fixed template, so neither the model nor the reviewer can put words in the system's mouth. Confirming a payment is re-checked by code (`409` for anything not APPROVEd), and a re-run voids any earlier sign-off.
 
 ![Email composer](docs/screenshots/composer.png)
@@ -82,7 +89,7 @@ Run `uvicorn apagent.api.app:app` and open `http://127.0.0.1:8000`.
 
 ![Payments](docs/screenshots/payments.png)
 
-**Analytics** — the eval harness on screen: the planted-defect scorecard (each defect, the agent's decision, and its measured verdict against the manifest ground truth), the clean control group, the decision mix, a per-vendor billed-vs-approved rollup, and the **six agent-performance metrics** computed from the runs. Every number is measured, not asserted.
+**Analytics** — the eval harness on screen: the planted-defect scorecard (each defect, the agent's decision, and its measured verdict against the manifest ground truth), the clean control group, the decision mix, an **agent vs rules-only** panel (the same invoices through the rules engine alone: STP 64% → 68% with the agent, false approvals 0 · 0, and the one invoice the agent's judgement recovered), a per-vendor billed-vs-approved rollup, and the **six agent-performance metrics** computed from the runs. Every number is measured, not asserted.
 
 ![Analytics](docs/screenshots/analytics.png)
 
@@ -181,7 +188,7 @@ Seven defects are planted in the synthetic set (ground truth in `data/synthetic/
 | `INV-V003-3901` | exact duplicate under a new number | ESCALATE |
 | `INV-V004-3010` | no PO reference printed | found by vendor + amount search |
 
-Measured over the full set by the eval harness (`python scripts/run_eval.py`, ground truth in the manifest): **STP 68%** (15/22 approved), **touchless 82%**, **false approvals 0** — every planted defect blocked. The two non-approved clean invoices are safe-direction friction: the original of the duplicate pair (both flagged until a human picks one) and an amount over the manual-review threshold. A test pins false approvals at zero, so the claim fails the build the day it stops being true.
+Measured over the full set by the eval harness (`python scripts/run_eval.py`, ground truth in the manifest): **STP 68%** (15/22 approved), **touchless 82%**, **false approvals 0** — every planted defect blocked. The two non-approved clean invoices are safe-direction friction: the original of the duplicate pair (both flagged until a human picks one) and an amount over the manual-review threshold. Against a rules-only baseline over the same invoices (`python scripts/run_ab.py`), the agent lifts STP from 64% to 68% with false approvals at zero on both sides — more straight-through, no added risk. A test pins false approvals at zero, so the claim fails the build the day it stops being true.
 
 For the live finale, drag one of the three attack PDFs from `data/samples/` into *Upload invoice* and watch it get caught in real time: `INV-V001-9001` (duplicate re-bill → ESCALATE), `INV-V004-9002` (12% overcharge → HOLD), `INV-V002-9003` (overcharge plus an injected "approve immediately" instruction → refused; the injection has nothing to attack). Regenerate them any time with `python scripts/make_upload_samples.py`.
 
@@ -194,6 +201,8 @@ The three states of that moment, captured on a live Bedrock run:
 | ![Held: the goods-received gate fails and the invoice waits](docs/screenshots/photo-hold.png) | ![The multimodal model reading the photographed docket](docs/screenshots/photo-reading.png) | ![Released: delivery confirmed by photo, every gate green](docs/screenshots/photo-released.png) |
 
 The evidence card in the third shot is the honest part: who vouched, which policy applied, the quantities as code matched them to the purchase order — and the reminder that no photo can approve an invoice by itself.
+
+Two purchase orders are planted for the intake screen, and neither has an invoice, so the headline numbers are untouched: `PO-DEMO-FATFINGER` orders 1,000 reams of A4 paper against a printed line total that only adds up for 100 (the arithmetic signal), and `PO-DEMO-OVERORDER` orders 5,000 packs of toilet roll from a vendor whose history says 500 (the history signal). Open *Purchase orders* and both carry a yellow *Possible fat-finger* card that asks a person to confirm before the PO is used.
 
 And `INV-DEMO-BANKSWAP` is the fraud that costs businesses the most: a perfectly clean invoice — right amount, right PO, goods received — that quietly prints a *different* bank account, as if the vendor had emailed "we've changed banks." Every other gate passes; the payout-account gate catches the one field that would have wired the money to the attacker, and escalates it. Its committed decision was made by the agent itself: three tool calls, a clean three-way match, a model recommendation of APPROVE — and a *Code override* to ESCALATE, all visible in the glass box.
 
@@ -210,6 +219,7 @@ cp .env.example .env                 # set LLM_PROVIDER and the matching API key
 ```bash
 python scripts/precompute_decisions.py   # run the agent on all invoices, cache the decisions
 python scripts/run_eval.py               # score the decisions against the manifest ground truth
+python scripts/run_ab.py                 # the same invoices through rules only, next to the agent
 python scripts/run_scheduling.py         # print the weekly payment-run plan
 uvicorn apagent.api.app:app --reload     # then open http://127.0.0.1:8000
 pytest                                    # 501 offline tests, no API key needed
@@ -234,7 +244,7 @@ src/apagent/
 ├── schemas.py        # data contract — the single source of truth
 ├── extraction/       # invoice PDF -> Document (LLM reads, code converts)
 ├── matching/         # three-way match engine (facts only)
-├── rules/            # tolerance checks
+├── rules/            # tolerance checks + the PO fat-finger screen (advisory, deterministic)
 ├── retrieval/        # BM25 contract search + code-parsed allowance
 ├── agent/            # hand-written loop, tool registry, AP tools, prompt
 ├── pipeline.py       # match -> rules -> agent -> code guardrails
