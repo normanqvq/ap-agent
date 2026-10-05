@@ -51,8 +51,9 @@ downstream check is wrong.
 
 **The algorithm.** Build a cost matrix `cost[p][i] = 1 - similarity(po_p, inv_i)`
 and solve the assignment problem for the globally minimum total cost. This is
-the **Hungarian algorithm** (Kuhn–Munkres), O(n³), via
-`scipy.optimize.linear_sum_assignment`. It returns the one-to-one pairing that
+the problem the **Hungarian algorithm** classically solves; we call
+`scipy.optimize.linear_sum_assignment`, which implements a modified
+Jonker–Volgenant algorithm with the same O(n³) bound. It returns the one-to-one pairing that
 minimises total cost across the whole matrix — no chain-stealing.
 
 ```python
